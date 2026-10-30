@@ -95,6 +95,15 @@ type LocalBackend struct {
 	// drive a full tunnel bring-up.
 	connectMu sync.Mutex
 
+	// selectionMu serializes a selection and its persistence with the server
+	// changes that can withdraw it (config updates and removals), so the
+	// tunnel's choice and the persisted one cannot disagree.
+	selectionMu sync.Mutex
+	// pendingWithdrawals are helper tags a config ended that may still be live
+	// in the tunnel; each config update retries removing them until it
+	// succeeds. Guarded by selectionMu.
+	pendingWithdrawals map[string]struct{}
+
 	deviceID string
 
 	telemetryCfgSub *events.Subscription[config.NewConfigEvent]
@@ -982,6 +991,8 @@ func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
 }
 
 func (r *LocalBackend) RemoveServers(tags []string) error {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
 	removed, err := r.srvManager.RemoveServers(tags)
 	if err != nil {
 		return fmt.Errorf("failed to remove servers from ServerManager: %w", err)
@@ -991,7 +1002,7 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 		removedTags = append(removedTags, srv.Tag)
 	}
 	if len(removedTags) > 0 {
-		r.clearSelectedIfMissing()
+		r.clearSelectedIfMissingLocked()
 		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("failed to remove outbounds: %w", err)
 		}
@@ -1057,7 +1068,13 @@ const maxRetainedLanternServers = 60
 // Lantern servers (see lanternServersToEvict). Only a newly received config
 // may evict: a config that was already applied, such as the cached one at
 // startup, would judge its own offers a second time.
-func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
+func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err error) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	// Whatever else fails, retry taking ended pairings out of the tunnel.
+	defer func() {
+		err = errors.Join(err, r.flushWithdrawalsLocked())
+	}()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
 	incomingHelpers := make(map[string]struct{})
@@ -1091,8 +1108,6 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 		return false
 	})
 
-	// withdrawn are the helpers this config ended; see below.
-	var withdrawn []string
 	if evict {
 		var selectedTag string
 		var selected servers.Server
@@ -1100,7 +1115,24 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			selectedTag = selected.Tag
 		}
 
-		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag, incomingHelpers)
+		// New helpers take no retention slot, so they do not count against it.
+		incomingSlots := 0
+		for _, srv := range list.Servers {
+			if !lbA.IsHelperTag(srv.Tag) {
+				incomingSlots++
+			}
+		}
+		tagsToEvict := lanternServersToEvict(existing, incomingSlots, maxRetainedLanternServers, selectedTag, incomingHelpers)
+		// Recorded before the manager changes, so a failure below cannot lose
+		// track of a helper still live in the tunnel.
+		for _, tag := range tagsToEvict {
+			if lbA.IsHelperTag(tag) {
+				if r.pendingWithdrawals == nil {
+					r.pendingWithdrawals = make(map[string]struct{})
+				}
+				r.pendingWithdrawals[tag] = struct{}{}
+			}
+		}
 
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
@@ -1110,11 +1142,6 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			)
 			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
 				return fmt.Errorf("remove retained Lantern servers: %w", err)
-			}
-			for _, tag := range tagsToEvict {
-				if lbA.IsHelperTag(tag) {
-					withdrawn = append(withdrawn, tag)
-				}
 			}
 		}
 	}
@@ -1137,25 +1164,45 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
 	outboundErr := r.vpnClient.UpdateOutbounds(allList)
-	// updateOutbounds skips an empty list and keeps old outbounds when every
-	// new one fails to load; neither may keep an ended pairing dialable, so
-	// its helpers are removed from the tunnel outright, which also withdraws
-	// the personal proxies group with the last of them.
-	if len(withdrawn) > 0 {
-		remove := r.vpnClient.RemoveOutbounds
-		if r.removeLiveOutbounds != nil {
-			remove = r.removeLiveOutbounds
-		}
-		if err := remove(withdrawn); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			outboundErr = errors.Join(outboundErr, fmt.Errorf("remove withdrawn helpers: %w", err))
-		}
-	}
 	// This update preserves the selected server unless hard-demoted, so clearing
 	// an evicted selection is safe even while connected. Run it even when the
 	// outbound update failed, since an evicted pin is already gone from the manager.
-	r.clearSelectedIfMissing()
+	r.clearSelectedIfMissingLocked()
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
+	}
+	return nil
+}
+
+// flushWithdrawalsLocked removes the pending withdrawn helpers from the
+// tunnel. updateOutbounds alone would keep them dialable: it skips an empty
+// list and keeps old outbounds when every new one fails to load. Removing the
+// last also withdraws the personal proxies group. A tag the manager holds
+// again (the pairing came back) is dropped from the set, not removed. Tags
+// stay pending while removal fails; with no tunnel there is nothing to remove,
+// and the next tunnel is built without them. The caller must hold
+// r.selectionMu.
+func (r *LocalBackend) flushWithdrawalsLocked() error {
+	var tags []string
+	for tag := range r.pendingWithdrawals {
+		if _, back := r.srvManager.GetServerByTag(tag); back {
+			delete(r.pendingWithdrawals, tag)
+			continue
+		}
+		tags = append(tags, tag)
+	}
+	if len(tags) == 0 {
+		return nil
+	}
+	remove := r.vpnClient.RemoveOutbounds
+	if r.removeLiveOutbounds != nil {
+		remove = r.removeLiveOutbounds
+	}
+	if err := remove(tags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("remove withdrawn helpers: %w", err)
+	}
+	for _, tag := range tags {
+		delete(r.pendingWithdrawals, tag)
 	}
 	return nil
 }
@@ -1241,6 +1288,14 @@ func selectionUpdatedAt(srv *servers.Server) time.Time {
 // clearSelectedIfMissing reverts the persisted selection to auto-select when
 // the selected server is no longer present in the manager.
 func (r *LocalBackend) clearSelectedIfMissing() {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	r.clearSelectedIfMissingLocked()
+}
+
+// clearSelectedIfMissingLocked is clearSelectedIfMissing for a caller holding
+// r.selectionMu.
+func (r *LocalBackend) clearSelectedIfMissingLocked() {
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return
@@ -1439,8 +1494,28 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	if err := r.vpnClient.Connect(ctx, bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	r.persistSelection(tag)
+	r.persistConnectedSelection(tag)
 	return nil
+}
+
+// persistConnectedSelection persists the tag a connect selected. A config
+// update during the connect may have withdrawn it from the manager after the
+// tunnel was built with it; that update's own fallback then saw the old
+// setting, so the selection falls back to auto-select here instead.
+func (r *LocalBackend) persistConnectedSelection(tag string) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	if tag != vpn.AutoSelectTag {
+		if _, found := r.serverByTag(tag); !found {
+			slog.Info("Connected server was withdrawn during the connect, switching to auto-select", "tag", tag)
+			r.persistSelection(vpn.AutoSelectTag)
+			if err := r.vpnClient.SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+				slog.Warn("Failed to switch to auto-select", "error", err)
+			}
+			return
+		}
+	}
+	r.persistSelection(tag)
 }
 
 // awaitConnectable blocks until the connect has something to dial, or ctx is
@@ -1629,10 +1704,25 @@ func (r *LocalBackend) SelectServer(tag string) error {
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
+	r.selectionMu.Lock()
+	// Resolved before the tunnel changes: a server a config update just
+	// withdrew could still be live there, but its selection could not be
+	// persisted.
+	if tag != vpn.AutoSelectTag {
+		if _, found := r.serverByTag(tag); !found {
+			r.selectionMu.Unlock()
+			if tag == vpn.PersonalProxiesTag {
+				return fmt.Errorf("failed to select server: %w", vpn.ErrPersonalProxiesUnavailable)
+			}
+			return fmt.Errorf("failed to select server: no server found with tag %s", tag)
+		}
+	}
 	if err := r.vpnClient.SelectServer(tag); err != nil {
+		r.selectionMu.Unlock()
 		return fmt.Errorf("failed to select server: %w", err)
 	}
 	r.persistSelection(tag)
+	r.selectionMu.Unlock()
 	if r.vpnClient.Status() == vpn.Connected {
 		if sel, _, err := r.SelectedServer(); err == nil && sel != nil {
 			r.sessionHistory.HandleServerChange(sel.Tag, sel.Location.City, sel.Location.Country)

@@ -1683,3 +1683,103 @@ func TestFreshConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
 		}
 	}
 }
+
+func lanternServersWithHistory(n int) servers.ServerList {
+	list := directServers()
+	for i := range n {
+		srv := directServers(fmt.Sprintf("lantern-%d", i)).Servers[0]
+		srv.SelectionHistory = &servers.SelectionHistory{UpdatedAt: time.Unix(int64(1000+i), 0).UTC()}
+		list.Servers = append(list.Servers, srv)
+	}
+	return list
+}
+
+// A new pairing's helper takes no retention slot, so it does not push out a
+// Lantern server.
+func TestNewHelperDoesNotEvictALanternServer(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(lanternServersWithHistory(maxRetainedLanternServers), false))
+	require.NoError(t, r.updateServers(directServers("helper-0123456789ab"), true))
+	assert.Len(t, r.AllServers(), maxRetainedLanternServers+1, "nothing was evicted")
+}
+
+// An ended pairing's helpers stay pending until the tunnel removal succeeds,
+// so a failed removal is retried by the next config, which no longer carries
+// them; a helper that comes back is not removed.
+func TestWithdrawnHelperRemovalIsRetried(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	r := newPersonalProxiesBackend(t)
+	var calls [][]string
+	fail := true
+	r.removeLiveOutbounds = func(tags []string) error {
+		calls = append(calls, slices.Clone(tags))
+		if fail {
+			return errors.New("tunnel busy")
+		}
+		return nil
+	}
+	require.NoError(t, r.updateServers(directServers("lantern-1", h1, h2), true))
+
+	require.Error(t, r.updateServers(directServers("lantern-1"), true), "the failed removal is reported")
+	require.Len(t, calls, 1)
+	assert.ElementsMatch(t, []string{h1, h2}, calls[0])
+
+	// h2's pairing comes back before the retry: only h1 is removed.
+	fail = false
+	require.NoError(t, r.updateServers(directServers("lantern-1", h2), true))
+	require.Len(t, calls, 2)
+	assert.Equal(t, []string{h1}, calls[1])
+
+	require.NoError(t, r.updateServers(directServers("lantern-1", h2), true))
+	assert.Len(t, calls, 2, "nothing is left pending")
+}
+
+// A selection cannot interleave with a config update that withdraws it: it
+// waits for the update, then finds the group gone and changes nothing.
+func TestSelectionWaitsForAWithdrawingConfigUpdate(t *testing.T) {
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection("lantern-1")
+
+	inRemoval, release := make(chan struct{}), make(chan struct{})
+	r.removeLiveOutbounds = func([]string) error {
+		close(inRemoval)
+		<-release
+		return nil
+	}
+	updated := make(chan error, 1)
+	go func() { updated <- r.updateServers(directServers("lantern-1"), true) }()
+	<-inRemoval
+
+	selected := make(chan error, 1)
+	go func() { selected <- r.SelectServer(vpn.PersonalProxiesTag) }()
+	select {
+	case err := <-selected:
+		t.Fatalf("selection ran during the withdrawal: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-updated)
+	require.ErrorIs(t, <-selected, vpn.ErrPersonalProxiesUnavailable)
+	sel, _, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, "lantern-1", sel.Tag, "the persisted choice is untouched")
+}
+
+// A connect that selected the group, which a config update withdrew while
+// the tunnel came up, persists auto-select rather than leaving the old choice.
+func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	r.persistSelection("lantern-1")
+	r.persistConnectedSelection(vpn.PersonalProxiesTag)
+	assert.True(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, r.updateServers(directServers("lantern-1", "helper-0123456789ab"), true))
+	r.persistConnectedSelection(vpn.PersonalProxiesTag)
+	assert.False(t, settings.GetBool(settings.AutoConnectKey))
+	sel, _, err := r.SelectedServer()
+	require.NoError(t, err)
+	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
+}
