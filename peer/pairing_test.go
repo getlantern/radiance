@@ -295,3 +295,29 @@ func TestPairingIsNeverLogged(t *testing.T) {
 		return strings.Contains(l, "pairing") || strings.Contains(l, "shortid") || name == "evt"
 	})
 }
+
+// An accept callback that pauses after resolving its pairing, while Stop
+// ends the session, must not add a connection once it resumes: Stop would
+// have nothing left to close it, and its close is dropped while draining.
+func TestClient_AcceptRacingStopLeavesNoLiveConnection(t *testing.T) {
+	live := helper.NewLiveTracker(nil)
+	c := pairingClient(t, func(cfg *Config) { cfg.Live = live })
+	c.offerPairingShortIDs([]string{sidA1, sidA2, sidB1}, groupsAB(), true, 100)
+
+	paused, resume := make(chan struct{}), make(chan struct{})
+	c.beforeTrackLive = func() {
+		close(paused)
+		<-resume
+	}
+	notified := make(chan struct{})
+	go func() {
+		defer close(notified)
+		peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidA1)})
+	}()
+	<-paused
+	require.NoError(t, c.Stop(context.Background()))
+	close(resume)
+	<-notified
+
+	assert.Empty(t, live.Snapshot().Pairings, "the stopped session's late accept was not tracked")
+}

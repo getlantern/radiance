@@ -270,6 +270,15 @@ type Client struct {
 	// lock-free by the connection listener. Pairing IDs are kept in memory
 	// only and never logged.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
+	// liveMu orders the listener's LiveTracker updates against a session's
+	// end. liveGen identifies the running session and changes at every
+	// begin and end, so a listener callback that resumes after its session
+	// ended adds nothing that the end would have had to close.
+	liveMu  sync.Mutex
+	liveGen uint64
+	// beforeTrackLive, if set, runs in the listener just before its
+	// LiveTracker update, so tests can interleave it with Stop.
+	beforeTrackLive func()
 	// shortIDsMu serializes recording a set with pushing it onto the box,
 	// so the box and pairingApplied agree. It is held across those local
 	// pushes only, never across network I/O or a box's Start or Close.
@@ -397,6 +406,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// here, a Stop→Start cycle would leave the wrapper permanently muted.
 	c.listenerDraining.Store(false)
 	relayGen := c.relay.begin()
+	liveGen := c.beginLive()
 
 	var (
 		success   bool
@@ -430,6 +440,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		peerconn.SetListener(nil)
 		c.resetConnTracking()
 		c.relay.end()
+		c.endLive()
 		if box != nil {
 			_ = c.closeBox(box)
 		}
@@ -624,7 +635,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		pairing := c.pairingFor(evt.ShortID)
 		c.trackConn(state, source)
 		c.relay.recordPairingFor(relayGen, state, source, pairing, evt.Bytes)
-		c.trackLive(state, pairing, evt.Bytes)
+		if c.beforeTrackLive != nil {
+			c.beforeTrackLive()
+		}
+		c.trackLive(liveGen, state, pairing, evt.Bytes)
 		events.Emit(ConnectionEvent{State: state, Source: source, Timestamp: time.Now().UnixMilli(), Pairing: pairing})
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
@@ -816,7 +830,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.resetConnTracking()
 	c.relay.end()
 	// Stop drops the closes of connections still open, so end them here.
-	c.live().CloseOwner(liveOwner)
+	c.endLive()
 
 	cancel()
 	<-done
@@ -1866,10 +1880,33 @@ func (c *Client) live() *helper.LiveTracker {
 	return helper.DefaultLive
 }
 
+// beginLive starts a session's live tracking and returns its generation.
+func (c *Client) beginLive() uint64 {
+	c.liveMu.Lock()
+	defer c.liveMu.Unlock()
+	c.liveGen++
+	return c.liveGen
+}
+
+// endLive ends the session's live tracking: every connection it opened is
+// closed, and its late callbacks are ignored.
+func (c *Client) endLive() {
+	c.liveMu.Lock()
+	defer c.liveMu.Unlock()
+	c.liveGen++
+	c.live().CloseOwner(liveOwner)
+}
+
 // trackLive follows a connection that came through a pairing in the
 // LiveTracker, keyed by its byte counter, which its accept and close share.
-func (c *Client) trackLive(state int, pairing string, bytes *peerconn.Counter) {
+// An event from a session other than gen is ignored.
+func (c *Client) trackLive(gen uint64, state int, pairing string, bytes *peerconn.Counter) {
 	if bytes == nil {
+		return
+	}
+	c.liveMu.Lock()
+	defer c.liveMu.Unlock()
+	if gen != c.liveGen {
 		return
 	}
 	switch {
