@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1649,17 +1650,55 @@ func TestFreshConfigWithoutAHelperEndsItsPairing(t *testing.T) {
 	}
 }
 
-// The IPC AddServers path takes a server's tag and its outbound separately; an
-// outbound tagged with a reserved tag under another name is refused before
-// anything is stored or reaches the tunnel.
-func TestAddServersRefusesAHiddenReservedTag(t *testing.T) {
+// The IPC AddServers path takes a server's tag and its outbound separately.
+// The server's tag is the effective one: an outbound tagged with a reserved
+// tag under another name is stored and handed to the tunnel under that name.
+func TestAddServersUsesTheServerTag(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	srv := helperWithPort("mine", 1080)
+	srv.IsLantern = false
 	srv.Options = helperWithPort(vpn.AutoSelectTag, 1080).Options
-	err := r.AddServers(servers.ServerList{Servers: []*servers.Server{srv}})
-	require.ErrorIs(t, err, servers.ErrTagMismatch)
-	require.ErrorContains(t, err, "ServerManager", "refused by the server manager, before the tunnel")
-	assert.Empty(t, r.AllServers())
+	list := servers.ServerList{Servers: []*servers.Server{srv}}
+	require.NoError(t, r.AddServers(list))
+	assert.Equal(t, "mine", list.Outbounds()[0].Tag, "what reaches the tunnel")
+	stored, found := r.GetServerByTag("mine")
+	require.True(t, found)
+	assert.Equal(t, "mine", stored.Options.(option.Outbound).Tag)
+	_, found = r.GetServerByTag(vpn.AutoSelectTag)
+	assert.False(t, found)
+
+	require.ErrorIs(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(vpn.AutoSelectTag, 1080)}}),
+		servers.ErrReservedTag, "a reserved server tag is still refused")
+}
+
+// The app renames a private server by fetching it over IPC (as JSON), removing
+// it, and adding it back with only its tag changed: its outbound still carries
+// the old tag. The rename must keep the server, under the new tag throughout.
+func TestRenamingAServerKeepsIt(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	original := helperWithPort("old", 1080)
+	original.IsLantern = false
+	require.NoError(t, r.AddServers(servers.ServerList{Servers: []*servers.Server{original}}))
+
+	stored, found := r.GetServerByTag("old")
+	require.True(t, found)
+	wire, err := json.Marshal(stored)
+	require.NoError(t, err)
+	var source servers.Server
+	require.NoError(t, json.Unmarshal(wire, &source))
+
+	require.NoError(t, r.RemoveServers([]string{"old"}))
+	source.Tag = "new"
+	list := servers.ServerList{Servers: []*servers.Server{&source}}
+	require.NoError(t, r.AddServers(list))
+
+	assert.Equal(t, "new", list.Outbounds()[0].Tag, "what reaches the tunnel")
+	renamed, found := r.GetServerByTag("new")
+	require.True(t, found)
+	assert.Equal(t, "new", renamed.Options.(option.Outbound).Tag)
+	assert.Equal(t, uint16(1080), renamed.Options.(option.Outbound).Options.(*option.SOCKSOutboundOptions).ServerPort)
+	_, found = r.GetServerByTag("old")
+	assert.False(t, found)
 }
 
 func lanternServersWithHistory(n int) servers.ServerList {

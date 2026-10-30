@@ -24,44 +24,45 @@ func ReservedTags() []string {
 	return slices.Clone(reservedTags)
 }
 
-// ErrTagMismatch is returned for a user server whose tag differs from the tag
-// of the outbound or endpoint it carries, which is the tag the tunnel uses.
-var ErrTagMismatch = errors.New("server tag does not match its outbound or endpoint tag")
-
-// checkUserTag refuses a user (non-Lantern) server whose tag is reserved or
-// differs from the tag of the outbound or endpoint it carries: the tunnel
-// creates the outbound under the embedded tag, so a mismatch could slip a
-// reserved tag past this check and replace one of the tunnel's own groups.
-// Lantern config servers are exempt: a config may carry the built-in
-// outbounds, which the tunnel merges but never offers.
-func checkUserTag(srv *Server) error {
+// normalizeUserTag sets the tag of the outbound or endpoint a user
+// (non-Lantern) server carries to the server's own tag, in place. The tunnel
+// creates the outbound under the embedded tag, so the server's tag, which is
+// what the reserved-tag check and the server list see, must be the effective
+// one. Callers such as a rename change only the server's tag. Lantern config
+// servers are left alone: the config sets both tags together.
+func normalizeUserTag(srv *Server) {
 	if srv.IsLantern {
-		return nil
+		return
 	}
-	if embedded, ok := embeddedTag(srv.Options); ok && embedded != srv.Tag {
-		return fmt.Errorf("server %q carries %q: %w", srv.Tag, embedded, ErrTagMismatch)
+	switch o := srv.Options.(type) {
+	case option.Outbound:
+		o.Tag = srv.Tag
+		srv.Options = o
+	case *option.Outbound:
+		if o != nil {
+			cp := *o
+			cp.Tag = srv.Tag
+			srv.Options = &cp
+		}
+	case option.Endpoint:
+		o.Tag = srv.Tag
+		srv.Options = o
+	case *option.Endpoint:
+		if o != nil {
+			cp := *o
+			cp.Tag = srv.Tag
+			srv.Options = &cp
+		}
 	}
-	if slices.Contains(reservedTags, srv.Tag) {
+}
+
+// checkUserTag refuses a user (non-Lantern) server whose tag is reserved.
+// After normalizeUserTag that is also the tag the tunnel uses. Lantern config
+// servers are exempt: a config may carry the built-in outbounds, which the
+// tunnel merges but never offers.
+func checkUserTag(srv *Server) error {
+	if !srv.IsLantern && slices.Contains(reservedTags, srv.Tag) {
 		return fmt.Errorf("server %q: %w", srv.Tag, ErrReservedTag)
 	}
 	return nil
-}
-
-// embeddedTag returns the tag of the outbound or endpoint in opts.
-func embeddedTag(opts any) (string, bool) {
-	switch o := opts.(type) {
-	case option.Outbound:
-		return o.Tag, true
-	case *option.Outbound:
-		if o != nil {
-			return o.Tag, true
-		}
-	case option.Endpoint:
-		return o.Tag, true
-	case *option.Endpoint:
-		if o != nil {
-			return o.Tag, true
-		}
-	}
-	return "", false
 }

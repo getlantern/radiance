@@ -383,12 +383,15 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 // AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags. If force is false, it returns an error
 // if any of the tags already exist. If a server fails [Server.CheckHostAccess]
-// or a user server fails [Server.CheckTLSIdentity], none are added.
+// or a user server fails [Server.CheckTLSIdentity], none are added. A user
+// server's embedded outbound or endpoint tag is set to its tag in list itself,
+// so a caller that passes list on to the tunnel uses the same tag.
 func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
 	}
 	for _, srv := range list.Servers {
+		normalizeUserTag(srv)
 		if err := checkUserTag(srv); err != nil {
 			return err
 		}

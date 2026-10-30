@@ -47,24 +47,43 @@ func TestUserServersCannotUseReservedTags(t *testing.T) {
 }
 
 // The tunnel creates a server's outbound under the tag the outbound carries,
-// so a user server's tag must match it; otherwise a server named "mine" could
-// carry an outbound tagged "auto" and replace the tunnel's own group.
-func TestUserServerTagMustMatchItsOutbound(t *testing.T) {
+// so a user server's embedded tag is set to the server's own: a server named
+// "mine" carrying an outbound tagged "auto" becomes "mine" throughout, and
+// cannot replace the tunnel's own group; a reserved server tag is refused.
+func TestUserServerTagIsTheEffectiveTag(t *testing.T) {
 	mgr, err := NewManager(t.TempDir(), log.NoOpLogger())
 	require.NoError(t, err)
 
-	mismatched := socksServer("mine", false)
-	mismatched.Options = socksServer("other", false).Options
-	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{mismatched}}, false), ErrTagMismatch)
-
 	for _, tag := range ReservedTags() {
-		hidden := socksServer("mine", false)
+		hidden := socksServer("mine-"+tag, false)
 		hidden.Options = socksServer(tag, false).Options
-		require.Error(t, mgr.AddServers(ServerList{Servers: []*Server{hidden}}, false), tag)
+		list := ServerList{Servers: []*Server{hidden}}
+		require.NoError(t, mgr.AddServers(list, false), tag)
+		assert.Equal(t, []string{"mine-" + tag}, outboundTags(list.Outbounds()), "what reaches the tunnel")
+		stored, ok := mgr.GetServerByTag("mine-" + tag)
+		require.True(t, ok)
+		assert.Equal(t, "mine-"+tag, stored.Options.(option.Outbound).Tag)
+		_, ok = mgr.GetServerByTag(tag)
+		assert.False(t, ok)
 	}
-	endpoint := &Server{Tag: "mine", Type: "wireguard", Options: option.Endpoint{Tag: "manual", Type: "wireguard"}}
-	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{endpoint}}, false), ErrTagMismatch)
-	assert.Empty(t, mgr.AllServers(), "nothing is stored")
 
-	require.NoError(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer("mine", false)}}, false))
+	endpoint := &Server{Tag: "mine-ep", Type: "wireguard", Options: option.Endpoint{Tag: "manual", Type: "wireguard"}}
+	normalizeUserTag(endpoint)
+	assert.Equal(t, "mine-ep", endpoint.Options.(option.Endpoint).Tag)
+	lantern := &Server{Tag: "lantern-1", IsLantern: true, Options: option.Outbound{Tag: "lantern-x"}}
+	normalizeUserTag(lantern)
+	assert.Equal(t, "lantern-x", lantern.Options.(option.Outbound).Tag, "config servers are left alone")
+
+	reserved := socksServer("auto", false)
+	reserved.Options = socksServer("fine", false).Options
+	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{reserved}}, false), ErrReservedTag,
+		"a reserved server tag is still refused")
+}
+
+func outboundTags(outs []option.Outbound) []string {
+	var tags []string
+	for _, o := range outs {
+		tags = append(tags, o.Tag)
+	}
+	return tags
 }
