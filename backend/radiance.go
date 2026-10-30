@@ -990,21 +990,33 @@ func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
 func (r *LocalBackend) RemoveServers(tags []string) error {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
-	removed, err := r.srvManager.RemoveServers(tags)
-	if err != nil {
-		return fmt.Errorf("failed to remove servers from ServerManager: %w", err)
-	}
-	removedTags := make([]string, 0, len(removed))
-	for _, srv := range removed {
-		removedTags = append(removedTags, srv.Tag)
-	}
-	if len(removedTags) > 0 {
-		r.clearSelectedIfMissingLocked()
-		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			return fmt.Errorf("failed to remove outbounds: %w", err)
+	var held []string
+	for _, tag := range tags {
+		if _, found := r.srvManager.GetServerByTag(tag); found {
+			held = append(held, tag)
 		}
 	}
-	return nil
+	_, err := r.srvManager.RemoveServers(tags)
+	if err != nil {
+		err = fmt.Errorf("failed to remove servers from ServerManager: %w", err)
+	}
+	// A failed save comes after the servers left the manager in memory, so
+	// whatever it no longer holds is gone either way: the selection falls
+	// back first, then the tunnel follows.
+	var gone []string
+	for _, tag := range held {
+		if _, found := r.srvManager.GetServerByTag(tag); !found {
+			gone = append(gone, tag)
+		}
+	}
+	if len(gone) == 0 {
+		return err
+	}
+	r.clearSelectedIfMissingLocked()
+	if rmErr := r.liveTunnel().RemoveOutbounds(gone); rmErr != nil && !errors.Is(rmErr, vpn.ErrTunnelNotConnected) {
+		err = errors.Join(err, fmt.Errorf("failed to remove outbounds: %w", rmErr))
+	}
+	return errors.Join(err, r.reconcileLiveHelpersLocked())
 }
 
 // AddServers adds user-supplied servers, clearing IsLantern on each.
@@ -1060,6 +1072,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 type liveTunnel interface {
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
+	RemoveOutbounds(tags []string) error
 	ReconcileHelpers(helpers servers.ServerList) error
 }
 
@@ -1123,6 +1136,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 		return false
 	})
 
+	// A helper the config no longer carries ended its pairing. This holds for
+	// the cached config applied at startup too: the process can stop after a
+	// new config is saved but before it is applied, and later fetches of the
+	// same config bring no update.
+	toRemove := endedHelpers(existing, incomingHelpers)
 	if evict {
 		var selectedTag string
 		var selected servers.Server
@@ -1137,17 +1155,19 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 				incomingSlots++
 			}
 		}
-		tagsToEvict := lanternServersToEvict(existing, incomingSlots, maxRetainedLanternServers, selectedTag, incomingHelpers)
-
+		tagsToEvict := lanternServersToEvict(existing, incomingSlots, maxRetainedLanternServers, selectedTag)
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
 				"Evicting retained Lantern servers to make room for new config batch",
 				"count", len(tagsToEvict),
 				"tags", tagsToEvict,
 			)
-			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
-				return fmt.Errorf("remove retained Lantern servers: %w", err)
-			}
+		}
+		toRemove = append(toRemove, tagsToEvict...)
+	}
+	if len(toRemove) > 0 {
+		if _, err := r.srvManager.RemoveServers(toRemove); err != nil {
+			return fmt.Errorf("remove retained Lantern servers: %w", err)
 		}
 	}
 
@@ -1226,19 +1246,33 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 	return tags
 }
 
+// endedHelpers returns the Lantern helper servers in existing that the config
+// no longer carries (incomingHelpers): their pairings ended. When the last one
+// goes, so does the personal proxies group, and a selection of it falls back
+// to auto-select.
+func endedHelpers(existing []*servers.Server, incomingHelpers map[string]struct{}) []string {
+	var ended []string
+	for _, srv := range existing {
+		if !srv.IsLantern || !lbA.IsHelperTag(srv.Tag) {
+			continue
+		}
+		if _, carried := incomingHelpers[srv.Tag]; !carried {
+			ended = append(ended, srv.Tag)
+		}
+	}
+	return ended
+}
+
 // lanternServersToEvict returns Lantern server tags to evict, always including
 // hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
 // are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
-// Helper servers are the user's pairings, not offers to rotate: those the new
-// config carries (incomingHelpers) are never evicted and take no retention
-// slot, and those it no longer carries are always evicted, since the pairing
-// ended. When the last one goes, so does the personal proxies group, and a
-// selection of it falls back to auto-select.
+// Helper servers are the user's pairings, not offers to rotate: they are
+// never evicted and take no retention slot (see endedHelpers for those whose
+// pairing ended).
 func lanternServersToEvict(
 	existing []*servers.Server,
 	incomingCount, limit int,
 	selectedTag string,
-	incomingHelpers map[string]struct{},
 ) []string {
 	tagsToEvict := make([]string, 0)
 	retentionCandidates := make([]*servers.Server, 0, len(existing))
@@ -1248,9 +1282,6 @@ func lanternServersToEvict(
 			continue
 		}
 		if lbA.IsHelperTag(srv.Tag) {
-			if _, carried := incomingHelpers[srv.Tag]; !carried {
-				tagsToEvict = append(tagsToEvict, srv.Tag)
-			}
 			continue
 		}
 		// Always evict hard-demoted servers.

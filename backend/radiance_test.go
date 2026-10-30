@@ -198,9 +198,7 @@ func TestLanternServersToEvict(t *testing.T) {
 		incoming int
 		limit    int
 		selected string
-		// incomingHelpers are the helper tags the new config carries.
-		incomingHelpers map[string]struct{}
-		want            []string
+		want     []string
 	}{
 		{
 			name: "evicts only hard-demoted lantern servers",
@@ -275,7 +273,7 @@ func TestLanternServersToEvict(t *testing.T) {
 			want:     []string{"selected-demoted"},
 		},
 		{
-			name: "helpers in the new config are never evicted",
+			name: "helpers are never evicted",
 			existing: []*servers.Server{
 				newTestServer("helper-0123456789ab", true, false, time.Time{}),
 				newTestServer("helper-ba9876543210", true, true, baseTime),
@@ -285,24 +283,7 @@ func TestLanternServersToEvict(t *testing.T) {
 			incoming: 2,
 			limit:    3,
 			selected: "personal-proxies",
-			incomingHelpers: map[string]struct{}{
-				"helper-0123456789ab": {}, "helper-ba9876543210": {},
-			},
-			want: []string{"a"},
-		},
-		{
-			name: "helpers absent from the new config are always evicted",
-			existing: []*servers.Server{
-				newTestServer("helper-0123456789ab", true, false, time.Time{}),
-				newTestServer("helper-ba9876543210", true, false, time.Time{}),
-				newTestServer("helper-demoted00000", true, true, baseTime.Add(9*time.Hour)),
-				newTestServer("a", true, false, baseTime.Add(1*time.Hour)),
-			},
-			incoming:        0,
-			limit:           60,
-			selected:        "personal-proxies",
-			incomingHelpers: map[string]struct{}{"helper-0123456789ab": {}},
-			want:            []string{"helper-ba9876543210", "helper-demoted00000"},
+			want:     []string{"a"},
 		},
 		{
 			name: "server with no selection history sorts oldest",
@@ -319,10 +300,23 @@ func TestLanternServersToEvict(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected, tt.incomingHelpers)
+			got := lanternServersToEvict(tt.existing, tt.incoming, tt.limit, tt.selected)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
+}
+
+func TestEndedHelpersAreThoseTheConfigNoLongerCarries(t *testing.T) {
+	existing := []*servers.Server{
+		newTestServer("helper-0123456789ab", true, false, time.Time{}),
+		newTestServer("helper-ba9876543210", true, false, time.Time{}),
+		newTestServer("helper-00000000000d", true, true, time.Unix(9, 0)),
+		newTestServer("helper-0000000000aa", false, false, time.Time{}),
+		newTestServer("a", true, false, time.Time{}),
+	}
+	got := endedHelpers(existing, map[string]struct{}{"helper-0123456789ab": {}})
+	assert.ElementsMatch(t, []string{"helper-ba9876543210", "helper-00000000000d"}, got,
+		"Lantern helpers the config dropped; a user server is not the config's to end")
 }
 
 func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
@@ -1619,33 +1613,42 @@ func TestImportRefusesThePersonalProxiesTag(t *testing.T) {
 	assert.False(t, found)
 }
 
-// A fresh config that no longer carries a helper ended its pairing: the helper
-// is removed, and with the last one the personal proxies group and a selection
-// of it. A cached config applied at startup removes nothing.
-func TestFreshConfigWithoutAHelperEndsItsPairing(t *testing.T) {
+// A config that no longer carries a helper ended its pairing: the helper is
+// removed, and with the last one the personal proxies group and a selection
+// of it. That holds for the cached config applied at startup too: the process
+// can stop after a new config is saved but before it is applied, and later
+// fetches of the same config bring no update. Only helpers are withdrawn on
+// that path; a retained Lantern server is not evicted.
+func TestConfigWithoutAHelperEndsItsPairing(t *testing.T) {
 	const h = "helper-0123456789ab"
 	for _, tc := range []struct {
 		name  string
 		fresh bool
 	}{
 		{"fresh config", true},
-		{"cached config at startup", false},
+		{"cached config at startup, saved before a crash", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newPersonalProxiesBackend(t)
-			require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+			tun := &fakeHelperTunnel{}
+			tun.attach(r)
+			tun.up(directServers("lantern-1", "lantern-old", h).Servers...)
+			// The servers the previous config left.
+			require.NoError(t, r.updateServers(directServers("lantern-1", "lantern-old", h), true))
 			r.persistSelection(vpn.PersonalProxiesTag)
 			require.False(t, settings.GetBool(settings.AutoConnectKey))
 
+			// The new config, applied fresh or (after a restart) from the cache.
 			require.NoError(t, r.updateServers(directServers("lantern-1"), tc.fresh))
 			_, helperKept := r.srvManager.GetServerByTag(h)
 			_, offered := r.GetServerByTag(vpn.PersonalProxiesTag)
-			_, stillThere := r.srvManager.GetServerByTag("lantern-1")
-			assert.True(t, stillThere)
-			assert.Equal(t, !tc.fresh, helperKept)
-			assert.Equal(t, !tc.fresh, offered)
-			assert.Equal(t, tc.fresh, settings.GetBool(settings.AutoConnectKey),
+			_, retained := r.srvManager.GetServerByTag("lantern-old")
+			assert.False(t, helperKept)
+			assert.False(t, offered)
+			assert.True(t, retained, "a Lantern server the config dropped is retained, not evicted")
+			assert.True(t, settings.GetBool(settings.AutoConnectKey),
 				"a selection of the withdrawn group falls back to auto-select")
+			assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
 		})
 	}
 }
@@ -1777,6 +1780,19 @@ func (f *fakeHelperTunnel) UpdateOutbounds(list servers.ServerList) error {
 	return nil
 }
 
+func (f *fakeHelperTunnel) RemoveOutbounds(tags []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "remove")
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	for _, tag := range tags {
+		delete(f.live, tag)
+	}
+	return nil
+}
+
 func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1856,10 +1872,10 @@ func (f *fakeHelperTunnel) callLog() []string {
 	return slices.Clone(f.calls)
 }
 
-// A fresh config that ends every pairing of a helpers-only device leaves an
-// empty managed list, which the tunnel's update skips; the backend takes the
-// ended helpers out of the tunnel itself. A cached config removes nothing.
-func TestFreshConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
+// A config that ends every pairing of a helpers-only device leaves an empty
+// managed list, which the tunnel's update skips; the backend takes the ended
+// helpers out of the tunnel itself, whether the config is fresh or cached.
+func TestConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
 	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
 	for _, fresh := range []bool{true, false} {
 		r := newPersonalProxiesBackend(t)
@@ -1868,13 +1884,8 @@ func TestFreshConfigRemovesEndedHelpersFromTheTunnel(t *testing.T) {
 		tun.up(directServers(h1, h2).Servers...)
 		require.NoError(t, r.updateServers(directServers(h1, h2), true))
 		require.NoError(t, r.updateServers(servers.ServerList{}, fresh))
-		if fresh {
-			assert.Equal(t, [][]string{{h1, h2}}, tun.removals())
-			assert.Empty(t, r.AllServers())
-		} else {
-			assert.Empty(t, tun.removals())
-			assert.Len(t, r.AllServers(), 2)
-		}
+		assert.Equal(t, [][]string{{h1, h2}}, tun.removals(), "fresh=%v", fresh)
+		assert.Empty(t, r.AllServers())
 	}
 }
 
@@ -2063,4 +2074,44 @@ func TestConnectedTunnelGetsHelperChangesMadeWhileItCameUp(t *testing.T) {
 		5*time.Second, 10*time.Millisecond, "the new tunnel gains the new helper and loses the ended one")
 	assert.Equal(t, "1081", tun.options(rotated), "with the rotated credentials")
 	assert.Equal(t, "1080", tun.options("lantern-1"))
+}
+
+// Removing servers whose removal fails to save has already taken them out of
+// the manager in memory. Removing the last helper that way still falls back
+// from a selection of the personal proxies group and takes the helper out of
+// the tunnel, as a successful removal does.
+func TestFailedRemovalStillWithdrawsTheHelper(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	const h = "helper-0123456789ab"
+	r := newPersonalProxiesBackend(t)
+	serversDir := t.TempDir()
+	srvMgr, err := servers.NewManager(serversDir, log.NoOpLogger())
+	require.NoError(t, err)
+	r.srvManager = srvMgr
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up(directServers("lantern-1", h).Servers...)
+	require.NoError(t, r.updateServers(directServers("lantern-1", h), true))
+	r.persistSelection(vpn.PersonalProxiesTag)
+	require.False(t, settings.GetBool(settings.AutoConnectKey))
+
+	require.NoError(t, os.Chmod(serversDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(serversDir, 0o700) })
+	require.Error(t, r.RemoveServers([]string{h}), "saving the removal fails")
+
+	assert.True(t, settings.GetBool(settings.AutoConnectKey), "the withdrawn selection falls back")
+	calls := tun.callLog()
+	selectAt, removeAt := slices.Index(calls, "select:auto"), slices.Index(calls, "remove")
+	require.NotEqual(t, -1, selectAt, "%v", calls)
+	require.NotEqual(t, -1, removeAt, "%v", calls)
+	assert.Less(t, selectAt, removeAt, "auto-select first: %v", calls)
+	assert.False(t, tun.holds(h), "and the helper leaves the tunnel")
+	assert.True(t, tun.holds("lantern-1"))
+
+	require.NoError(t, os.Chmod(serversDir, 0o700))
+	before := len(tun.callLog())
+	require.NoError(t, r.RemoveServers([]string{"never-existed"}))
+	assert.Len(t, tun.callLog(), before, "removing an unknown tag touches nothing")
 }
