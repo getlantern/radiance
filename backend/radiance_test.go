@@ -1783,3 +1783,63 @@ func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, vpn.PersonalProxiesTag, sel.Tag)
 }
+
+// A connect captures its options, then waits for offline URL tests to stop
+// with no tunnel up. A config update in that wait ends the pairings but finds
+// no tunnel to update; the tunnel the connect then brings up from its stale
+// options still has the helpers, so they stay pending and are removed from it
+// once it reports Connected.
+func TestWithdrawalsReachATunnelConnectingDuringTheUpdate(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	r := newPersonalProxiesBackend(t)
+	r.startWithdrawalListener()
+	require.NoError(t, r.updateServers(directServers("lantern-1", h1, h2), true))
+
+	var (
+		mu      sync.Mutex
+		live    map[string]bool // nil while no tunnel is up
+		removed [][]string
+	)
+	r.removeLiveOutbounds = func(tags []string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if live == nil {
+			return vpn.ErrTunnelNotConnected
+		}
+		removed = append(removed, slices.Clone(tags))
+		for _, tag := range tags {
+			delete(live, tag)
+		}
+		return nil
+	}
+
+	offlineTestsStopped := make(chan struct{})
+	connected := make(chan struct{})
+	go func() {
+		defer close(connected)
+		snapshot := r.AllServers() // the options ConnectVPN captures
+		<-offlineTestsStopped
+		mu.Lock()
+		live = make(map[string]bool)
+		for _, srv := range snapshot {
+			live[srv.Tag] = true
+		}
+		mu.Unlock()
+		events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+	}()
+
+	// The pairings end while the connect waits.
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	close(offlineTestsStopped)
+	<-connected
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return !live[h1] && !live[h2]
+	}, 5*time.Second, 10*time.Millisecond, "the new tunnel loses the ended helpers")
+	mu.Lock()
+	assert.Len(t, removed, 1)
+	assert.True(t, live["lantern-1"])
+	mu.Unlock()
+}

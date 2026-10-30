@@ -561,6 +561,7 @@ func (r *LocalBackend) Close() {
 }
 
 func (r *LocalBackend) startVPNStatusListeners() {
+	r.startWithdrawalListener()
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		r.updateConnMetrics(evt.Status)
 	})
@@ -1174,14 +1175,33 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	return nil
 }
 
+// startWithdrawalListener removes pending withdrawn helpers from each tunnel
+// that comes up. A connect builds its tunnel from options captured before it
+// waits for offline URL tests to stop, with no tunnel to update meanwhile, so
+// a config update in that wait cannot take ended helpers out of it; this does
+// once it is up.
+func (r *LocalBackend) startWithdrawalListener() {
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		if evt.Status != vpn.Connected {
+			return
+		}
+		r.selectionMu.Lock()
+		defer r.selectionMu.Unlock()
+		if err := r.flushWithdrawalsLocked(); err != nil {
+			slog.Warn("Failed to remove withdrawn helpers from the new tunnel", "error", err)
+		}
+	})
+}
+
 // flushWithdrawalsLocked removes the pending withdrawn helpers from the
 // tunnel. updateOutbounds alone would keep them dialable: it skips an empty
 // list and keeps old outbounds when every new one fails to load. Removing the
 // last also withdraws the personal proxies group. A tag the manager holds
 // again (the pairing came back) is dropped from the set, not removed. Tags
-// stay pending while removal fails; with no tunnel there is nothing to remove,
-// and the next tunnel is built without them. The caller must hold
-// r.selectionMu.
+// stay pending until a tunnel removes them: while removal fails, and while no
+// tunnel is up, since a connect in progress may still install them (see
+// startWithdrawalListener). Removing a tag a tunnel lacks is a no-op. The
+// caller must hold r.selectionMu.
 func (r *LocalBackend) flushWithdrawalsLocked() error {
 	var tags []string
 	for tag := range r.pendingWithdrawals {
@@ -1198,7 +1218,9 @@ func (r *LocalBackend) flushWithdrawalsLocked() error {
 	if r.removeLiveOutbounds != nil {
 		remove = r.removeLiveOutbounds
 	}
-	if err := remove(tags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if err := remove(tags); errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("remove withdrawn helpers: %w", err)
 	}
 	for _, tag := range tags {
