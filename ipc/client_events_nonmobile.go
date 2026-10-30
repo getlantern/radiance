@@ -22,6 +22,17 @@ func (c *Client) AutoSelectedEvents(ctx context.Context, handler func(vpn.AutoSe
 	})
 }
 
+// PersonalProxyFallbackEvents streams the fallbacks of a selected friend's
+// personal proxy that lost its last member. Blocks until ctx is cancelled.
+func (c *Client) PersonalProxyFallbackEvents(ctx context.Context, handler func(vpn.PersonalProxyFallbackEvent)) error {
+	return c.sseRetryLoop(ctx, helperPersonalProxyFallbackEndpoint, func(data []byte) {
+		var evt vpn.PersonalProxyFallbackEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
 // URLTestEvents streams URL-test completion notifications. An event is sent
 // only when a test run produced usable latency results, for either the offline
 // pre-warm run or the live auto-select probe. Blocks until ctx is cancelled.

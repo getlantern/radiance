@@ -129,6 +129,14 @@ func TestHelperActivityClientRoundTrip(t *testing.T) {
 	assert.Zero(t, a.RelayedBytes)
 }
 
+func TestPersonalProxyStatusClientRoundTrip(t *testing.T) {
+	c := newClient()
+	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
+	statuses, err := c.PersonalProxyStatus(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, statuses)
+}
+
 // A body that is not JSON is refused before marshalling, with fixed text
 // rather than an encoder error that could quote it.
 func TestHelperRelayClientRefusesANonJSONBody(t *testing.T) {
@@ -165,6 +173,8 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	assert.False(t, ok, "relay")
 	_, ok = routeOf(http.MethodGet, helperActivityEndpoint)
 	assert.False(t, ok, "activity")
+	_, ok = routeOf(http.MethodGet, helperPersonalProxiesEndpoint)
+	assert.False(t, ok, "personal proxies")
 	route, ok := routeOf(http.MethodGet, "/not-a-route")
 	assert.True(t, ok)
 	assert.Equal(t, "/not-a-route", route)

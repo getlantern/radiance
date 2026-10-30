@@ -91,8 +91,10 @@ const (
 	unboundedSnapshotEndpoint         = "/unbounded/snapshot"
 
 	// Helper invites
-	helperRelayEndpoint    = "/helper/relay"
-	helperActivityEndpoint = "/helper/activity"
+	helperRelayEndpoint                 = "/helper/relay"
+	helperActivityEndpoint              = "/helper/activity"
+	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
+	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -298,6 +300,10 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.
 	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
+	// Not traced either: a traced poll or stream would mark the device as an
+	// inviter in exported telemetry.
+	mux.HandleFunc("GET "+helperPersonalProxiesEndpoint, s.helperPersonalProxiesHandler)
+	mux.HandleFunc("GET "+helperPersonalProxyFallbackEndpoint, s.helperPersonalProxyFallbackHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -1590,4 +1596,36 @@ func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperActivity())
+}
+
+func (s *localapi) helperPersonalProxiesHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).PersonalProxyStatus())
+}
+
+func (s *localapi) helperPersonalProxyFallbackHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan []byte, 16)
+	sub := events.Subscribe(func(evt vpn.PersonalProxyFallbackEvent) {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		select {
+		case ch <- data:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case data := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
