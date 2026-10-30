@@ -288,6 +288,10 @@ func parseErrors(c config, req *http.Request) {
 	slog.Error("parse", "error", err) // want `slog.Error logs sensitive data from field Token`
 	port, err := strconv.Atoi(c.Host)
 	slog.Error("parse", "error", err, "port", port)
+	_, err = url.QueryUnescape(c.Token)
+	slog.Error("unescape", "error", err) // want `slog.Error logs sensitive data from field Token`
+	_, err = url.PathUnescape(c.Token)
+	slog.Error("unescape", "error", err) // want `slog.Error logs sensitive data from field Token`
 	dump, err := httputil.DumpRequest(req, false)
 	slog.Error("dump", "error", err)
 	_ = dump
@@ -300,6 +304,32 @@ func compound(c config) {
 	s := "prefix"
 	s += c.Token
 	slog.Info(s) // want `slog.Info logs sensitive data from field Token`
+	value := n*1 | 0
+	slog.Info("arithmetic", "value", value) // want `slog.Info logs sensitive data from field Password`
+	slog.Info("compare", "ok", n > 0 && s != "")
+}
+
+func methodExpressions(c config, a *account) {
+	err := errors.New(c.Password)
+	slog.Info(error.Error(err))                         // want `slog.Info logs sensitive data from field Password`
+	slog.Info("token", "value", (*account).GetToken(a)) // want `slog.Info logs sensitive data from method GetToken`
+	slog.Info("host", "value", (*account).GetHost(a))
+}
+
+type selfSlice []selfSlice
+
+type genSelfSlice[T any] []genSelfSlice[T]
+
+func selfSlices() (string, selfSlice, genSelfSlice[int]) { return "", nil, nil }
+
+func nestedSlices(c config) {
+	a, b, g := selfSlices()
+	slog.Info("self", "a", a, "b", b, "g", g)
+
+	parts := bytes.Split([]byte(c.Password), []byte(","))
+	slog.Info("split", "part", string(parts[0])) // want `slog.Info logs sensitive data from field Password`
+	fields := bytes.Fields([]byte(c.Host))
+	slog.Info("fields", "field", string(fields[0]))
 }
 
 func mapLiterals(password string) {

@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/getlantern/radiance/internal/logsafe"
@@ -196,13 +197,16 @@ func (c taintChecker) callErrorQuotesInput(expr ast.Expr) bool {
 }
 
 // errorQuotesInput reports whether the function pkg.name returns an error, such as a
-// strconv.NumError or url.Error, that quotes the text it was given.
+// strconv.NumError, url.Error or url.EscapeError, that quotes text it was given.
 func errorQuotesInput(pkg, name string) bool {
 	switch pkg {
 	case "strconv":
 		return name == "Atoi" || strings.HasPrefix(name, "Parse")
 	case "net/url":
-		return name == "Parse" || name == "ParseRequestURI"
+		switch name {
+		case "Parse", "ParseRequestURI", "QueryUnescape", "PathUnescape":
+			return true
+		}
 	}
 	return false
 }
@@ -261,7 +265,8 @@ func (c taintChecker) taintOf(expr ast.Expr, state taintState) string {
 	case *ast.SliceExpr:
 		return c.taintOf(n.X, state)
 	case *ast.BinaryExpr:
-		if n.Op == token.ADD {
+		// A bool result reveals too little to report.
+		if !isBool(info.TypeOf(n)) {
 			return joinSource(c.taintOf(n.X, state), c.taintOf(n.Y, state))
 		}
 	case *ast.CompositeLit:
@@ -319,14 +324,12 @@ func (c taintChecker) taintOfCall(call *ast.CallExpr, state taintState) string {
 	if fn == nil {
 		return ""
 	}
-	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && len(call.Args) == 0 {
-		if selection := info.Selections[sel]; selection != nil && selection.Kind() == types.MethodVal {
-			switch name := fn.Name(); {
-			case name == "Error" || name == "String":
-				return joinSource(c.taintOf(sel.X, state), cookieSource(info.TypeOf(sel.X)))
-			case logsafe.IsSecretKey(strings.TrimPrefix(name, "Get")):
-				return "method " + name
-			}
+	if recv, args := c.receiverAndArgs(call); recv != nil && len(args) == 0 {
+		switch name := fn.Name(); {
+		case name == "Error" || name == "String":
+			return joinSource(c.taintOf(recv, state), cookieSource(info.TypeOf(recv)))
+		case logsafe.IsSecretKey(strings.TrimPrefix(name, "Get")):
+			return "method " + name
 		}
 	}
 	if fn.Pkg() == nil {
@@ -475,14 +478,24 @@ func passesThrough(pkg, name string, result types.Type) bool {
 }
 
 // holdsText reports whether a value of type t holds text: a string, or a slice of
-// strings or bytes.
+// bytes, strings or such slices.
 func holdsText(t types.Type) bool {
-	if s, ok := t.Underlying().(*types.Slice); ok {
-		b, ok := s.Elem().Underlying().(*types.Basic)
-		return ok && (b.Info()&types.IsString != 0 || b.Kind() == types.Byte)
+	var seen []types.Type
+	for !slices.ContainsFunc(seen, func(s types.Type) bool { return types.Identical(s, t) }) {
+		seen = append(seen, t)
+		switch u := t.Underlying().(type) {
+		case *types.Slice:
+			if b, ok := u.Elem().Underlying().(*types.Basic); ok && b.Kind() == types.Byte {
+				return true
+			}
+			t = u.Elem()
+		case *types.Basic:
+			return u.Info()&types.IsString != 0
+		default:
+			return false
+		}
 	}
-	b, ok := t.Underlying().(*types.Basic)
-	return ok && b.Info()&types.IsString != 0
+	return false
 }
 
 func (c taintChecker) checkSlogCall(call *ast.CallExpr, state taintState) {

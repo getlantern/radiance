@@ -188,3 +188,19 @@ func tildeStringer[T ~[]named, E []named](t T, e E) {
 	_ = fmt.Sprint(t) // want `fmt.Sprint formats T`
 	_ = fmt.Sprint(e) // String is called on each element
 }
+
+type stringerStruct interface {
+	~struct{ Password string }
+	fmt.Stringer
+}
+
+type stringerNamed interface {
+	named
+	fmt.Stringer
+}
+
+func stringerConstraints[S stringerStruct, N stringerNamed, A fmt.Stringer](s S, n N, a A) {
+	_ = fmt.Sprint(s) // want `fmt.Sprint formats S`
+	_ = fmt.Sprint(n) // only named itself, whose String is called
+	_ = fmt.Sprint(a) // String is called, as on a fmt.Stringer interface
+}

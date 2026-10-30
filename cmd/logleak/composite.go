@@ -93,19 +93,21 @@ func dumpsCompositeOnPath(t types.Type, usesMethod, topLevel, formatted bool, pa
 	case isFormatter(t):
 		// Format may print anything, so no Error or String method beneath it is trusted.
 		usesMethod, formatted = false, true
-	case usesMethod && (types.Implements(t, errorType) || types.Implements(t, stringerType)):
-		return false
 	}
+	// Check a type parameter's terms before its String or Error method: a type admitted by
+	// a ~ term may have a Format method, which fmt calls instead.
 	if tp, ok := types.Unalias(t).(*types.TypeParam); ok {
 		if terms, restricted := typeTerms(tp.Constraint().Underlying().(*types.Interface)); restricted {
 			for _, term := range terms {
-				// A ~ term admits types with methods of their own, including Format.
 				if dumpsCompositeOnPath(term.Type(), usesMethod && !term.Tilde(), topLevel, formatted || term.Tilde(), path) {
 					return true
 				}
 			}
 			return false
 		}
+	}
+	if usesMethod && (types.Implements(t, errorType) || types.Implements(t, stringerType)) {
+		return false
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Tuple:
