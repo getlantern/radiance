@@ -498,3 +498,25 @@ func TestPersonalProxiesGroupReplacesItsSoleMemberInPlace(t *testing.T) {
 		}, 5*time.Second, 20*time.Millisecond, "the group keeps probing its replaced member")
 	}
 }
+
+// Withdrawing the selected group hands traffic to auto-select rather than to
+// whichever member the manual selector falls back to; an unselected group's
+// withdrawal leaves the mode alone.
+func TestWithdrawingTheSelectedGroupSwitchesToAuto(t *testing.T) {
+	for _, tc := range []struct {
+		name, selected, wantMode string
+	}{
+		{"group selected", PersonalProxiesTag, AutoSelectTag},
+		{"another server selected", "lantern-1", ManualSelectTag},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := startPersonalProxiesTestTunnel(t, testHelper1)
+			require.NoError(t, tun.selectOutbound(tc.selected))
+			require.Equal(t, ManualSelectTag, tun.clashServer.Mode())
+
+			require.NoError(t, tun.removeOutbounds([]string{testHelper1}))
+			require.Nil(t, tun.personalProxiesGroup())
+			assert.Equal(t, tc.wantMode, tun.clashServer.Mode())
+		})
+	}
+}

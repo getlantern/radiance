@@ -676,6 +676,14 @@ func swapPersonalProxiesLocked(group lbA.MutableOutboundGroup, swap []string) er
 // caller must hold t.outboundMu.
 func (t *tunnel) withdrawPersonalProxiesLocked(selector lbA.MutableOutboundGroup) error {
 	var errs []error
+	// The selector falls back to an arbitrary member when its selection goes,
+	// so a selected group first hands traffic to auto-select, which the
+	// backend then persists.
+	if selector.Now() == PersonalProxiesTag && t.boxInstance != nil {
+		if err := t.selectMode(AutoSelectTag); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if _, err := selector.Remove(PersonalProxiesTag); err != nil {
 		errs = append(errs, err)
 	}
