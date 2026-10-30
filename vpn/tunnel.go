@@ -215,14 +215,14 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	if !slices.ContainsFunc(options.Outbounds, func(o O.Outbound) bool { return o.Tag == PersonalProxyTag }) {
+		t.personalProxy.Store(nil)
+	}
 	// An Unbounded consumer joins its helper pairings' rooms on freddie with
 	// the inviter tickets lantern-cloud issues this device. lantern-box gives
 	// the source only to helper-tagged Unbounded outbounds, which read it at
 	// every subscribe; the source fetches on first use and renews in the
 	// background, outside the tunnel like the signaling itself.
-	if !slices.ContainsFunc(options.Outbounds, func(o O.Outbound) bool { return o.Tag == PersonalProxyTag }) {
-		t.personalProxy.Store(nil)
-	}
 	boxCtx = withHelperRoomTickets(boxCtx, t)
 	t.prefetchInviterTickets(options.Outbounds)
 

@@ -909,8 +909,7 @@ func (c *Client) HelperRelay(ctx context.Context, op string, body []byte) (helpe
 }
 
 // PersonalProxyStatus reads the status of each friend this device invited
-// (see vpn.PersonalProxyStatus). A friend is selected with SelectServer
-// and vpn.PersonalProxySelection.
+// (see vpn.PersonalProxyStatus).
 func (c *Client) PersonalProxyStatus(ctx context.Context) ([]vpn.PersonalProxyStatus, error) {
 	var statuses []vpn.PersonalProxyStatus
 	err := c.doJSON(ctx, http.MethodGet, helperPersonalProxiesEndpoint, nil, &statuses)

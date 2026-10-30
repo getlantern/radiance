@@ -121,9 +121,8 @@ func (r *LocalBackend) fallBackLocked(tag string) {
 	}
 }
 
-// reconcilePersonalProxy follows a change in the inviter tickets: a selected
-// friend with no member left falls back, and the tunnel's groups are brought
-// in line with the tickets.
+// reconcilePersonalProxy brings the selection and the tunnel's groups in line
+// after the inviter tickets change.
 func (r *LocalBackend) reconcilePersonalProxy() {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()

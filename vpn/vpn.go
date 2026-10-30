@@ -91,7 +91,8 @@ type InviterTickets interface {
 	Inviter() []string
 	// InviterFor returns the inviter tickets for the pairing whose outbound
 	// tag is tag, and whether the source has been answered: until then, no
-	// tickets means only that none are known yet.
+	// tickets means only that none are known yet. Like Inviter, it is called
+	// on the signaling path and must not block.
 	InviterFor(tag string) (tickets []string, answered bool)
 }
 

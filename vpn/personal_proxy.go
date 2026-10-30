@@ -20,15 +20,13 @@ import (
 	"github.com/getlantern/radiance/servers"
 )
 
-// PersonalProxyTag is the url-test group over one friend's outbounds: the
-// friend's direct helper outbound while the config carries it, and the rooms
-// consumer while this device holds an inviter ticket for the friend's pairing.
-// The tunnel creates it when the friend is selected and removes it when the
-// selection moves or its last member goes. It is never a managed server.
+// PersonalProxyTag is the tag of the url-test group over the selected
+// friend's outbounds. The group exists only while a friend is selected and
+// has a member, and is never a managed server.
 const PersonalProxyTag = redact.PersonalProxyTag
 
-// ErrPersonalProxyUnavailable is returned for a selection of a friend with
-// neither a direct outbound nor a rooms ticket.
+// ErrPersonalProxyUnavailable is returned for a selection of PersonalProxyTag
+// itself or of a friend with no member.
 var ErrPersonalProxyUnavailable = errors.New("personal proxy unavailable")
 
 // roomsConsumerType is the type of the helper outbound that reaches friends
@@ -279,11 +277,10 @@ func (t *tunnel) deselectPersonalProxyLocked() error {
 	return t.withdrawPersonalProxyLocked(selector)
 }
 
-// withdrawPersonalProxyLocked ends the narrowing, restarting the rooms
-// consumers, and removes the group from the selector and then the outbound
-// manager. A selection of the group first moves to the personal proxies group
-// if the selector offers it, or else to auto-select, as the backend's fallback
-// does. The caller must hold t.outboundMu.
+// withdrawPersonalProxyLocked removes the friend's group and ends the
+// narrowing, restarting the rooms consumers. A selection of the group falls
+// back to PersonalProxiesTag if the selector offers it, else to auto-select,
+// as the backend's fallbackFor does. The caller must hold t.outboundMu.
 func (t *tunnel) withdrawPersonalProxyLocked(selector lbA.MutableOutboundGroup) error {
 	var errs []error
 	if selector.Now() == PersonalProxyTag && t.boxInstance != nil {
@@ -380,7 +377,6 @@ type PersonalProxyMember struct {
 	DirectDelay uint16
 }
 
-// personalProxyMember reports what the tunnel holds for friend.
 func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
