@@ -264,8 +264,8 @@ type Client struct {
 	// pairingConfirmedAt is when a known set was last accepted. A rotation
 	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
-	// pairingByShortID maps each short ID of the newest grouped set accepted
-	// to its pairing ID. Written under c.mu, read lock-free by the connection
+	// pairingByShortID maps each short ID of the newest grouped set the
+	// inbound holds to its pairing ID. Written under c.mu, read lock-free by the connection
 	// listener.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
 	// pendingGroups are the recorded set's groups while the box does not
