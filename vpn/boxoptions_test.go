@@ -553,3 +553,55 @@ func TestTunHasIPv6(t *testing.T) {
 	assert.False(t, tunHasIPv6(tun("10.10.1.1/30")), "v4-only TUN does not capture IPv6")
 	assert.False(t, tunHasIPv6(O.Options{}), "no inbounds means no IPv6 capture")
 }
+
+func helperOutbound(tag string) O.Outbound {
+	return O.Outbound{Type: C.TypeDirect, Tag: tag, Options: &O.DirectOutboundOptions{}}
+}
+
+func TestBuildOptions_PersonalProxies(t *testing.T) {
+	const h1, h2 = "helper-0123456789ab", "helper-ba9876543210"
+	withHelpers := func(t *testing.T) O.Options {
+		cfg := testConfig(t)
+		cfg.Options.Outbounds = append(cfg.Options.Outbounds, helperOutbound(h1), helperOutbound(h2))
+		return cfg.Options
+	}
+
+	t.Run("groups every helper outbound and is offered by the manual selector", func(t *testing.T) {
+		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t)})
+		require.NoError(t, err)
+		group := findOutbound(opts.Outbounds, PersonalProxiesTag)
+		require.NotNil(t, group)
+		assert.Equal(t, lbC.TypeMutableURLTest, group.Type)
+		assert.Equal(t, []string{h1, h2}, group.Options.(*lbO.MutableURLTestOutboundOptions).Outbounds)
+		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+		assert.Contains(t, manual.Outbounds, PersonalProxiesTag)
+		auto := findOutbound(opts.Outbounds, AutoSelectTag).Options.(*lbO.MutableAutoSelectOutboundOptions)
+		assert.NotContains(t, auto.Outbounds, PersonalProxiesTag, "Smart Location uses the helpers directly")
+		assert.Contains(t, auto.Outbounds, h1)
+	})
+
+	t.Run("does not exist without helper outbounds", func(t *testing.T) {
+		options, _ := testBoxOptions(t)
+		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
+		require.NoError(t, err)
+		assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag), "a url-test group must never start empty")
+		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+		assert.NotContains(t, manual.Outbounds, PersonalProxiesTag)
+	})
+
+	t.Run("can be the initial selection while helpers exist", func(t *testing.T) {
+		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t), InitialServer: PersonalProxiesTag})
+		require.NoError(t, err)
+		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+		assert.Equal(t, PersonalProxiesTag, manual.Outbounds[0])
+		assert.Equal(t, ManualSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+
+		options, _ := testBoxOptions(t)
+		_, err = buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: PersonalProxiesTag})
+		require.Error(t, err)
+	})
+
+	t.Run("is reserved", func(t *testing.T) {
+		assert.Contains(t, ReservedTags(), PersonalProxiesTag)
+	})
+}

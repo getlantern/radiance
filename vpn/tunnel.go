@@ -94,6 +94,10 @@ type tunnel struct {
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
+	// replacedHelpers holds the helper tags whose outbound addOutboundsLocked
+	// replaced under the same tag since the last syncPersonalProxiesLocked,
+	// which swaps them into the personal proxies group. Guarded by outboundMu.
+	replacedHelpers map[string]struct{}
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
 	// value uses defaultCloseTimeout.
@@ -331,7 +335,9 @@ func newMutableGroupManager(
 
 	var mutGroups []lbA.MutableOutboundGroup
 	for _, out := range oMgr.Outbounds() {
-		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
+		// The personal proxies group stays out: the manager's map is fixed at
+		// construction, and the tunnel removes and recreates the group.
+		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup && g.Tag() != PersonalProxiesTag {
 			mutGroups = append(mutGroups, g)
 		}
 	}
@@ -494,7 +500,20 @@ func (t *tunnel) selectMode(mode string) error {
 	return nil
 }
 
+// ErrPersonalProxiesUnavailable is returned for a selection of
+// PersonalProxiesTag while the device has no helper outbound.
+var ErrPersonalProxiesUnavailable = errors.New("personal proxies unavailable")
+
 func (t *tunnel) selectOutbound(tag string) error {
+	// Held to the selection, so the personal proxies group cannot be removed
+	// between its check and its selection, and a swap of a replaced outbound
+	// in the manual selector, which restores its selection, cannot interleave.
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	// Checked before the mode switch, so a refused selection changes nothing.
+	if tag == PersonalProxiesTag && !t.offersPersonalProxies() {
+		return ErrPersonalProxiesUnavailable
+	}
 	if err := t.selectMode(ManualSelectTag); err != nil {
 		return err
 	}
@@ -504,7 +523,185 @@ func (t *tunnel) selectOutbound(tag string) error {
 	if !loaded {
 		return fmt.Errorf("manual select group not found")
 	}
-	outbound.(Selector).SelectOutbound(tag)
+	if !outbound.(Selector).SelectOutbound(tag) && tag == PersonalProxiesTag {
+		return ErrPersonalProxiesUnavailable
+	}
+	return nil
+}
+
+// offersPersonalProxies reports whether the manual selector offers the
+// personal proxies group, which it does exactly while the group exists.
+func (t *tunnel) offersPersonalProxies() bool {
+	if t.mutGrpMgr == nil {
+		return false
+	}
+	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
+	return ok && slices.Contains(selector.All(), PersonalProxiesTag)
+}
+
+// personalProxiesGroup returns the personal proxies group, or nil while it
+// does not exist.
+func (t *tunnel) personalProxiesGroup() lbA.MutableOutboundGroup {
+	if t.outboundMgr == nil {
+		return nil
+	}
+	out, ok := t.outboundMgr.Outbound(PersonalProxiesTag)
+	if !ok {
+		return nil
+	}
+	g, _ := out.(lbA.MutableOutboundGroup)
+	return g
+}
+
+// liveOutbound returns the outbound manager's outbound for tag, or nil.
+func (t *tunnel) liveOutbound(tag string) adapter.Outbound {
+	if t.outboundMgr == nil {
+		return nil
+	}
+	out, _ := t.outboundMgr.Outbound(tag)
+	return out
+}
+
+// swapIntoSelectionGroupsLocked points the manual selector and the auto
+// group at the outbound now under tag, after it replaced the one they hold.
+// The manual selector swaps it in place, keeping its selection and never
+// dropping the tag. The auto group cannot replace a member, so the tag is
+// removed and added again, directly on the group: through the group manager
+// the removal would queue the new outbound for teardown. A sole auto member
+// leaves the group empty in between, which it tolerates once started (it
+// looks up its pause manager when it needs it). The caller must hold
+// t.outboundMu.
+func (t *tunnel) swapIntoSelectionGroupsLocked(tag string) error {
+	if selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag); ok && slices.Contains(selector.All(), tag) {
+		if err := t.mutGrpMgr.ReplaceInGroup(ManualSelectTag, tag); err != nil {
+			return fmt.Errorf("swap %s in %s: %w", tag, ManualSelectTag, err)
+		}
+	}
+	auto, ok := t.mutGrpMgr.OutboundGroup(AutoSelectTag)
+	if !ok {
+		return fmt.Errorf("group %s not found", AutoSelectTag)
+	}
+	if !slices.Contains(auto.All(), tag) {
+		return t.mutGrpMgr.AddToGroup(AutoSelectTag, tag)
+	}
+	if _, err := auto.Remove(tag); err != nil {
+		return fmt.Errorf("swap %s in %s: %w", tag, AutoSelectTag, err)
+	}
+	if n, err := auto.Add(tag); err != nil || n == 0 {
+		if err == nil {
+			err = errors.New("not added")
+		}
+		return fmt.Errorf("swap %s in %s: %w", tag, AutoSelectTag, err)
+	}
+	return nil
+}
+
+// syncPersonalProxiesLocked makes the personal proxies group hold exactly the
+// helper outbounds the manual selector offers, as the outbound manager now
+// holds them. It creates the group with its first member and removes it with
+// its last (a url-test group must never be empty), and keeps the selector
+// offering it exactly while it exists. The caller must hold t.outboundMu.
+func (t *tunnel) syncPersonalProxiesLocked() error {
+	replaced := t.replacedHelpers
+	t.replacedHelpers = nil
+	if t.mutGrpMgr == nil || t.outboundMgr == nil {
+		return nil
+	}
+	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
+	if !ok {
+		return errors.New("manual select group not found")
+	}
+	helpers := helperTags(selector.All())
+	group := t.personalProxiesGroup()
+	switch {
+	case len(helpers) == 0 && group == nil:
+		return nil
+	case len(helpers) == 0:
+		return t.withdrawPersonalProxiesLocked(selector)
+	case group == nil:
+		if err := t.createPersonalProxiesLocked(helpers); err != nil {
+			return err
+		}
+	default:
+		// Added before the stale members go, so the group is never empty.
+		if _, err := group.Add(helpers...); err != nil {
+			return fmt.Errorf("update personal proxies group: %w", err)
+		}
+		var stale, swap []string
+		for _, tag := range group.All() {
+			if !slices.Contains(helpers, tag) {
+				stale = append(stale, tag)
+			} else if _, ok := replaced[tag]; ok {
+				swap = append(swap, tag)
+			}
+		}
+		if len(stale) > 0 {
+			if _, err := group.Remove(stale...); err != nil {
+				return fmt.Errorf("update personal proxies group: %w", err)
+			}
+		}
+		if err := swapPersonalProxiesLocked(group, swap); err != nil {
+			return err
+		}
+	}
+	if !slices.Contains(selector.All(), PersonalProxiesTag) {
+		if _, err := selector.Add(PersonalProxiesTag); err != nil {
+			return fmt.Errorf("offer personal proxies group: %w", err)
+		}
+	}
+	return nil
+}
+
+// swapPersonalProxiesLocked points the group's members in swap at their
+// replacement outbounds in place: the group never drops or empties, and the
+// manual selector's choice of it never moves. The group is kept out of the
+// group manager, so it is replaced on directly. The caller must hold
+// t.outboundMu.
+func swapPersonalProxiesLocked(group lbA.MutableOutboundGroup, swap []string) error {
+	if len(swap) == 0 {
+		return nil
+	}
+	replacer, ok := group.(lbA.MemberReplacer)
+	if !ok {
+		return errors.New("update personal proxies group: group cannot replace members")
+	}
+	if _, err := replacer.Replace(swap...); err != nil {
+		return fmt.Errorf("update personal proxies group: %w", err)
+	}
+	return nil
+}
+
+// withdrawPersonalProxiesLocked removes the group from the selector and then
+// from the outbound manager, so the selector never holds a closed group. The
+// caller must hold t.outboundMu.
+func (t *tunnel) withdrawPersonalProxiesLocked(selector lbA.MutableOutboundGroup) error {
+	var errs []error
+	// The selector falls back to an arbitrary member when its selection goes,
+	// so a selected group first hands traffic to auto-select, which the
+	// backend then persists.
+	if selector.Now() == PersonalProxiesTag && t.boxInstance != nil {
+		if err := t.selectMode(AutoSelectTag); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if _, err := selector.Remove(PersonalProxiesTag); err != nil {
+		errs = append(errs, err)
+	}
+	if err := t.outboundMgr.Remove(PersonalProxiesTag); err != nil {
+		errs = append(errs, fmt.Errorf("remove personal proxies group: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+// createPersonalProxiesLocked creates the group over helpers, which must not
+// be empty. The caller must hold t.outboundMu.
+func (t *tunnel) createPersonalProxiesLocked(helpers []string) error {
+	out := personalProxiesOutbound(helpers)
+	router := service.FromContext[adapter.Router](t.ctx)
+	logger := t.logFactory.NewLogger("outbound/" + out.Tag + "[" + out.Type + "]")
+	if err := t.outboundMgr.Create(t.ctx, router, logger, out.Tag, out.Type, out.Options); err != nil {
+		return fmt.Errorf("create personal proxies group: %w", err)
+	}
 	return nil
 }
 
@@ -592,12 +789,23 @@ var errLibboxClosed = errors.New("libbox closed")
 func (t *tunnel) addOutbounds(list servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	return t.addOutboundsLocked(list)
+	err := t.addOutboundsLocked(list)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	return errors.Join(err, t.syncPersonalProxiesLocked())
 }
 
 // addOutboundsLocked adds the servers in list to the tunnel. The caller must
 // hold t.outboundMu.
 func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
+	return t.loadOutboundsLocked(list, true)
+}
+
+// loadOutboundsLocked adds the servers in list to the tunnel, or swaps in
+// those whose options changed, and with applyOverrides sets list's bandit URL
+// overrides on the auto group. The caller must hold t.outboundMu.
+func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides bool) error {
 	list = allowedServers(list)
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
@@ -629,16 +837,37 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	)
 	for _, outbound := range newOutbounds {
 		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		prev := t.liveOutbound(outbound.Tag)
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
 		)
+		// An outbound with new options replaces the one under its tag. The
+		// selection groups skip a tag they already hold, so the manual
+		// selector refused it; it is swapped into both groups below.
+		// A failed create leaves no new outbound, even if a queued removal
+		// took the old one meanwhile.
+		cur := t.liveOutbound(outbound.Tag)
+		replaced := prev != nil && cur != nil && cur != prev
+		if replaced {
+			err = nil
+			if lbA.IsHelperTag(outbound.Tag) {
+				if t.replacedHelpers == nil {
+					t.replacedHelpers = make(map[string]struct{})
+				}
+				t.replacedHelpers[outbound.Tag] = struct{}{}
+			}
+		}
 		// Before the auto-select group gets the outbound: it probes new members
 		// immediately, and those probes must go through the exchange.
 		t.updateInjectionLocked(outbound.Tag, isLantern[outbound.Tag], err == nil)
 		if err == nil {
-			err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
+			if replaced {
+				err = t.swapIntoSelectionGroupsLocked(outbound.Tag)
+			} else {
+				err = mutGrpMgr.AddToGroup(AutoSelectTag, outbound.Tag)
+			}
 		}
-		if errors.Is(err, groups.ErrIsClosed) {
+		if errors.Is(err, groups.ErrIsClosed) || errors.Is(err, lbA.ErrGroupClosed) {
 			return errLibboxClosed
 		}
 		if err != nil {
@@ -682,6 +911,10 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 		}
 	}
 
+	if !applyOverrides {
+		slog.Debug("Added servers", "added", added)
+		return errors.Join(errs...)
+	}
 	if len(list.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to auto-select group",
 			"override_count", len(list.URLOverrides),
@@ -760,10 +993,56 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 	return errors.Join(errs...)
 }
 
+// reconcileHelpers makes the tunnel's helper outbounds those in helpers:
+// it removes the helpers in the selection groups that helpers does not name,
+// adds the missing ones and swaps in those whose options changed, all under
+// one hold of t.outboundMu. helpers must hold only helper servers.
+func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	if t.mutGrpMgr == nil {
+		return nil
+	}
+	keep := helpers.Tags()
+	var stale []string
+	for _, groupTag := range []string{ManualSelectTag, AutoSelectTag} {
+		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
+		if !ok {
+			continue
+		}
+		for _, tag := range helperTags(group.All()) {
+			if !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
+				stale = append(stale, tag)
+			}
+		}
+	}
+	var errs []error
+	if len(stale) > 0 {
+		slog.Debug("Removing helpers that no longer have a pairing", "count", len(stale))
+		err := t.removeOutboundsLocked(stale)
+		if errors.Is(err, errLibboxClosed) {
+			return err
+		}
+		errs = append(errs, err)
+	}
+	// Bandit URL overrides belong to the whole server list, so a helpers-only
+	// load leaves them alone.
+	err := t.loadOutboundsLocked(helpers, false)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	errs = append(errs, err, t.syncPersonalProxiesLocked())
+	return errors.Join(errs...)
+}
+
 func (t *tunnel) removeOutbounds(tags []string) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	return t.removeOutboundsLocked(tags)
+	err := t.removeOutboundsLocked(tags)
+	if errors.Is(err, errLibboxClosed) {
+		return err
+	}
+	return errors.Join(err, t.syncPersonalProxiesLocked())
 }
 
 // removeOutboundsLocked removes the outbounds with the given tags from the
@@ -775,6 +1054,9 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 		errs      []error
 	)
 	for _, tag := range tags {
+		if tag == PersonalProxiesTag {
+			continue // the tunnel's own group: syncPersonalProxiesLocked manages it
+		}
 		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
 			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
 				continue // skip nested groups
@@ -865,6 +1147,9 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 			"failed_tags", newTags, "would_remove_tags", toRemove)
 	}
 
+	if err := t.syncPersonalProxiesLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
