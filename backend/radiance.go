@@ -1113,8 +1113,10 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	// its options rotate, so a known helper tag with new options replaces the
 	// stored server. Other known tags keep the server first offered.
 	var refreshed []*servers.Server
+	offeredTags := make(map[string]struct{}, len(list.Servers))
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		if _, exists := existingTags[srv.Tag]; exists {
+			offeredTags[srv.Tag] = struct{}{}
 			if stored, found := r.srvManager.GetServerByTag(srv.Tag); found &&
 				stored.IsLantern && lbA.IsHelperTag(srv.Tag) && !r.srvManager.HasOptions(srv) {
 				if err := srv.CheckHostAccess(); err != nil {
@@ -1131,6 +1133,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
 			return true
 		}
+		offeredTags[srv.Tag] = struct{}{}
 		return false
 	})
 
@@ -1146,14 +1149,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 			selectedTag = selected.Tag
 		}
 
-		// New helpers take no retention slot, so they do not count against it.
-		incomingSlots := 0
-		for _, srv := range list.Servers {
-			if !lbA.IsHelperTag(srv.Tag) {
-				incomingSlots++
-			}
-		}
-		tagsToEvict := lanternServersToEvict(existing, incomingSlots, maxRetainedLanternServers, selectedTag)
+		tagsToEvict := lanternServersToEvict(existing, offeredTags, maxRetainedLanternServers, selectedTag)
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
 				"Evicting retained Lantern servers to make room for new config batch",
@@ -1261,20 +1257,32 @@ func endedHelpers(existing []*servers.Server, incomingHelpers map[string]struct{
 	return ended
 }
 
-// lanternServersToEvict returns Lantern server tags to evict, always including
-// hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
-// are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
+// lanternServersToEvict returns the Lantern server tags to evict for a config
+// offering the tags in offered. Hard-demoted servers are always evicted, even
+// when offered or selected. Otherwise, servers that are neither offered nor
+// selectedTag are evicted, least recently updated SelectionHistory first
+// (missing sorts oldest), until the retained and newly offered servers fit in
+// limit. Offered and selected servers are never evicted to make room, so the
+// total can exceed limit.
 // Helper servers are the user's pairings, not offers to rotate: they are
 // never evicted and take no retention slot (see endedHelpers for those whose
 // pairing ended).
 func lanternServersToEvict(
 	existing []*servers.Server,
-	incomingCount, limit int,
+	offered map[string]struct{},
+	limit int,
 	selectedTag string,
 ) []string {
-	tagsToEvict := make([]string, 0)
-	retentionCandidates := make([]*servers.Server, 0, len(existing))
+	existingTags := serverTagSet(existing)
+	retained := 0
+	for tag := range offered {
+		if _, ok := existingTags[tag]; !ok && !lbA.IsHelperTag(tag) {
+			retained++
+		}
+	}
 
+	tagsToEvict := make([]string, 0)
+	candidates := make([]*servers.Server, 0, len(existing))
 	for _, srv := range existing {
 		if !srv.IsLantern {
 			continue
@@ -1282,31 +1290,25 @@ func lanternServersToEvict(
 		if lbA.IsHelperTag(srv.Tag) {
 			continue
 		}
-		// Always evict hard-demoted servers.
 		if isHardDemoted(srv) {
 			tagsToEvict = append(tagsToEvict, srv.Tag)
 			continue
 		}
-		if srv.Tag == selectedTag {
-			// The retained selection occupies one retention slot.
-			limit--
+		retained++
+		if _, isOffered := offered[srv.Tag]; isOffered || srv.Tag == selectedTag {
 			continue
 		}
-		retentionCandidates = append(retentionCandidates, srv)
+		candidates = append(candidates, srv)
 	}
 
-	retentionBudget := max(limit-incomingCount, 0)
-	if len(retentionCandidates) <= retentionBudget {
+	overflow := min(max(retained-limit, 0), len(candidates))
+	if overflow == 0 {
 		return tagsToEvict
 	}
-
-	slices.SortFunc(retentionCandidates, compareSelectionAge)
-
-	overflow := len(retentionCandidates) - retentionBudget
-	for _, srv := range retentionCandidates[:overflow] {
+	slices.SortFunc(candidates, compareSelectionAge)
+	for _, srv := range candidates[:overflow] {
 		tagsToEvict = append(tagsToEvict, srv.Tag)
 	}
-
 	return tagsToEvict
 }
 
