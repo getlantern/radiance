@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -428,4 +429,39 @@ func TestClient_CloseKeepsTheStreamsPairing(t *testing.T) {
 	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 400)
 	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.2:1000", Bytes: late, ShortID: sid(t, sidA2)})
 	assert.Equal(t, pairingA, closeOf("198.51.100.2:1000"), "attributed late")
+}
+
+// A grouped set the inbound refused does not replace the map: the inbound
+// still accepts the previous IDs, so they keep their pairings until a retry
+// pushes the new set, which then also attributes streams waiting for it.
+func TestClient_GroupsReplaceTheMapOnlyOnceTheSetIsPushed(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{sidA1}
+	srv.registerResp.PairingShortIDsKnown = true
+	srv.registerResp.PairingShortIDsRevision = 100
+	srv.registerResp.PairingShortIDSets = []PairingShortIDSet{{PairingID: pairingA, ShortIDs: []string{sidA1}}}
+	b := &fakeBoxService{}
+	live := helper.NewLiveTracker(nil)
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.Live = live
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	require.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)))
+
+	b.setUpdateErr(errors.New("refused"))
+	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 200)
+	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)), "the inbound still accepts it")
+	assert.Equal(t, "", c.pairingFor(sid(t, sidB1)), "not pushed yet")
+	peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.2:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidB1)})
+
+	b.setUpdateErr(nil)
+	c.offerPairingShortIDs(nil, nil, false, 0) // a heartbeat's retry
+	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)))
+	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
+	s := live.Snapshot()
+	require.Len(t, s.Pairings, 1, "the stream waiting for the set is attributed")
+	assert.Equal(t, pairingB, s.Pairings[0].PairingID)
 }

@@ -268,6 +268,11 @@ type Client struct {
 	// to its pairing ID. Written under c.mu, read lock-free by the connection
 	// listener.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
+	// pendingGroups are the recorded set's groups while the box does not
+	// hold that set yet. They replace pairingByShortID only once it does,
+	// so the map never drops IDs the inbound still accepts. Guarded by
+	// c.mu.
+	pendingGroups *map[[8]byte]string
 	// liveMu orders the listener's LiveTracker updates against a session's
 	// end. liveGen identifies the running session and changes at every
 	// begin and end, so a listener callback that resumes after its session
@@ -575,9 +580,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		startRevision = int64(regResp.PairingShortIDsRevision)
 		startPairingApplied = c.applyShortIDs(box, baseShortIDs, startPairing)
 	}
-	var startGroups map[[8]byte]string
+	var startGroups *map[[8]byte]string
 	if startPairingKnown {
-		startGroups, _ = groupPairingShortIDs(startPairing, regResp.PairingShortIDSets, baseShortIDs)
+		if g, ok := groupPairingShortIDs(startPairing, regResp.PairingShortIDSets, baseShortIDs); ok {
+			startGroups = &g
+		}
 	}
 
 	if err := box.Start(); err != nil {
@@ -678,7 +685,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	if startPairingKnown {
 		c.pairingConfirmedAt = c.cfg.Now()
 	}
-	c.setPairingByShortID(startGroups)
+	c.pendingGroups = startGroups
+	if c.pairingApplied {
+		c.commitPendingGroupsLocked()
+	}
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
 	c.runDone = runDone
@@ -812,6 +822,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.pairingApplied = false
 	c.pairingRevision = 0
 	c.pairingConfirmedAt = time.Time{}
+	c.pendingGroups = nil
 	c.setPairingByShortID(nil)
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
@@ -1394,6 +1405,9 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	held := slices.Equal(pushed, want)
 	c.pairingApplied = held
+	if held {
+		c.commitPendingGroupsLocked()
+	}
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
@@ -1401,6 +1415,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		c.mu.Lock()
 		if c.box == newBox {
 			c.pairingApplied = true
+			c.commitPendingGroupsLocked()
 		}
 		c.mu.Unlock()
 	}
@@ -1738,12 +1753,16 @@ func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDS
 		c.pairingRevision = rev
 		c.pairingConfirmedAt = c.cfg.Now()
 		c.pairingApplied = false
+		c.pendingGroups = nil
 		if g, ok := groupPairingShortIDs(pairing, groups, base); ok {
-			c.setPairingByShortID(g)
+			c.pendingGroups = &g
 		}
 	} else if known && c.pairingKnown && rev == c.pairingRevision {
 		if g, ok := groupPairingShortIDs(c.pairingShortIDs, groups, base); ok {
-			c.setPairingByShortID(g)
+			c.pendingGroups = &g
+			if c.pairingApplied {
+				c.commitPendingGroupsLocked()
+			}
 		}
 	}
 	if c.pairingApplied {
@@ -1763,8 +1782,19 @@ func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDS
 	c.mu.Lock()
 	if c.box == b {
 		c.pairingApplied = true
+		c.commitPendingGroupsLocked()
 	}
 	c.mu.Unlock()
+}
+
+// commitPendingGroupsLocked makes the groups of the recorded set the short
+// ID to pairing map, once the box holds that set. Called with c.mu held.
+func (c *Client) commitPendingGroupsLocked() {
+	if c.pendingGroups == nil {
+		return
+	}
+	c.setPairingByShortID(*c.pendingGroups)
+	c.pendingGroups = nil
 }
 
 // pairingMaxUnconfirmed is how long a pairing set is kept without the server
@@ -1802,6 +1832,7 @@ func (c *Client) expireUnconfirmedPairing() {
 		c.pairingKnown = false
 		c.pairingApplied = true
 		c.pairingConfirmedAt = time.Time{}
+		c.pendingGroups = nil
 		c.setPairingByShortID(nil)
 	}
 	c.mu.Unlock()
