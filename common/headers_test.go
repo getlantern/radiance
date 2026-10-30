@@ -28,6 +28,16 @@ func TestClientIPHeader(t *testing.T) {
 			SetPublicIP("198.51.100.9")
 			SetStoredPublicIP("203.0.113.0")
 		}, "198.51.100.9", "198.51.100.9"},
+		// After a network change the old address is kept for geolocation, not sent as exact.
+		{"network change forgets detected", func() {
+			SetPublicIP("198.51.100.9")
+			ForgetDetectedPublicIP()
+		}, "198.51.100.9", ""},
+		{"detection after a network change is sent", func() {
+			SetPublicIP("198.51.100.9")
+			ForgetDetectedPublicIP()
+			SetPublicIP("192.0.2.4")
+		}, "192.0.2.4", "192.0.2.4"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

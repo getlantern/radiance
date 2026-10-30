@@ -1727,11 +1727,17 @@ func (r *LocalBackend) RestartVPN() error {
 	return r.vpnClient.Restart(bOptions)
 }
 
-// ResetNetwork drops the VPN's connections and re-seeds its interface state.
-func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
+// ResetNetwork drops the VPN's connections and re-seeds its interface state. The network changed,
+// so the public IP detected on the old one is no longer sent as the client's exact address.
+func (r *LocalBackend) ResetNetwork() {
+	common.ForgetDetectedPublicIP()
+	r.vpnClient.ResetNetwork()
+}
 
-// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel, and
+// forgets the detected public IP as [LocalBackend.ResetNetwork] does.
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+	common.ForgetDetectedPublicIP()
 	r.vpnClient.ResetNetworkForMonitor(listener)
 }
 

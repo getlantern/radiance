@@ -42,6 +42,18 @@ func SetStoredPublicIP(ip string) {
 	}
 }
 
+// ForgetDetectedPublicIP marks the current public IP as no longer detected, because the network
+// changed and the address may have with it. Requests keep carrying it for geolocation, but
+// [SetDetectedClientIP] stops sending it until [SetPublicIP] records a new detection.
+func ForgetDetectedPublicIP() {
+	for {
+		cur := publicIP.Load()
+		if !cur.detected || publicIP.CompareAndSwap(cur, &clientIP{ip: cur.ip}) {
+			return
+		}
+	}
+}
+
 // SetDetectedClientIP sets [ClientIPHeader] on req to the public IP detected this session, or
 // removes the header if there is none. The server trusts the header as the client's address, so
 // requests that need the exact address, rather than its location, must use this.
