@@ -11,16 +11,39 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// publicIP holds the most recently detected public IP address.
-var publicIP atomic.Value // string
-
-func init() {
-	publicIP.Store("") // ensure publicIP is type string
+type clientIP struct {
+	ip string
+	// detected is false for an IP restored from storage, which is truncated for privacy and so
+	// only good for geolocation.
+	detected bool
 }
 
-// SetPublicIP stores the detected public IP for inclusion in API requests.
+var publicIP atomic.Pointer[clientIP]
+
+func init() {
+	publicIP.Store(&clientIP{})
+}
+
+// SetPublicIP stores the full public IP detected this session for inclusion in API requests.
 func SetPublicIP(ip string) {
-	publicIP.Store(ip)
+	publicIP.Store(&clientIP{ip: ip, detected: ip != ""})
+}
+
+// SetStoredPublicIP stores a truncated public IP from a previous session. API requests carry it
+// for geolocation until [SetPublicIP] replaces it, but [SetDetectedClientIP] never sends it.
+func SetStoredPublicIP(ip string) {
+	publicIP.Store(&clientIP{ip: ip})
+}
+
+// SetDetectedClientIP sets [ClientIPHeader] on req to the public IP detected this session, or
+// removes the header if there is none. The server trusts the header as the client's address, so
+// requests that need the exact address, rather than its location, must use this.
+func SetDetectedClientIP(req *http.Request) {
+	if cur := publicIP.Load(); cur.detected {
+		req.Header.Set(ClientIPHeader, cur.ip)
+	} else {
+		req.Header.Del(ClientIPHeader)
+	}
 }
 
 const (
@@ -67,7 +90,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if tz := LocalTimeZone(); tz != "" {
 		req.Header.Set(TimeZoneHeader, tz)
 	}
-	if ip := publicIP.Load().(string); ip != "" {
+	if ip := publicIP.Load().ip; ip != "" {
 		req.Header.Set(ClientIPHeader, ip)
 	}
 	return req, nil

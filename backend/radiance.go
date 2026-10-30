@@ -2310,7 +2310,7 @@ func loadStoredPublicIP() string {
 	if net.ParseIP(stored) == nil {
 		return ""
 	}
-	common.SetPublicIP(stored)
+	common.SetStoredPublicIP(stored)
 	return stored
 }
 

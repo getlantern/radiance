@@ -173,3 +173,29 @@ func TestDetectPublicIPReturnsIP(t *testing.T) {
 	cancel()
 	assert.Nil(t, detectPublicIP(ctx, func() bool { return true }, fixedLookup("203.0.113.7", &calls)))
 }
+
+func peerClientIP(t *testing.T) string {
+	t.Helper()
+	req, err := common.NewRequestWithHeaders(context.Background(), http.MethodPost, "https://example.com/peer/register", nil)
+	require.NoError(t, err)
+	common.SetDetectedClientIP(req)
+	return req.Header.Get(common.ClientIPHeader)
+}
+
+func TestStoredPublicIPOnlyForGeolocation(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(func() { common.SetPublicIP("") })
+	require.NoError(t, settings.Set(settings.PublicIPKey, "203.0.113.0"))
+
+	require.Equal(t, "203.0.113.0", loadStoredPublicIP())
+	assert.Equal(t, "203.0.113.0", recordedPublicIP(t), "config requests carry the stored /24 before detection")
+	assert.Empty(t, peerClientIP(t), "peer requests must not carry the stored /24")
+
+	var calls atomic.Int32
+	runDetect(t, 5*time.Second, func() bool { return true }, fixedLookup("203.0.113.7", &calls))
+	assert.Equal(t, "203.0.113.7", recordedPublicIP(t))
+	assert.Equal(t, "203.0.113.7", peerClientIP(t), "peer requests carry the full detected IP")
+	assert.Equal(t, "203.0.113.0", settings.GetString(settings.PublicIPKey), "loading never persists the full IP")
+}

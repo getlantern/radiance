@@ -1135,35 +1135,62 @@ func TestNewPeerBoxContext_RegistryStableAcrossLookups(t *testing.T) {
 	assert.True(t, first == second, "every lookup must resolve to one registry")
 }
 
-// All four peer endpoints must carry the same standard header set as
-// /config-new (X-Lantern-Config-Client-IP in particular). The server's
-// util.ClientIPWithAddr prefers that header over X-Forwarded-For and
-// RemoteAddr; without it, register/verify resolve a different IP than
-// radiance has detected, and the server's verifier dials an address the
-// peer's listener isn't bound to.
-func TestAPI_ForwardsCommonHeaders(t *testing.T) {
-	const fakePublicIP = "198.51.100.7"
-	common.SetPublicIP(fakePublicIP)
+// The server registers a peer route at the address X-Lantern-Config-Client-IP names and dials it
+// back to verify, so peer endpoints must send the full IP detected this session and never the
+// /24-truncated one restored from storage.
+func TestAPI_ClientIPHeader(t *testing.T) {
 	t.Cleanup(func() { common.SetPublicIP("") })
-
-	type capture struct {
-		clientIP  string
-		deviceID  string
-		platform  string
-		appName   string
-		userAgent string
+	tests := []struct {
+		name string
+		set  func()
+		want string
+	}{
+		{"detected", func() { common.SetPublicIP("198.51.100.7") }, "198.51.100.7"},
+		{"stored truncated", func() { common.SetStoredPublicIP("198.51.100.0") }, ""},
+		{"none", func() { common.SetPublicIP("") }, ""},
 	}
-	captured := make(map[string]capture)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.set()
+			for path, c := range capturePeerHeaders(t) {
+				assert.Equal(t, tt.want, c.clientIP, "%s %s", path, common.ClientIPHeader)
+				_, present := c.header[http.CanonicalHeaderKey(common.ClientIPHeader)]
+				assert.Equal(t, tt.want != "", present, "%s header presence", path)
+			}
+		})
+	}
+}
+
+func TestAPI_ForwardsCommonHeaders(t *testing.T) {
+	for path, c := range capturePeerHeaders(t) {
+		assert.Equal(t, "test-device-id", c.deviceID, "%s must carry %s", path, common.DeviceIDHeader)
+		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
+		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
+	}
+}
+
+type peerHeaders struct {
+	header   http.Header
+	clientIP string
+	deviceID string
+	platform string
+	appName  string
+}
+
+// capturePeerHeaders calls every peer endpoint and returns the headers each request carried.
+func capturePeerHeaders(t *testing.T) map[string]peerHeaders {
+	t.Helper()
+	captured := make(map[string]peerHeaders)
 	var mu sync.Mutex
 	record := func(path string, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
-		captured[path] = capture{
-			clientIP:  r.Header.Get(common.ClientIPHeader),
-			deviceID:  r.Header.Get(common.DeviceIDHeader),
-			platform:  r.Header.Get(common.PlatformHeader),
-			appName:   r.Header.Get(common.AppNameHeader),
-			userAgent: r.Header.Get("User-Agent"),
+		captured[path] = peerHeaders{
+			header:   r.Header.Clone(),
+			clientIP: r.Header.Get(common.ClientIPHeader),
+			deviceID: r.Header.Get(common.DeviceIDHeader),
+			platform: r.Header.Get(common.PlatformHeader),
+			appName:  r.Header.Get(common.AppNameHeader),
 		}
 	}
 
@@ -1201,19 +1228,12 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
 
+	mu.Lock()
+	defer mu.Unlock()
 	for _, path := range []string{"/peer/register", "/peer/verify", "/peer/heartbeat", "/peer/deregister"} {
-		mu.Lock()
-		c, ok := captured[path]
-		mu.Unlock()
-		require.True(t, ok, "no request captured for %s", path)
-		assert.Equal(t, fakePublicIP, c.clientIP,
-			"%s must forward radiance's detected public IP via %s "+
-				"so server-side ClientIPWithAddr resolves the same IP it does for /config-new",
-			path, common.ClientIPHeader)
-		assert.Equal(t, "test-device-id", c.deviceID, "%s must carry %s", path, common.DeviceIDHeader)
-		assert.NotEmpty(t, c.platform, "%s must carry %s", path, common.PlatformHeader)
-		assert.NotEmpty(t, c.appName, "%s must carry %s", path, common.AppNameHeader)
+		require.Contains(t, captured, path, "no request captured")
 	}
+	return captured
 }
 
 // Rotation installs a freshly fetched launch_cfg on an already-running peer,

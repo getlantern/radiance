@@ -192,16 +192,14 @@ func (a *API) do(ctx context.Context, method, path string, body, out any) error 
 		}
 		reqBody = bytes.NewReader(buf)
 	}
-	// Use common.NewRequestWithHeaders so peer endpoints carry the same
-	// header set as /config-new — most importantly X-Lantern-Config-Client-IP,
-	// which the server's util.ClientIPWithAddr prefers over X-Forwarded-For
-	// and RemoteAddr. Without it, register/verify can resolve a different
-	// IP than radiance has detected as the client's public IP, and the
-	// server's verifier dials an address the peer's listener isn't bound to.
 	r, err := common.NewRequestWithHeaders(ctx, method, a.baseURL+path, reqBody)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
+	// The server registers the route at the address this header names and dials it back to
+	// verify, so it must never carry the stored /24-truncated IP. Without the header the server
+	// falls back to the address the CDN or connection observed.
+	common.SetDetectedClientIP(r)
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
