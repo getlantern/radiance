@@ -83,6 +83,22 @@ func TestLive_QuietFromTheCrossingNotTheLastExpiry(t *testing.T) {
 	assert.Nil(t, liveOf(lt.Snapshot(), "pA"), "not connected at t=80")
 }
 
+// A pairing evaluated only after its linger ended reports the linger's end
+// as when it disconnected, not the evaluation.
+func TestLive_DisconnectedSinceTheLingerEnded(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	start := clk.t
+	lt.Open("peer", "c1", "pA", nil)
+	lt.Add("pA", LiveThreshold)
+	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
+	clk.advance(90 * time.Second)
+	p := liveOf(lt.Snapshot(), "pA")
+	require.NotNil(t, p)
+	assert.False(t, p.Connected)
+	assert.Equal(t, start.Add(LiveWindow+LiveLinger).UnixMilli(), p.Since)
+}
+
 // The sampler runs by itself while a connection is open, with no Snapshot
 // calls, and stops once none is.
 func TestLive_SamplerRunsOnlyWhileConnectionsAreOpen(t *testing.T) {

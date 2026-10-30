@@ -305,8 +305,9 @@ func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 		}
 		if now.Sub(p.quietSince) >= t.linger {
 			p.connected = false
+			// The linger's end, not this possibly later evaluation.
+			p.since = p.quietSince.Add(t.linger)
 			p.quietSince = time.Time{}
-			p.since = now
 		}
 	}
 }
