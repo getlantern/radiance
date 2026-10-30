@@ -69,6 +69,9 @@ type LocalBackend struct {
 	splitTunnelMgr *vpn.SplitTunnel
 	sessionHistory *vpn.SessionHistory
 
+	// serverUpdateMu orders private-server tunnel updates against config snapshots.
+	serverUpdateMu sync.Mutex
+
 	peerClient   peerController
 	peerToggleMu sync.Mutex
 	peerWG       sync.WaitGroup
@@ -1016,11 +1019,16 @@ func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken st
 	if err := r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined); err != nil {
 		return err
 	}
+	r.serverUpdateMu.Lock()
+	defer r.serverUpdateMu.Unlock()
 	server, found := r.srvManager.GetServerByTag(tag)
 	if !found {
 		return fmt.Errorf("private server %q disappeared after registration", tag)
 	}
 	list := servers.ServerList{Servers: []*servers.Server{server}}
+	if cfg, _ := r.confHandler.GetConfig(); cfg != nil {
+		list.URLOverrides = cfg.BanditURLOverrides
+	}
 	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to add private server to VPN client: %w", err)
 	}
@@ -1045,6 +1053,8 @@ const maxRetainedLanternServers = 60
 // config may evict: a config that was already applied, such as the cached one
 // at startup, would judge its own offers a second time.
 func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
+	r.serverUpdateMu.Lock()
+	defer r.serverUpdateMu.Unlock()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
