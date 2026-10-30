@@ -93,6 +93,7 @@ const (
 	// Helper invites
 	helperRelayEndpoint    = "/helper/relay"
 	helperActivityEndpoint = "/helper/activity"
+	helperLiveEndpoint     = "/helper/live"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -298,6 +299,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.
 	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
+	// Not traced: its body names the device's friends and whether each is
+	// connected, and a traced poll would mark the device as a volunteer.
+	mux.HandleFunc("GET "+helperLiveEndpoint, s.helperLiveHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -1590,4 +1594,8 @@ func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperActivity())
+}
+
+func (s *localapi) helperLiveHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperLive())
 }
