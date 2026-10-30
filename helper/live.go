@@ -273,22 +273,25 @@ func (p *livePairing) add(now time.Time, n uint64) {
 
 func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 	cutoff := now.Add(-t.window)
-	drop := 0
-	for drop < len(p.samples) && !p.samples[drop].at.After(cutoff) {
-		drop++
-	}
-	// When the window last lost traffic: if that took the pairing below
-	// the threshold, it went quiet then, not at this later evaluation.
-	var droppedAt time.Time
-	if drop > 0 {
-		droppedAt = p.samples[drop-1].at.Add(t.window)
-	}
-	if drop > 0 {
-		p.samples = append(p.samples[:0], p.samples[drop:]...)
-	}
 	var total uint64
 	for _, s := range p.samples {
 		total += s.n
+	}
+	// Expire samples oldest first. If the window was at the threshold and
+	// an expiry took it below, the pairing went quiet when that sample
+	// expired, not at this later evaluation.
+	var crossedAt time.Time
+	drop := 0
+	for drop < len(p.samples) && !p.samples[drop].at.After(cutoff) {
+		before := total
+		total -= p.samples[drop].n
+		if before >= t.threshold && total < t.threshold {
+			crossedAt = p.samples[drop].at.Add(t.window)
+		}
+		drop++
+	}
+	if drop > 0 {
+		p.samples = append(p.samples[:0], p.samples[drop:]...)
 	}
 	switch {
 	case total >= t.threshold:
@@ -300,8 +303,8 @@ func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {
 	case p.connected:
 		if p.quietSince.IsZero() {
 			p.quietSince = now
-			if !droppedAt.IsZero() && droppedAt.Before(now) {
-				p.quietSince = droppedAt
+			if !crossedAt.IsZero() && crossedAt.Before(now) {
+				p.quietSince = crossedAt
 			}
 		}
 		if now.Sub(p.quietSince) >= t.linger {

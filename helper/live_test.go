@@ -64,6 +64,25 @@ func TestLive_QuietFromWhenTrafficLeftTheWindow(t *testing.T) {
 	assert.Nil(t, liveOf(lt.Snapshot(), "pA"), "no linger five minutes on")
 }
 
+// The linger starts when the expiry that took the window below the threshold
+// happened, not when the last expired sample did.
+func TestLive_QuietFromTheCrossingNotTheLastExpiry(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	n.Add(LiveThreshold)
+	lt.sampleNow() // t=0
+	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
+	clk.advance(20 * time.Second)
+	n.Add(1)
+	lt.Close("c1") // t=20: one more byte, then closed
+	// The window fell below the threshold at t=60, so the linger ended at
+	// t=75.
+	clk.advance(60 * time.Second) // t=80
+	assert.Nil(t, liveOf(lt.Snapshot(), "pA"), "not connected at t=80")
+}
+
 // The sampler runs by itself while a connection is open, with no Snapshot
 // calls, and stops once none is.
 func TestLive_SamplerRunsOnlyWhileConnectionsAreOpen(t *testing.T) {
@@ -129,12 +148,13 @@ func TestLive_ThresholdWindowAndLinger(t *testing.T) {
 	clk.advance(57 * time.Second)
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected)
 
-	// Out of the window: quiet, but lingers.
-	clk.advance(3 * time.Second)
+	// Out of the window: quiet, but lingers. It went below the threshold at
+	// T+61, when the first sample expired, so the linger ends at T+76.
+	clk.advance(3 * time.Second) // T+62
 	p = liveOf(lt.Snapshot(), "pA")
 	assert.True(t, p.Connected, "lingers")
 	assert.Equal(t, start.UnixMilli(), p.Since)
-	clk.advance(LiveLinger - time.Second)
+	clk.advance(LiveLinger - 2*time.Second) // T+75
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected, "still lingering")
 	clk.advance(time.Second)
 	p = liveOf(lt.Snapshot(), "pA")
