@@ -264,9 +264,9 @@ type Client struct {
 	// pairingConfirmedAt is when a known set was last accepted. A rotation
 	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
-	// pairingByShortID maps each short ID of the newest grouped set the
-	// inbound holds to its pairing ID. Written under c.mu, read lock-free by the connection
-	// listener.
+	// pairingByShortID maps each short ID of the newest grouped set pushed
+	// to the inbound to its pairing ID. Written under c.mu, read lock-free
+	// by the connection listener.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
 	// pendingGroups are the recorded set's groups while the box does not
 	// hold that set yet. They replace pairingByShortID only once it does,
@@ -280,10 +280,9 @@ type Client struct {
 	liveMu  sync.Mutex
 	liveGen uint64
 	// conns holds this session's open connections by byte counter, so a
-	// close reports the pairing its accept was attributed to, and a grouped
-	// set that arrives later can attribute one accepted without a pairing.
-	// Emptied on close and at the session's end. Guarded by liveMu, which
-	// is taken after c.mu.
+	// close reports the pairing the connection was attributed to, at accept
+	// or by a grouped set that arrived later. Cleared at the session's begin
+	// and end. Guarded by liveMu, which is taken after c.mu.
 	conns map[*peerconn.Counter]liveConn
 	// beforeTrackLive, if set, runs in the listener just before its
 	// LiveTracker update, so tests can interleave it with Stop.
@@ -1787,8 +1786,9 @@ func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDS
 	c.mu.Unlock()
 }
 
-// commitPendingGroupsLocked makes the groups of the recorded set the short
-// ID to pairing map, once the box holds that set. Called with c.mu held.
+// commitPendingGroupsLocked makes pendingGroups the short ID to pairing
+// map and leaves the map unchanged if none are pending. The box must
+// already hold the recorded set, and c.mu must be held.
 func (c *Client) commitPendingGroupsLocked() {
 	if c.pendingGroups == nil {
 		return
