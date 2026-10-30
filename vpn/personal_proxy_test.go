@@ -364,9 +364,9 @@ func TestPersonalProxyGroupDials(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
-// A rooms consumer with no connection (rooms-only, before its friend's
-// ticket or room arrives) fails its dials; the group then carries traffic
-// over the friend's direct outbound rather than failing.
+// A rooms consumer whose dials fail at once leaves the group carrying
+// traffic over the friend's direct outbound. One whose dials wait for a peer
+// is TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer.
 func TestPersonalProxyGroupFailsOverFromADeadConsumer(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(target.Close)
