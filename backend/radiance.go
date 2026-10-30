@@ -2314,20 +2314,13 @@ func loadStoredPublicIP() string {
 	return stored
 }
 
-// storePublicIP persists ip, truncated, for future sessions and reports whether it is
+// storePublicIP persists ip for future sessions and reports whether it is
 // significantly different from stored, the value requests have carried so far.
 func storePublicIP(ip net.IP, stored string) bool {
-	if err := settings.Set(settings.PublicIPKey, truncatePublicIP(ip).String()); err != nil {
+	if err := settings.Set(settings.PublicIPKey, ip.String()); err != nil {
 		slog.Warn("Failed to store public IP", "error", err)
 	}
 	return publicIPDiffers(net.ParseIP(stored), ip)
-}
-
-func truncatePublicIP(ip net.IP) net.IP {
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4.Mask(net.CIDRMask(24, 32))
-	}
-	return ip.Mask(net.CIDRMask(32, 128))
 }
 
 // publicIPDiffers reports whether ip falls outside prev's /16 (IPv4) or /32 (IPv6), roughly the
