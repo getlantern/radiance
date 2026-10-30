@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -186,10 +187,12 @@ type Source struct {
 	// or with ErrDisabled.
 	answered bool
 	onChange func()
-	due      time.Time // zero: due at the first read
-	fetching bool
-	busy     time.Duration // the backoff after the last 429 or 503 in a row
-	gen      uint64        // bumped by Invalidate; a fetch started under an older gen is stale
+	// afterRead, if set, runs after read releases s.mu. For tests.
+	afterRead func()
+	due       time.Time // zero: due at the first read
+	fetching  bool
+	busy      time.Duration // the backoff after the last 429 or 503 in a row
+	gen       uint64        // bumped by Invalidate; a fetch started under an older gen is stale
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
@@ -207,11 +210,8 @@ func (s *Source) Inviter() []string {
 // outbound tag is tag, and whether lantern-cloud has answered a fetch yet:
 // until it has, no tickets means only that none are known.
 func (s *Source) InviterFor(tag string) (tickets []string, answered bool) {
-	all := s.Inviter()
-	s.mu.Lock()
-	pairing, ok := s.pairings[tag]
-	answered = s.answered
-	s.mu.Unlock()
+	all, pairings, answered := s.inviterSnapshot()
+	pairing, ok := pairings[tag]
 	if !ok {
 		return nil, answered
 	}
@@ -224,21 +224,31 @@ func (s *Source) InviterFor(tag string) (tickets []string, answered bool) {
 }
 
 // InviterTags returns the outbound tags of the pairings this device invited
-// that have a current inviter ticket.
+// that have a current inviter ticket, sorted.
 func (s *Source) InviterTags() []string {
-	var tags []string
-	s.mu.Lock()
-	candidates := make([]string, 0, len(s.pairings))
-	for tag := range s.pairings {
-		candidates = append(candidates, tag)
+	all, pairings, _ := s.inviterSnapshot()
+	held := make(map[string]bool, len(all))
+	for _, tk := range all {
+		_, p := helperticket.Peek(tk)
+		held[p] = true
 	}
-	s.mu.Unlock()
-	for _, tag := range candidates {
-		if tickets, _ := s.InviterFor(tag); len(tickets) > 0 {
+	var tags []string
+	for tag, pairing := range pairings {
+		if held[pairing] {
 			tags = append(tags, tag)
 		}
 	}
+	slices.Sort(tags)
 	return tags
+}
+
+// inviterSnapshot reads the current inviter tickets, starting a fetch if one
+// is due, together with the pairings and answered state they came with. The
+// map must not be modified.
+func (s *Source) inviterSnapshot() (tickets []string, pairings map[string]string, answered bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readLocked(helperticket.RoleInviter, false), s.pairings, s.answered
 }
 
 // SetOnInviterChange sets f to run after a fetch changes the inviter pairings
@@ -279,7 +289,16 @@ func (s *Source) Invalidate() {
 
 func (s *Source) read(role helperticket.Role, expired bool) []string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	out := s.readLocked(role, expired)
+	s.mu.Unlock()
+	if s.afterRead != nil {
+		s.afterRead()
+	}
+	return out
+}
+
+// readLocked is read for a caller holding s.mu.
+func (s *Source) readLocked(role helperticket.Role, expired bool) []string {
 	now := s.now()
 	if !s.fetching && !now.Before(s.due) && s.ctx.Err() == nil {
 		s.fetching = true

@@ -649,3 +649,40 @@ func TestSourceInviterFor(t *testing.T) {
 	assert.Empty(t, tickets)
 	assert.True(t, answered)
 }
+
+// A fetch that lands while InviterFor reads must not pair the tickets from
+// before it with the answer it brings: that looks like a pairing with no
+// ticket, and a selection of it would fall back.
+func TestSourceInviterForReadsOneSnapshot(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	release := make(chan struct{})
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		<-release
+		return Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: 15 * time.Minute}, nil
+	})
+	src.Inviter()
+	src.afterRead = func() {
+		// The fetch in flight lands before InviterFor reads anything else.
+		src.afterRead = nil
+		close(release)
+		settle(t, src)
+	}
+	tickets, answered := src.InviterFor(tagA)
+	assert.False(t, answered && len(tickets) == 0, "answered, with the pairing known, but no ticket")
+	if src.afterRead != nil {
+		close(release)
+	}
+	settle(t, src)
+}
+
+// InviterTags is how a status poll learns of rooms-only friends, so it must
+// start a fetch even before any pairing is known.
+func TestSourceInviterTagsFetches(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, _ := newTestSource(f)
+	f.results <- fetchResult{t: Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: 15 * time.Minute}}
+	assert.Empty(t, src.InviterTags())
+	require.Eventually(t, func() bool { return len(src.InviterTags()) == 1 }, time.Second, time.Millisecond)
+	assert.Equal(t, int32(1), f.calls.Load())
+}
