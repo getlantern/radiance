@@ -650,9 +650,10 @@ func TestSourceInviterFor(t *testing.T) {
 	assert.True(t, answered)
 }
 
-// A fetch that lands while InviterFor reads must not pair the tickets from
-// before it with the answer it brings: that looks like a pairing with no
-// ticket, and a selection of it would fall back.
+// InviterFor must read the tickets and the pairings they came with together:
+// a fetch landing between separate reads pairs the tickets from before it
+// with the answer it brings, which looks like a pairing with no ticket. This
+// guards against a regression to separate reads.
 func TestSourceInviterForReadsOneSnapshot(t *testing.T) {
 	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
 	release := make(chan struct{})
@@ -662,7 +663,8 @@ func TestSourceInviterForReadsOneSnapshot(t *testing.T) {
 	})
 	src.Inviter()
 	src.afterRead = func() {
-		// The fetch in flight lands before InviterFor reads anything else.
+		// Fires only if InviterFor reads through read: the fetch in flight
+		// then lands between its reads.
 		src.afterRead = nil
 		close(release)
 		settle(t, src)
