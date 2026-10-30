@@ -81,19 +81,19 @@ func resetTestTunnel(t *testing.T) (*tunnel, *resetRouter) {
 func TestResetNetworkForMonitor(t *testing.T) {
 	tn, router := resetTestTunnel(t)
 	client := &VPNClient{tunnel: tn}
-	client.ResetNetworkForMonitor(nil)
-	client.ResetNetworkForMonitor(&resetMonitor{})
+	require.False(t, client.ResetNetworkForMonitor(nil))
+	require.False(t, client.ResetNetworkForMonitor(&resetMonitor{}))
 	require.Zero(t, router.resets.Load())
 
-	client.ResetNetworkForMonitor(router.monitor)
+	require.True(t, client.ResetNetworkForMonitor(router.monitor))
 	require.EqualValues(t, 1, router.resets.Load())
 	client.ResetNetwork()
 	require.EqualValues(t, 2, router.resets.Load())
 
 	client.tunnel = nil
-	client.ResetNetworkForMonitor(router.monitor)
+	require.False(t, client.ResetNetworkForMonitor(router.monitor))
 	client.tunnel = &tunnel{}
-	client.ResetNetworkForMonitor(router.monitor)
+	require.False(t, client.ResetNetworkForMonitor(router.monitor))
 	require.EqualValues(t, 2, router.resets.Load())
 }
 

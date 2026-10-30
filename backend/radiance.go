@@ -1734,11 +1734,13 @@ func (r *LocalBackend) ResetNetwork() {
 	r.vpnClient.ResetNetwork()
 }
 
-// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel, and
-// forgets the detected public IP as [LocalBackend.ResetNetwork] does.
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel. A
+// reset it accepts forgets the detected public IP as [LocalBackend.ResetNetwork] does; a stale
+// listener's callback leaves it alone.
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
-	common.ForgetDetectedPublicIP()
-	r.vpnClient.ResetNetworkForMonitor(listener)
+	if r.vpnClient.ResetNetworkForMonitor(listener) {
+		common.ForgetDetectedPublicIP()
+	}
 }
 
 // Pause pauses the VPN for a device sleep.

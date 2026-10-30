@@ -313,20 +313,21 @@ func (c *VPNClient) ResetNetwork() {
 	}
 }
 
-// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
-// Nil or stale listeners are ignored.
-func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
+// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel, and
+// reports whether it did. Nil or stale listeners are ignored.
+func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if listener == nil || c.tunnel == nil || c.tunnel.boxInstance == nil {
-		return
+		return false
 	}
 	network := c.tunnel.boxInstance.Network()
 	current, ok := network.InterfaceMonitor().(libbox.InterfaceUpdateListener)
 	if !ok || current != listener {
-		return
+		return false
 	}
 	network.ResetNetwork()
+	return true
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
