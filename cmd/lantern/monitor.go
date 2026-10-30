@@ -647,7 +647,7 @@ func outboundTags(s vpn.ThroughputSnapshot) []string {
 // to the group tag in addition to the leaf, so groups must be filtered out
 // of per-outbound throughput tags to avoid phantom entries.
 func isGroupTag(tag string) bool {
-	return tag == vpn.AutoSelectTag || tag == vpn.ManualSelectTag
+	return tag == vpn.AutoSelectTag || tag == vpn.ManualSelectTag || tag == vpn.PersonalProxiesTag
 }
 
 type monitorState struct {

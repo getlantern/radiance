@@ -443,6 +443,20 @@ func (c *VPNClient) UpdateNonSelectableOutbounds(list servers.ServerList) error 
 	return c.tunnel.updateNonSelectableOutbounds(list)
 }
 
+// ReconcileHelpers makes the running tunnel's helper outbounds (lbA.IsHelperTag)
+// those in helpers: it removes the others, withdrawing the personal proxies
+// group with the last, adds the missing ones and swaps in those whose options
+// changed. A tunnel built from options captured before a pairing changed may
+// still hold the old set; this brings it up to date.
+func (c *VPNClient) ReconcileHelpers(helpers servers.ServerList) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return ErrTunnelNotConnected
+	}
+	return c.tunnel.reconcileHelpers(helpers)
+}
+
 func (c *VPNClient) RemoveOutbounds(tags []string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

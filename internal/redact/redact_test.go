@@ -75,3 +75,26 @@ func TestHelperRedactsEveryIPv6Form(t *testing.T) {
 		})
 	}
 }
+
+func TestHelperRedactsThePersonalProxiesTag(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"group logger", "outbound/mutableurltest[personal-proxies]: dial tcp 203.0.113.7:443: refused",
+			"outbound/mutableurltest[helper]: dial tcp <redacted>: refused"},
+		{"selected outbound", `selected outbound="personal-proxies"`, `selected outbound="helper"`},
+		{"urltest attribute", "urltest_group=personal-proxies", "urltest_group=helper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Helper(tc.in))
+			assert.Equal(t, []byte(tc.want), HelperBytes([]byte(tc.in)))
+		})
+	}
+	assert.True(t, NamesHelper(PersonalProxiesTag))
+}
+
+func TestTagRedactsHelperAndGroupTags(t *testing.T) {
+	assert.Equal(t, "helper", Tag(PersonalProxiesTag))
+	assert.Equal(t, "helper", Tag(tag))
+	assert.Equal(t, "final => helper", Tag("final => personal-proxies"))
+	assert.Equal(t, "lantern-1", Tag("lantern-1"))
+	assert.Equal(t, "dial 203.0.113.7", Tag("dial 203.0.113.7"), "Tag leaves addresses alone")
+}
