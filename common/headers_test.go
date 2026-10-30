@@ -31,6 +31,7 @@ func TestClientIPHeader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			SetPublicIP("") // each case starts with nothing detected
 			tt.set()
 			req, err := NewRequestWithHeaders(context.Background(), http.MethodGet, "https://example.com", nil)
 			require.NoError(t, err)

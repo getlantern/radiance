@@ -186,6 +186,7 @@ func TestStoredPublicIPOnlyForGeolocation(t *testing.T) {
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(t.TempDir()))
+	common.SetPublicIP("") // a stored IP never replaces one detected by an earlier test
 	t.Cleanup(func() { common.SetPublicIP("") })
 	require.NoError(t, settings.Set(settings.PublicIPKey, "203.0.113.0"))
 

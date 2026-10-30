@@ -1151,6 +1151,7 @@ func TestAPI_ClientIPHeader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			common.SetPublicIP("") // a stored IP never replaces a detected one
 			tt.set()
 			for path, c := range capturePeerHeaders(t) {
 				assert.Equal(t, tt.want, c.clientIP, "%s %s", path, common.ClientIPHeader)
