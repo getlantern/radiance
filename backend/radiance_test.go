@@ -2115,18 +2115,3 @@ func TestFailedRemovalStillWithdrawsTheHelper(t *testing.T) {
 	require.NoError(t, r.RemoveServers([]string{"never-existed"}))
 	assert.Len(t, tun.callLog(), before, "removing an unknown tag touches nothing")
 }
-
-// The personal proxies group leaves Unbounded helpers out (they also take pool
-// volunteers), so a device whose only helper is Unbounded is not offered it.
-func TestPersonalProxiesServerIgnoresUnboundedHelpers(t *testing.T) {
-	r := newPersonalProxiesBackend(t)
-	unbounded := directServers("helper-ba9876543210").Servers[0]
-	unbounded.Type = "unbounded"
-	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{unbounded}}, false))
-	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
-	assert.False(t, found)
-
-	addDirectServer(t, r, "helper-0123456789ab")
-	_, found = r.GetServerByTag(vpn.PersonalProxiesTag)
-	assert.True(t, found)
-}

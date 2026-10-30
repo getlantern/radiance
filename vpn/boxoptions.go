@@ -37,11 +37,10 @@ import (
 const (
 	AutoSelectTag   = "auto"
 	ManualSelectTag = "manual"
-	// PersonalProxiesTag is the url-test group over the helper outbounds
-	// (lbA.IsHelperTag) other than Unbounded ones (see personalProxyMembers).
-	// The tunnel creates it with its first member and removes it with its
-	// last, and the manual selector offers it while it exists. It is never a
-	// managed server, so it is never listed.
+	// PersonalProxiesTag is the url-test group over every helper outbound
+	// (lbA.IsHelperTag). The tunnel creates it with its first member and
+	// removes it with its last, and the manual selector offers it while it
+	// exists. It is never a managed server, so it is never listed.
 	PersonalProxiesTag = redact.PersonalProxiesTag
 
 	urlTestInterval    = 3 * time.Minute
@@ -443,14 +442,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
-	types := make(map[string]string, len(bOptions.Options.Outbounds)+len(bOptions.Options.Endpoints))
-	for _, out := range bOptions.Options.Outbounds {
-		types[out.Tag] = out.Type
-	}
-	for _, ep := range bOptions.Options.Endpoints {
-		types[ep.Tag] = ep.Type
-	}
-	helpers := personalProxyMembers(tags, func(tag string) string { return types[tag] })
+	helpers := helperTags(tags)
 	// The manual selector also offers the personal proxies group, which
 	// exists only while a helper outbound does: a url-test group must never
 	// start empty.
@@ -614,22 +606,6 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 			Outbounds: outbounds,
 		},
 	}
-}
-
-// personalProxyMembers returns the helper tags in tags that the personal
-// proxies group takes, given each tag's outbound type. An Unbounded helper is
-// left out: it joins its pairings' rooms but, like any Unbounded consumer,
-// also takes pool volunteers (a consumer has no rooms-only mode), so it can
-// carry traffic through someone other than the user's friends. Smart Location
-// still uses it.
-func personalProxyMembers(tags []string, typeOf func(tag string) string) []string {
-	var out []string
-	for _, tag := range helperTags(tags) {
-		if typeOf(tag) != lbC.TypeUnbounded {
-			out = append(out, tag)
-		}
-	}
-	return out
 }
 
 // helperTags returns the tags in tags that are helper outbounds.

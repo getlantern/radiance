@@ -611,12 +611,7 @@ func (t *tunnel) syncPersonalProxiesLocked() error {
 	if !ok {
 		return errors.New("manual select group not found")
 	}
-	helpers := personalProxyMembers(selector.All(), func(tag string) string {
-		if out := t.liveOutbound(tag); out != nil {
-			return out.Type()
-		}
-		return ""
-	})
+	helpers := helperTags(selector.All())
 	group := t.personalProxiesGroup()
 	switch {
 	case len(helpers) == 0 && group == nil:
