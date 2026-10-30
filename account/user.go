@@ -256,17 +256,50 @@ func readSalt(path string) ([]byte, error) {
 
 // Login logs the user in.
 func (a *Client) Login(ctx context.Context, email, password string) (*UserData, error) {
-	a.setSalt(nil)
+	return a.login(ctx, email, password, 0)
+}
+
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (a *Client) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*UserData, error) {
+	if expectedLegacyID <= 0 {
+		return nil, errors.New("expected account ID must be positive")
+	}
+	return a.login(ctx, email, password, expectedLegacyID)
+}
+
+type loginIdentity struct {
+	userID   int64
+	token    string
+	deviceID string
+}
+
+func currentLoginIdentity() loginIdentity {
+	return loginIdentity{
+		userID:   settings.GetInt64(settings.UserIDKey),
+		token:    settings.GetString(settings.TokenKey),
+		deviceID: settings.GetString(settings.DeviceIDKey),
+	}
+}
+
+func (a *Client) login(ctx context.Context, email, password string, expectedLegacyID int64) (*UserData, error) {
 	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
 	defer span.End()
 
+	a.mu.RLock()
+	identity := currentLoginIdentity()
+	a.mu.RUnlock()
+	if expectedLegacyID != 0 && identity.userID != expectedLegacyID {
+		return nil, errors.New("active account does not match expected account")
+	}
+
 	lowerCaseEmail := strings.ToLower(email)
-	salt, err := a.getSalt(ctx, lowerCaseEmail)
+	saltResponse, err := a.fetchSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
+	salt := saltResponse.Salt
 
-	deviceID := settings.GetString(settings.DeviceIDKey)
+	deviceID := identity.deviceID
 	proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
 	if err != nil {
 		return nil, err
@@ -286,18 +319,27 @@ func (a *Client) Login(ctx context.Context, email, password string) (*UserData, 
 	if err := proto.Unmarshal(resp, &loginResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling login response: %w", err))
 	}
+	if expectedLegacyID != 0 && loginResp.LegacyID != expectedLegacyID {
+		return nil, errors.New("authenticated account does not match expected account")
+	}
+	if expectedLegacyID != 0 && (!loginResp.Success || loginResp.LegacyUserData == nil) {
+		return nil, errors.New("account login did not complete")
+	}
 	//this can be nil if the user has reached the device limit
 	if loginResp.LegacyUserData != nil {
 		loginResp.LegacyUserData.DeviceID = deviceID
 	}
 
-	// regardless of state we need to save login information
-	// We have device flow limit on login
-	a.setData(&loginResp)
-	a.setSalt(salt)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if currentLoginIdentity() != identity {
+		return nil, errors.New("account changed during login")
+	}
 	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)
 	}
+	a.setDataLocked(&loginResp, false)
+	a.salt = salt
 	settings.Set(settings.OAuthLoginKey, false)
 	settings.Set(settings.OAuthProviderKey, "")
 	return &loginResp, nil

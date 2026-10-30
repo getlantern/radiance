@@ -305,6 +305,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Account
 	mux.HandleFunc("POST "+accountNewUserEndpoint, traced(s.accountNewUserHandler))
 	mux.HandleFunc("POST "+accountLoginEndpoint, traced(s.accountLoginHandler))
+	mux.HandleFunc("POST "+accountLoginEndpoint+"/current", traced(s.accountLoginHandler))
 	mux.HandleFunc("POST "+accountLogoutEndpoint, traced(s.accountLogoutHandler))
 	mux.HandleFunc("GET "+accountUserDataEndpoint, traced(s.accountUserDataHandler))
 	mux.HandleFunc(accountDevicesEndpoint+"{deviceID...}", traced(s.accountDevicesHandler))
@@ -1128,12 +1129,18 @@ func (s *localapi) accountNewUserHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *localapi) accountLoginHandler(w http.ResponseWriter, r *http.Request) {
-	var req EmailPasswordRequest
+	var req LoginRequest
 	if err := decodeJSON(r, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	userData, err := s.backend(r.Context()).Login(r.Context(), req.Email, req.Password)
+	var userData *account.UserData
+	var err error
+	if r.URL.Path == accountLoginEndpoint+"/current" {
+		userData, err = s.backend(r.Context()).LoginForAccount(r.Context(), req.Email, req.Password, req.ExpectedLegacyID)
+	} else {
+		userData, err = s.backend(r.Context()).Login(r.Context(), req.Email, req.Password)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return

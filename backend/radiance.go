@@ -1835,6 +1835,11 @@ func (r *LocalBackend) Login(ctx context.Context, email, password string) (*acco
 	return r.accountClient.Login(ctx, email, password)
 }
 
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (r *LocalBackend) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	return r.accountClient.LoginForAccount(ctx, email, password, expectedLegacyID)
+}
+
 func (r *LocalBackend) Logout(ctx context.Context, email string) (*account.UserData, error) {
 	return r.accountClient.Logout(ctx, email)
 }
