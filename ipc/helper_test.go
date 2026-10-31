@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +20,9 @@ import (
 	semconv "github.com/getlantern/semconv"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
+	"github.com/getlantern/radiance/vpn"
 )
 
 func serveHelper(t *testing.T, api *localapi, method, path string, body any) *httptest.ResponseRecorder {
@@ -178,4 +182,38 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	route, ok := routeOf(http.MethodGet, "/not-a-route")
 	assert.True(t, ok)
 	assert.Equal(t, "/not-a-route", route)
+}
+
+func TestSelectionEventsStream(t *testing.T) {
+	srv := httptest.NewServer(newLocalAPI(&backend.LocalBackend{}, false))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	// The handler subscribes after its headers, and they reach the client
+	// only with the first event, so emit until one lands.
+	go func() {
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				events.Emit(vpn.SelectionSavedEvent{Revision: 7})
+			}
+		}
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+serverSelectionEventsEndpoint, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	require.NoError(t, err)
+	data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
+	require.True(t, ok, line)
+	var evt vpn.SelectionSavedEvent
+	require.NoError(t, json.Unmarshal([]byte(data), &evt))
+	assert.Equal(t, uint64(7), evt.Revision)
 }
