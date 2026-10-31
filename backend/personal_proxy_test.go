@@ -462,3 +462,33 @@ func TestTicketReconcileStopsAtClose(t *testing.T) {
 		}
 	})
 }
+
+// A rooms-only friend whose last ticket goes while the tunnel switches to it
+// is still saved as the selection the tunnel made; the reconcile the ticket
+// change runs then falls back from it.
+func TestSelectServerSavesTheFriendItSwitchedTo(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	list := directServers("lantern-1")
+	list.Servers = append(list.Servers, consumerServers().Servers...)
+	require.NoError(t, r.updateServers(list, true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	f := &fakeTickets{}
+	f.issue(t, map[string]string{ppFriendA: ppPairingA})
+	r.helperTickets = helper.NewSource(r.ctx, f.fetch)
+	require.Eventually(t, func() bool { tk, _ := r.helperTickets.InviterFor(ppFriendA); return len(tk) > 0 },
+		2*time.Second, 5*time.Millisecond)
+
+	tun.onSelect = func() {
+		tun.onSelect = nil
+		f.issue(t, nil)
+		r.helperTickets.Invalidate()
+		require.Eventually(t, func() bool { tk, _ := r.helperTickets.InviterFor(ppFriendA); return len(tk) == 0 },
+			2*time.Second, 5*time.Millisecond)
+	}
+	sel := vpn.PersonalProxySelection(ppFriendA)
+	require.NoError(t, r.SelectServer(sel))
+	assert.Equal(t, sel, selectedTag(t), "the switch was made but not saved")
+}

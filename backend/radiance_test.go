@@ -1829,12 +1829,13 @@ func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
 // the real update does when its guards keep old outbounds; ReconcileHelpers
 // does what the real one does. calls records each call in order.
 type fakeHelperTunnel struct {
-	mu      sync.Mutex
-	live    map[string]string
-	removed [][]string
-	calls   []string
-	fail    bool
-	gate    func() // if set, runs before each reconciliation
+	mu       sync.Mutex
+	live     map[string]string
+	removed  [][]string
+	calls    []string
+	fail     bool
+	gate     func() // if set, runs before each reconciliation
+	onSelect func() // if set, runs as each selection is applied
 }
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
@@ -1877,6 +1878,9 @@ func (f *fakeHelperTunnel) RemoveOutbounds(tags []string) error {
 }
 
 func (f *fakeHelperTunnel) SelectServer(tag string) error {
+	if f.onSelect != nil {
+		f.onSelect()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "select:"+tag)

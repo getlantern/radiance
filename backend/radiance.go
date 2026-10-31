@@ -1770,20 +1770,29 @@ func (r *LocalBackend) SelectServer(tag string) error {
 		r.selectionMu.Unlock()
 		return fmt.Errorf("failed to select server: %w", vpn.ErrPersonalProxyUnavailable)
 	}
+	// Saved as resolved here: a friend's ticket can lapse while the tunnel
+	// switches, and the switch still has to be saved.
+	var server *servers.Server
 	if tag != vpn.AutoSelectTag {
-		if _, found := r.serverByTag(tag); !found {
+		srv, found := r.serverByTag(tag)
+		if !found {
 			r.selectionMu.Unlock()
 			if tag == vpn.PersonalProxiesTag {
 				return fmt.Errorf("failed to select server: %w", vpn.ErrPersonalProxiesUnavailable)
 			}
 			return fmt.Errorf("failed to select server: no server found with tag %s", tag)
 		}
+		server = srv
 	}
 	if err := r.liveTunnel().SelectServer(tag); err != nil {
 		r.selectionMu.Unlock()
 		return fmt.Errorf("failed to select server: %w", err)
 	}
-	r.persistSelection(tag)
+	if server == nil {
+		r.persistSelection(vpn.AutoSelectTag)
+	} else {
+		r.persistServer(server)
+	}
 	r.selectionMu.Unlock()
 	if r.vpnClient.Status() == vpn.Connected {
 		if sel, _, err := r.SelectedServer(); err == nil && sel != nil {
@@ -1812,6 +1821,12 @@ func (r *LocalBackend) persistSelection(tag string) {
 		slog.Warn("no server found for tag, skipping settings persistence", "tag", tag)
 		return
 	}
+	r.persistServer(server)
+}
+
+// persistServer records server, which the caller resolved, as the user's
+// server choice in settings.
+func (r *LocalBackend) persistServer(server *servers.Server) {
 	server.Options = nil
 	if err := settings.Patch(settings.Settings{
 		settings.AutoConnectKey:    false,
@@ -1821,7 +1836,7 @@ func (r *LocalBackend) persistSelection(tag string) {
 		return
 	}
 	emitSelectionSaved()
-	slog.Info("Selected server", "tag", tag, "type", server.Type)
+	slog.Info("Selected server", "tag", server.Tag, "type", server.Type)
 }
 
 // emitSelectionSaved announces a save of the selection that just completed.
