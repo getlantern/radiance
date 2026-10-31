@@ -249,9 +249,10 @@ func (t *tunnel) offerPersonalProxyLocked(selector lbA.MutableOutboundGroup, mem
 	return nil
 }
 
-// restorePersonalProxyLocked puts the narrowing, group, manual choice and mode
-// back to prev, prevSelected and prevMode after a failed
-// selectPersonalProxyLocked, best effort. The caller must hold t.outboundMu.
+// restorePersonalProxyLocked puts the narrowing, manual choice and mode back
+// to prev, prevSelected and prevMode after a failed selectPersonalProxyLocked,
+// and the group back to prev's or away if prev has no member, best effort.
+// The caller must hold t.outboundMu.
 func (t *tunnel) restorePersonalProxyLocked(selector lbA.MutableOutboundGroup, changed bool, prev *string,
 	prevMode, prevSelected string) error {
 	var errs []error

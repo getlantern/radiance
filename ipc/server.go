@@ -54,6 +54,7 @@ const (
 	serverAutoSelectedEndpoint       = "/server/auto-selected"
 	serverAutoSelectedEventsEndpoint = "/server/auto-selected/events"
 	serverURLTestEventsEndpoint      = "/server/url-test/events"
+	serverSelectionEventsEndpoint    = "/server/selection/events"
 
 	// Config endpoints
 	configEventsEndpoint = "/config/events"
@@ -257,6 +258,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
 	mux.HandleFunc("GET "+serverURLTestEventsEndpoint, s.serverURLTestEventsHandler)
+	mux.HandleFunc("GET "+serverSelectionEventsEndpoint, s.serverSelectionEventsHandler)
 	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
 	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
 
@@ -761,6 +763,34 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 		select {
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *localapi) serverSelectionEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan []byte, 16)
+	sub := events.Subscribe(func(evt vpn.SelectionSavedEvent) {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		select {
+		case ch <- data:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case data := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

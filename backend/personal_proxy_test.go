@@ -337,3 +337,85 @@ func TestConnectRefusesANewFriendWithoutAMember(t *testing.T) {
 	require.ErrorIs(t, r.ConnectVPN(t.Context(), fresh), vpn.ErrPersonalProxyUnavailable)
 	assert.NoError(t, r.checkConnectSelection(persisted), "the persisted friend is restored")
 }
+
+// selectionSaves records, for each SelectionSavedEvent, the selection a
+// settings read saw when the event was handled.
+func selectionSaves(t *testing.T) <-chan string {
+	ch := make(chan string, 16)
+	sub := events.Subscribe(func(vpn.SelectionSavedEvent) {
+		if settings.GetBool(settings.AutoConnectKey) {
+			ch <- vpn.AutoSelectTag
+			return
+		}
+		var sel servers.Server
+		_ = settings.GetStruct(settings.SelectedServerKey, &sel)
+		ch <- sel.Tag
+	})
+	t.Cleanup(sub.Unsubscribe)
+	return ch
+}
+
+func requireSaved(t *testing.T, saves <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-saves:
+		assert.Equal(t, want, got, "the event follows the save")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no selection saved event")
+	}
+}
+
+func requireNoSave(t *testing.T, saves <-chan string) {
+	t.Helper()
+	select {
+	case got := <-saves:
+		t.Fatalf("selection saved event for %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// Every path that saves the selection announces it once the save is
+// readable: a select, a connect, a fallback and a settings patch.
+func TestSelectionSavedEvents(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1", "lantern-2", ppFriendA), true))
+	saves := selectionSaves(t)
+
+	require.NoError(t, r.SelectServer("lantern-1"))
+	requireSaved(t, saves, "lantern-1")
+
+	r.persistConnectedSelection("lantern-2")
+	requireSaved(t, saves, "lantern-2")
+
+	r.persistSelection(vpn.PersonalProxySelection(ppFriendA))
+	requireSaved(t, saves, vpn.PersonalProxySelection(ppFriendA))
+	require.NoError(t, r.updateServers(directServers("lantern-1", "lantern-2"), true))
+	requireSaved(t, saves, vpn.AutoSelectTag)
+
+	require.NoError(t, r.SelectServer("lantern-1"))
+	requireSaved(t, saves, "lantern-1")
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.AutoConnectKey: true}))
+	requireSaved(t, saves, vpn.AutoSelectTag)
+}
+
+// A selection that is refused, or whose save fails, announces nothing.
+func TestSelectionSavedEventsOnlyAfterASave(t *testing.T) {
+	dataDir := t.TempDir()
+	r := newPersonalProxiesBackendIn(t, dataDir)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	saves := selectionSaves(t)
+
+	require.Error(t, r.SelectServer("lantern-unknown"))
+	requireNoSave(t, saves)
+
+	require.NoError(t, os.Chmod(dataDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
+	r.persistSelection("lantern-1")
+	requireNoSave(t, saves)
+}

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"time"
 
@@ -796,6 +797,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if patchErr != nil {
 		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
 	}
+	_, autoChanged := diff[settings.AutoConnectKey]
+	if _, selectedChanged := diff[settings.SelectedServerKey]; autoChanged || selectedChanged {
+		emitSelectionSaved()
+	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()
 	}
@@ -1342,6 +1347,11 @@ func (r *LocalBackend) clearSelectedIfMissing() {
 // clearSelectedIfMissingLocked is clearSelectedIfMissing for a caller holding
 // r.selectionMu.
 func (r *LocalBackend) clearSelectedIfMissingLocked() {
+	// Auto-select has no server to go missing, and saving it again would
+	// announce a selection that did not change.
+	if settings.GetBool(settings.AutoConnectKey) {
+		return
+	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return
@@ -1762,7 +1772,7 @@ func (r *LocalBackend) SelectServer(tag string) error {
 			return fmt.Errorf("failed to select server: no server found with tag %s", tag)
 		}
 	}
-	if err := r.vpnClient.SelectServer(tag); err != nil {
+	if err := r.liveTunnel().SelectServer(tag); err != nil {
 		r.selectionMu.Unlock()
 		return fmt.Errorf("failed to select server: %w", err)
 	}
@@ -1785,7 +1795,9 @@ func (r *LocalBackend) persistSelection(tag string) {
 			settings.SelectedServerKey: nil,
 		}); err != nil {
 			slog.Warn("failed to update settings", "error", err)
+			return
 		}
+		emitSelectionSaved()
 		return
 	}
 	server, found := r.serverByTag(tag)
@@ -1801,7 +1813,15 @@ func (r *LocalBackend) persistSelection(tag string) {
 		slog.Warn("Failed to save selected server in settings", "error", err)
 		return
 	}
+	emitSelectionSaved()
 	slog.Info("Selected server", "tag", tag, "type", server.Type)
+}
+
+var selectionRevision atomic.Uint64
+
+// emitSelectionSaved announces a save of the selection that just completed.
+func emitSelectionSaved() {
+	events.Emit(vpn.SelectionSavedEvent{Revision: selectionRevision.Add(1)})
 }
 
 // VPNConnections returns a list of the active connections. If there are no connections and the

@@ -588,8 +588,8 @@ func TestPersonalProxyFailedSwitchRestoresThePreviousSelection(t *testing.T) {
 }
 
 // A failed first friend selection leaves the tunnel as it was: no narrowing,
-// no group, the previous mode and manual choice, and the flows matched to
-// that mode still open.
+// no group, the previous mode and manual choice, and, from auto, the flows
+// matched to auto still open.
 func TestPersonalProxyFailedFirstSelectionRestoresTheTunnel(t *testing.T) {
 	for _, mode := range []string{AutoSelectTag, ManualSelectTag} {
 		for _, step := range []string{"select", "mode"} {
