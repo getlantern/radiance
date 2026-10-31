@@ -393,6 +393,11 @@ func (r *LocalBackend) Start() {
 	if r.helperTickets != nil {
 		unbounded.SetTicketSource(r.helperTickets)
 	}
+	// The widget reports the tunnel's state with its STUN preflights, so
+	// freddie can tell whether STUN failures follow the VPN.
+	if r.vpnClient != nil {
+		unbounded.SetVPNStatus(func() string { return string(r.vpnClient.Status()) })
+	}
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {

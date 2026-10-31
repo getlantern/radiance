@@ -181,6 +181,10 @@ type unboundedManager struct {
 	// pairings. nil: the widget joins no rooms.
 	tickets roomTickets
 
+	// vpnStatus reports the VPN tunnel's state, which the widget sends
+	// freddie with its STUN preflights. nil: it reports none.
+	vpnStatus func() string
+
 	// runningCfg is the snapshot of UnboundedConfig the live worker
 	// was started with. broflake consumes its discovery/egress
 	// options once in clientcore.NewBroflake, so a server-side config
@@ -296,6 +300,16 @@ func SetTicketSource(src roomTickets) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.tickets = src
+}
+
+// SetVPNStatus sets where the widget reads the VPN tunnel's state, which it
+// reports to freddie with its STUN preflights, so freddie can tell whether
+// STUN failures follow the tunnel. A widget already running keeps its source
+// until it restarts.
+func SetVPNStatus(status func() string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.vpnStatus = status
 }
 
 // roomSyncInterval is how often a running widget re-reads its tickets and the
@@ -725,6 +739,7 @@ func (m *unboundedManager) startLocked() {
 	}
 	ucfg := m.lastCfg
 	tickets := m.tickets
+	vpnStatus := m.vpnStatus
 	syncInterval := roomSyncInterval
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -806,6 +821,7 @@ func (m *unboundedManager) startLocked() {
 		// redirect replay it to another origin.
 		rtcOpt.HTTPClient = sameOriginRedirects(rtcOpt.HTTPClient)
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
+		rtcOpt.VPNStatus = vpnStatus
 		if ucfg != nil {
 			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {
