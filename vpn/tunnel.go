@@ -96,8 +96,8 @@ type tunnel struct {
 	// narrowed to, while the personal proxy group exists. Written under
 	// outboundMu; read lock-free on the signaling path.
 	personalProxy atomic.Pointer[string]
-	// personalProxyFault, if set, can fail selectPersonalProxyLocked before a
-	// named step. For tests.
+	// personalProxyFault, if set, can fail a personal proxy group step by
+	// name. For tests.
 	personalProxyFault func(step string) error
 
 	// outboundMu serializes the outbound mutators.

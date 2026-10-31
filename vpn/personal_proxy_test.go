@@ -577,6 +577,7 @@ func TestPersonalProxyFailedSwitchRestoresThePreviousSelection(t *testing.T) {
 			requireEcho(t, viaA)
 			require.NoError(t, tun.reconcileHelpers(list))
 			assertSelected()
+			requireEcho(t, viaA)
 
 			tun.personalProxyFault = nil
 			require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
@@ -587,30 +588,73 @@ func TestPersonalProxyFailedSwitchRestoresThePreviousSelection(t *testing.T) {
 }
 
 // A failed first friend selection leaves the tunnel as it was: no narrowing,
-// no group, and the previous mode and manual choice.
+// no group, the previous mode and manual choice, and the flows matched to
+// that mode still open.
 func TestPersonalProxyFailedFirstSelectionRestoresTheTunnel(t *testing.T) {
 	for _, mode := range []string{AutoSelectTag, ManualSelectTag} {
-		t.Run(mode, func(t *testing.T) {
-			tun, _ := startPersonalProxyTestTunnel(t, friendA)
-			if mode == ManualSelectTag {
-				require.NoError(t, tun.selectOutbound("lantern-1"))
-			}
-			before := selectedInManual(t, tun)
-			tun.personalProxyFault = func(s string) error {
-				if s == "select" {
-					return errors.New("injected")
+		for _, step := range []string{"select", "mode"} {
+			t.Run(mode+"/"+step, func(t *testing.T) {
+				standInRoomsConsumer(t)
+				tun, dial := startRoutedPersonalProxyTestTunnel(t)
+				tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
+				require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(friendA)}}))
+				if mode == ManualSelectTag {
+					require.NoError(t, tun.selectOutbound("lantern-1"))
 				}
-				return nil
-			}
-			require.Error(t, tun.selectOutbound(PersonalProxySelection(friendA)))
-			assert.Empty(t, tun.selectedFriend())
-			assert.Len(t, tun.roomTickets(), 1, "every ticket")
-			assert.Nil(t, tun.personalProxyGroup())
-			assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
-			assert.Equal(t, before, selectedInManual(t, tun))
-			assert.Equal(t, mode, tun.clashServer.selectedMode())
-		})
+				flow := dial()
+				before := selectedInManual(t, tun)
+				tun.personalProxyFault = func(s string) error {
+					if s == step {
+						return errors.New("injected")
+					}
+					return nil
+				}
+				require.Error(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+				assert.Empty(t, tun.selectedFriend())
+				assert.Nil(t, tun.personalProxyGroup())
+				assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
+				assert.Equal(t, before, selectedInManual(t, tun))
+				assert.Equal(t, mode, tun.clashServer.selectedMode())
+				if mode == AutoSelectTag {
+					requireEcho(t, flow)
+				}
+			})
+		}
 	}
+}
+
+// A restore whose previous friend has lost every member removes the group
+// rather than leave the new friend's offered.
+func TestPersonalProxyRestoreRemovesTheGroupWhenThePreviousFriendHasNoMember(t *testing.T) {
+	tun, tickets := startPersonalProxyTestTunnel(t, friendB)
+	tickets.set(friendA, "ticket-"+friendA)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	require.Equal(t, []string{consumer}, personalProxyMembers(tun))
+	tickets.set(friendA)
+	tun.personalProxyFault = func(s string) error {
+		if s == "select" {
+			return errors.New("injected")
+		}
+		return nil
+	}
+	require.Error(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	assert.Nil(t, tun.personalProxyGroup())
+	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
+}
+
+// A group the selector still holds is never closed under it.
+func TestPersonalProxyGroupKeptWhileTheSelectorHoldsIt(t *testing.T) {
+	tun, _ := startPersonalProxyTestTunnel(t, friendA)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	tun.personalProxyFault = func(s string) error {
+		if s == "remove" {
+			return errors.New("injected")
+		}
+		return nil
+	}
+	require.Error(t, tun.selectOutbound("lantern-1"))
+	require.Contains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
+	assert.NotNil(t, tun.personalProxyGroup(), "the selector holds a group the outbound manager closed")
 }
 
 // connectProxy serves HTTP CONNECT, standing in for a rooms consumer that

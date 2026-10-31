@@ -149,8 +149,8 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 // tunnel friend's group and selects it. A change of friend restarts the rooms
 // consumers, whose slots to other friends would otherwise outlive the
 // narrowing, and closes every connection through the previous friend's group.
-// On any failure the selection is refused and the previous one restored. The
-// caller must hold t.outboundMu.
+// On any failure but errLibboxClosed the selection is refused and the previous
+// one restored. The caller must hold t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if t.mutGrpMgr == nil || t.outboundMgr == nil || t.clashServer == nil {
 		return errors.New("tunnel not running")
@@ -200,19 +200,18 @@ func (t *tunnel) installPersonalProxyLocked(selector lbA.MutableOutboundGroup, m
 	if err := t.offerPersonalProxyLocked(selector, members, t.personalProxyFault); err != nil {
 		return err
 	}
-	if err := faultAt(t.personalProxyFault, "mode"); err != nil {
-		return err
-	}
-	if err := t.selectMode(ManualSelectTag); err != nil {
-		return err
-	}
 	if err := faultAt(t.personalProxyFault, "select"); err != nil {
 		return err
 	}
 	if !selector.(Selector).SelectOutbound(PersonalProxyTag) {
 		return ErrPersonalProxyUnavailable
 	}
-	return nil
+	if err := faultAt(t.personalProxyFault, "mode"); err != nil {
+		return err
+	}
+	// Last: leaving a mode closes the flows matched to it, which a restore
+	// cannot reopen.
+	return t.selectMode(ManualSelectTag)
 }
 
 func faultAt(fault func(step string) error, step string) error {
@@ -250,11 +249,9 @@ func (t *tunnel) offerPersonalProxyLocked(selector lbA.MutableOutboundGroup, mem
 	return nil
 }
 
-// restorePersonalProxyLocked undoes a failed selectPersonalProxyLocked: the
-// narrowing, if changed, goes back to prev with the consumers restarted under
-// it, the group back to prev's or away, and the manual choice and mode back
-// to prevSelected and prevMode. Best effort. The caller must hold
-// t.outboundMu.
+// restorePersonalProxyLocked puts the narrowing, group, manual choice and mode
+// back to prev, prevSelected and prevMode after a failed
+// selectPersonalProxyLocked, best effort. The caller must hold t.outboundMu.
 func (t *tunnel) restorePersonalProxyLocked(selector lbA.MutableOutboundGroup, changed bool, prev *string,
 	prevMode, prevSelected string) error {
 	var errs []error
@@ -262,10 +259,12 @@ func (t *tunnel) restorePersonalProxyLocked(selector lbA.MutableOutboundGroup, c
 		t.personalProxy.Store(prev)
 		errs = append(errs, t.restartRoomsConsumersLocked(selector))
 	}
+	var members []string
 	if friend := t.selectedFriend(); friend != "" {
-		if members := t.personalProxyMembersLocked(selector, friend); len(members) > 0 {
-			errs = append(errs, t.offerPersonalProxyLocked(selector, members, nil))
-		}
+		members = t.personalProxyMembersLocked(selector, friend)
+	}
+	if len(members) > 0 {
+		errs = append(errs, t.offerPersonalProxyLocked(selector, members, nil))
 	} else {
 		errs = append(errs, t.removePersonalProxyGroupLocked(selector))
 	}
@@ -280,18 +279,21 @@ func (t *tunnel) restorePersonalProxyLocked(selector lbA.MutableOutboundGroup, c
 // the outbound manager, so the selector never holds a closed group. The
 // caller must hold t.outboundMu.
 func (t *tunnel) removePersonalProxyGroupLocked(selector lbA.MutableOutboundGroup) error {
-	var errs []error
 	if slices.Contains(selector.All(), PersonalProxyTag) {
-		if _, err := selector.Remove(PersonalProxyTag); err != nil {
-			errs = append(errs, err)
+		err := faultAt(t.personalProxyFault, "remove")
+		if err == nil {
+			_, err = selector.Remove(PersonalProxyTag)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if t.personalProxyGroup() != nil {
 		if err := t.outboundMgr.Remove(PersonalProxyTag); err != nil {
-			errs = append(errs, fmt.Errorf("remove personal proxy group: %w", err))
+			return fmt.Errorf("remove personal proxy group: %w", err)
 		}
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // createPersonalProxyLocked creates the group over members, which must not be
