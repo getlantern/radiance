@@ -94,6 +94,7 @@ const (
 	// Helper invites
 	helperRelayEndpoint                 = "/helper/relay"
 	helperActivityEndpoint              = "/helper/activity"
+	helperLiveEndpoint                  = "/helper/live"
 	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
 	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
 
@@ -302,6 +303,8 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.
 	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
+	// Not traced either, for the same reason.
+	mux.HandleFunc("GET "+helperLiveEndpoint, s.helperLiveHandler)
 	// Not traced either: a traced poll or stream would mark the device as an
 	// inviter in exported telemetry.
 	mux.HandleFunc("GET "+helperPersonalProxiesEndpoint, s.helperPersonalProxiesHandler)
@@ -1632,6 +1635,10 @@ func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperActivity())
+}
+
+func (s *localapi) helperLiveHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperLive())
 }
 
 func (s *localapi) helperPersonalProxiesHandler(w http.ResponseWriter, r *http.Request) {

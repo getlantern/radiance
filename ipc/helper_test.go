@@ -141,6 +141,43 @@ func TestPersonalProxyStatusClientRoundTrip(t *testing.T) {
 	assert.Empty(t, statuses)
 }
 
+func TestHelperLiveClientRoundTrip(t *testing.T) {
+	helper.DefaultLive.Reset()
+	t.Cleanup(helper.DefaultLive.Reset)
+	c := newClient()
+	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
+
+	s, err := c.HelperLive(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, s.Pairings)
+
+	helper.DefaultLive.Open("test", "k", "pairing-1", nil)
+	helper.DefaultLive.Add("pairing-1", helper.LiveThreshold)
+	s, err = c.HelperLive(context.Background())
+	require.NoError(t, err)
+	require.Len(t, s.Pairings, 1)
+	assert.Equal(t, "pairing-1", s.Pairings[0].PairingID)
+	assert.True(t, s.Pairings[0].Connected)
+	assert.NotZero(t, s.Pairings[0].Since)
+
+	w := serveHelper(t, newLocalAPI(&backend.LocalBackend{}, false), http.MethodGet, helperLiveEndpoint, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var raw struct {
+		Pairings []map[string]any `json:"pairings"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Len(t, raw.Pairings, 1)
+	assert.ElementsMatch(t, []string{"pairing_id", "connected", "since"}, mapKeys(raw.Pairings[0]))
+}
+
+func mapKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // A body that is not JSON is refused before marshalling, with fixed text
 // rather than an encoder error that could quote it.
 func TestHelperRelayClientRefusesANonJSONBody(t *testing.T) {
@@ -179,6 +216,8 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	assert.False(t, ok, "activity")
 	_, ok = routeOf(http.MethodGet, helperPersonalProxiesEndpoint)
 	assert.False(t, ok, "personal proxies")
+	_, ok = routeOf(http.MethodGet, helperLiveEndpoint)
+	assert.False(t, ok, "live")
 	route, ok := routeOf(http.MethodGet, "/not-a-route")
 	assert.True(t, ok)
 	assert.Equal(t, "/not-a-route", route)
