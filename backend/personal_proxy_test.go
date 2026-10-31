@@ -516,6 +516,41 @@ func TestRestartKeepsTheSavedSelection(t *testing.T) {
 	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
 }
 
+// A server added and selected while a restart captures its options must not
+// become the initial selection of options that lack it.
+func TestRestartOptionsPairTheSelectionWithItsOutbounds(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	done := make(chan error, 1)
+	r.beforeRestartSelection = func() {
+		r.beforeRestartSelection = nil
+		go func() {
+			if err := r.updateServers(directServers("lantern-1", "lantern-2"), true); err != nil {
+				done <- err
+				return
+			}
+			done <- r.SelectServer("lantern-2")
+		}()
+		select {
+		case err := <-done:
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	bOptions := r.restartBoxOptions()
+	tags := make([]string, 0, len(bOptions.Options.Outbounds))
+	for _, out := range bOptions.Options.Outbounds {
+		tags = append(tags, out.Tag)
+	}
+	assert.Contains(t, tags, bOptions.InitialServer)
+	require.NoError(t, <-done)
+	assert.Equal(t, "lantern-2", selectedTag(t))
+}
+
 // A selection saved after a restart captured the previous one, but before it
 // rebuilt the tunnel, must still be the one the rebuilt tunnel carries.
 func TestRestartAppliesASelectionSavedDuringIt(t *testing.T) {

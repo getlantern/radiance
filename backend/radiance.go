@@ -73,8 +73,12 @@ type LocalBackend struct {
 	// beforeManagerRemove, if set, runs in RemoveServers just before the
 	// manager removes the servers, for tests of a concurrent add.
 	beforeManagerRemove func()
-	splitTunnelMgr      *vpn.SplitTunnel
-	sessionHistory      *vpn.SessionHistory
+	// beforeRestartSelection, if set, runs in restartBoxOptions between
+	// capturing the outbounds and the saved selection, for tests of a
+	// concurrent selection.
+	beforeRestartSelection func()
+	splitTunnelMgr         *vpn.SplitTunnel
+	sessionHistory         *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
@@ -1758,8 +1762,16 @@ func (r *LocalBackend) RestartVPN() error {
 	return nil
 }
 
+// restartBoxOptions captures the outbounds and the saved selection under
+// r.selectionMu, so a config update cannot pair a selection with outbounds
+// that lack it.
 func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
 	bOptions := r.getBoxOptions()
+	if r.beforeRestartSelection != nil {
+		r.beforeRestartSelection()
+	}
 	bOptions.InitialServer = r.savedSelectionTag()
 	return bOptions
 }
