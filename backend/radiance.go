@@ -1739,8 +1739,22 @@ func (r *LocalBackend) DisconnectVPN() error {
 }
 
 func (r *LocalBackend) RestartVPN() error {
+	return r.vpnClient.Restart(r.restartBoxOptions())
+}
+
+// restartBoxOptions is getBoxOptions starting on the saved selection, or on
+// auto-select when none is saved or the manager no longer holds it.
+func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
 	bOptions := r.getBoxOptions()
-	return r.vpnClient.Restart(bOptions)
+	bOptions.InitialServer = vpn.AutoSelectTag
+	var saved servers.Server
+	if !settings.GetBool(settings.AutoConnectKey) &&
+		settings.GetStruct(settings.SelectedServerKey, &saved) == nil && saved.Tag != "" {
+		if _, found := r.serverByTag(saved.Tag); found {
+			bOptions.InitialServer = saved.Tag
+		}
+	}
+	return bOptions
 }
 
 // ResetNetwork drops the VPN's connections and re-seeds its interface state.

@@ -492,3 +492,23 @@ func TestSelectServerSavesTheFriendItSwitchedTo(t *testing.T) {
 	require.NoError(t, r.SelectServer(sel))
 	assert.Equal(t, sel, selectedTag(t), "the switch was made but not saved")
 }
+
+// A restart rebuilds the tunnel on the saved selection, a friend's included,
+// rather than in auto-select; a saved server the manager no longer holds
+// restarts in auto-select.
+func TestRestartKeepsTheSavedSelection(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1", ppFriendA), false))
+	sel := vpn.PersonalProxySelection(ppFriendA)
+	for _, tag := range []string{"lantern-1", sel} {
+		r.persistSelection(tag)
+		assert.Equal(t, tag, r.restartBoxOptions().InitialServer)
+	}
+	r.persistSelection(vpn.AutoSelectTag)
+	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
+
+	r.persistSelection("lantern-1")
+	_, err := r.srvManager.RemoveServers([]string{"lantern-1"})
+	require.NoError(t, err)
+	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
+}
