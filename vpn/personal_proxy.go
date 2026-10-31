@@ -148,9 +148,11 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 // selectPersonalProxyLocked narrows the rooms tickets to friend, gives the
 // tunnel friend's group and selects it. A change of friend restarts the rooms
 // consumers, whose slots to other friends would otherwise outlive the
-// narrowing, and closes every connection through the previous friend's group;
-// if a restart fails, the selection is refused and the previous narrowing
-// restored. The caller must hold t.outboundMu.
+// narrowing; if a restart fails, the selection is refused and the previous
+// narrowing restored. Once friend's group replaces another friend's in the
+// selector, every connection through the group is closed, even when an
+// earlier attempt already narrowed to friend. The caller must hold
+// t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if t.mutGrpMgr == nil || t.outboundMgr == nil {
 		return errors.New("tunnel not running")
@@ -164,8 +166,7 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if len(members) == 0 {
 		return ErrPersonalProxyUnavailable
 	}
-	changed := t.selectedFriend() != friend
-	if prev := t.personalProxy.Load(); changed {
+	if prev := t.personalProxy.Load(); t.selectedFriend() != friend {
 		t.personalProxy.Store(&friend)
 		if err := t.restartRoomsConsumersLocked(selector); err != nil {
 			if errors.Is(err, errLibboxClosed) {
@@ -203,9 +204,10 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	// previous friend's connections itself. A connection is recorded under the
 	// member selected before it dialed, not the one that carried it, so none
 	// is kept.
-	if changed && t.clashServer != nil {
+	if t.groupFriend != friend && t.clashServer != nil {
 		t.clashServer.connTracker.closeThrough(PersonalProxyTag)
 	}
+	t.groupFriend = friend
 	return err
 }
 
@@ -249,6 +251,7 @@ func (t *tunnel) syncPersonalProxyLocked(replaced map[string]struct{}) error {
 				return fmt.Errorf("offer personal proxy group: %w", err)
 			}
 		}
+		t.groupFriend = friend
 		return nil
 	}
 	// Added before the stale members go, so the group is never empty.
@@ -319,6 +322,7 @@ func (t *tunnel) withdrawPersonalProxyLocked(selector lbA.MutableOutboundGroup) 
 			errs = append(errs, fmt.Errorf("remove personal proxy group: %w", err))
 		}
 	}
+	t.groupFriend = ""
 	return errors.Join(errs...)
 }
 

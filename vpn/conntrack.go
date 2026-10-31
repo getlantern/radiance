@@ -253,7 +253,6 @@ func (m *connTracker) closeMatchedTo(tag string) {
 	}
 }
 
-// closeThrough closes the connections routed through group.
 func (m *connTracker) closeThrough(group string) {
 	for _, r := range m.conns.Iter() {
 		if slices.Contains(r.chain, group) {

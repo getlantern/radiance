@@ -488,7 +488,8 @@ func requireEcho(t *testing.T, conn net.Conn) {
 	require.NoError(t, err)
 }
 
-// requireClosed requires conn to be closed rather than left open.
+// requireClosed fails the test unless a read on conn ends in a non-timeout
+// error within two seconds.
 func requireClosed(t *testing.T, conn net.Conn, msg string) {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
@@ -536,6 +537,33 @@ func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
 	requireEcho(t, viaB)
 }
 
+// A switch that narrows to the new friend but then fails leaves the previous
+// friend's group installed; retrying the same friend must still close the
+// connections through it.
+func TestPersonalProxyRetriedSwitchClosesThePreviousFriendsConnections(t *testing.T) {
+	standInRoomsConsumer(t)
+	tun, dial := startRoutedPersonalProxyTestTunnel(t)
+	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{
+		consumerServer(consumer), directServer(friendA), directServer(friendB),
+	}}))
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	viaA := dial()
+	awaitRoutedLeaf(t, tun, friendA)
+
+	// selectMode fails without a box, after the consumers have restarted.
+	box := tun.boxInstance
+	tun.boxInstance = nil
+	consumerOut := tun.liveOutbound(consumer)
+	require.Error(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	tun.boxInstance = box
+	require.NotSame(t, consumerOut, tun.liveOutbound(consumer), "the failure came after the restart")
+	require.Equal(t, friendB, tun.selectedFriend())
+
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	requireClosed(t, viaA, "the retry left the previous friend's connection open")
+}
+
 // connectProxy serves HTTP CONNECT, standing in for a rooms consumer that
 // carries connections.
 func connectProxy(t *testing.T) uint16 {
@@ -572,11 +600,9 @@ func connectProxy(t *testing.T) uint16 {
 	return uint16(l.Addr().(*net.TCPAddr).Port)
 }
 
-// A connection is recorded under the member the group had selected before it
-// dialed, so one the friend's direct outbound carried after the rooms
-// consumer failed stays recorded under the consumer, which the next friend's
-// group also holds. A switch sees only that record, so here the consumer
-// carries the connection.
+// A switch closes connections recorded under the rooms consumer even though
+// the next friend's group also holds it: such a record may hide a connection
+// the previous friend's direct outbound carried after the consumer failed.
 func TestPersonalProxySwitchClosesConnectionsRecordedUnderTheConsumer(t *testing.T) {
 	prev := roomsConsumerType
 	roomsConsumerType = C.TypeHTTP
