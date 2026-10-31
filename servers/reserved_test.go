@@ -39,6 +39,8 @@ func TestUserServersCannotUseReservedTags(t *testing.T) {
 	for _, tag := range ReservedTags() {
 		require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer(tag, false)}}, false), ErrReservedTag, tag)
 	}
+	require.ErrorIs(t, mgr.AddServers(ServerList{Servers: []*Server{socksServer("personal-proxy:helper-0123456789ab", false)}}, false),
+		ErrReservedTag, "a friend's selection tag")
 	// Refused before contacting the server manager at that address.
 	err = mgr.AddPrivateServer("personal-proxies", "203.0.113.7", 1, "token", C.ServerLocation{}, true)
 	require.ErrorIs(t, err, ErrReservedTag)

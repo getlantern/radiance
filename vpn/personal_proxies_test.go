@@ -40,6 +40,13 @@ func directServer(tag string) *servers.Server {
 // built as buildOptions builds it: the group exists only when helpers do.
 func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 	t.Helper()
+	return startPersonalProxiesTestTunnelWith(t, nil, helpers...)
+}
+
+// startPersonalProxiesTestTunnelWith is startPersonalProxiesTestTunnel with
+// inbounds.
+func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds []O.Inbound, helpers ...string) *tunnel {
+	t.Helper()
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -64,6 +71,7 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 	)
 	options := O.Options{
 		Log:       &O.LogOptions{Disabled: true},
+		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Route:     &O.RouteOptions{Rules: []O.Rule{selectModeRule(AutoSelectTag), selectModeRule(ManualSelectTag)}},
 		Experimental: &O.ExperimentalOptions{
