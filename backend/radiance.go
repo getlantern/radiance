@@ -1088,6 +1088,7 @@ type liveTunnel interface {
 	SelectServer(tag string) error
 	RemoveOutbounds(tags []string) error
 	ReconcileHelpers(helpers servers.ServerList) error
+	Restart(boxOptions vpn.BoxOptions) error
 }
 
 func (r *LocalBackend) liveTunnel() liveTunnel {
@@ -1739,22 +1740,43 @@ func (r *LocalBackend) DisconnectVPN() error {
 }
 
 func (r *LocalBackend) RestartVPN() error {
-	return r.vpnClient.Restart(r.restartBoxOptions())
+	bOptions := r.restartBoxOptions()
+	// Not held across the restart: a platform restart may reconnect through
+	// this backend, which takes selectionMu.
+	if err := r.liveTunnel().Restart(bOptions); err != nil {
+		return err
+	}
+	// A selection saved after bOptions was built is applied to the rebuilt
+	// tunnel.
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	if tag := r.savedSelectionTag(); tag != bOptions.InitialServer {
+		if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			return fmt.Errorf("apply the selection saved during the restart: %w", err)
+		}
+	}
+	return nil
 }
 
-// restartBoxOptions is getBoxOptions starting on the saved selection, or on
-// auto-select when none is saved or the manager no longer holds it.
+// restartBoxOptions is getBoxOptions starting on the saved selection (see
+// savedSelectionTag).
 func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
 	bOptions := r.getBoxOptions()
-	bOptions.InitialServer = vpn.AutoSelectTag
+	bOptions.InitialServer = r.savedSelectionTag()
+	return bOptions
+}
+
+// savedSelectionTag returns the saved selection's tag, or AutoSelectTag when
+// none is saved or serverByTag no longer finds it.
+func (r *LocalBackend) savedSelectionTag() string {
 	var saved servers.Server
 	if !settings.GetBool(settings.AutoConnectKey) &&
 		settings.GetStruct(settings.SelectedServerKey, &saved) == nil && saved.Tag != "" {
 		if _, found := r.serverByTag(saved.Tag); found {
-			bOptions.InitialServer = saved.Tag
+			return saved.Tag
 		}
 	}
-	return bOptions
+	return vpn.AutoSelectTag
 }
 
 // ResetNetwork drops the VPN's connections and re-seeds its interface state.
@@ -1838,8 +1860,8 @@ func (r *LocalBackend) persistSelection(tag string) {
 	r.persistServer(server)
 }
 
-// persistServer records server, which the caller resolved, as the user's
-// server choice in settings.
+// persistServer saves server as the user's server choice without looking it up
+// again. It clears server.Options.
 func (r *LocalBackend) persistServer(server *servers.Server) {
 	server.Options = nil
 	if err := settings.Patch(settings.Settings{

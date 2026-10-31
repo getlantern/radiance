@@ -464,8 +464,7 @@ func TestTicketReconcileStopsAtClose(t *testing.T) {
 }
 
 // A rooms-only friend whose last ticket goes while the tunnel switches to it
-// is still saved as the selection the tunnel made; the reconcile the ticket
-// change runs then falls back from it.
+// is still saved as the selection the tunnel made.
 func TestSelectServerSavesTheFriendItSwitchedTo(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	tun := &fakeHelperTunnel{}
@@ -511,4 +510,24 @@ func TestRestartKeepsTheSavedSelection(t *testing.T) {
 	_, err := r.srvManager.RemoveServers([]string{"lantern-1"})
 	require.NoError(t, err)
 	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
+}
+
+// A selection saved after a restart captured the previous one, but before it
+// rebuilt the tunnel, must still be the one the rebuilt tunnel carries.
+func TestRestartAppliesASelectionSavedDuringIt(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1", "lantern-2"), true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	tun.onRestart = func() {
+		tun.onRestart = nil
+		done := make(chan error, 1)
+		go func() { done <- r.SelectServer("lantern-2") }()
+		require.NoError(t, <-done)
+	}
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, "lantern-2", selectedTag(t))
+	assert.Equal(t, "lantern-2", tun.current(), "the rebuilt tunnel carries the stale selection")
 }

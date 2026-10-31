@@ -1836,6 +1836,10 @@ type fakeHelperTunnel struct {
 	fail     bool
 	gate     func() // if set, runs before each reconciliation
 	onSelect func() // if set, runs as each selection is applied
+	// onRestart, if set, runs as a restart begins, before it rebuilds.
+	onRestart func()
+	// selected is the selection the tunnel last applied.
+	selected string
 }
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
@@ -1887,7 +1891,28 @@ func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
+	f.selected = tag
 	return nil
+}
+
+func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
+	if f.onRestart != nil {
+		f.onRestart()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "restart:"+boxOptions.InitialServer)
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	f.selected = boxOptions.InitialServer
+	return nil
+}
+
+func (f *fakeHelperTunnel) current() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.selected
 }
 
 func (f *fakeHelperTunnel) ReconcileHelpers(helpers servers.ServerList) error {
