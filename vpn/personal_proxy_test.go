@@ -379,12 +379,11 @@ func TestPersonalProxyGroupFailsOverFromADeadConsumer(t *testing.T) {
 }
 
 // A real helper consumer with no connected slot must not hold a dial that
-// the friend's direct outbound could carry. It is lantern-box's Unbounded
-// outbound itself, against a discovery server that never offers a peer,
-// rather than a stand-in: the guarantee comes from that outbound failing at
-// once, and only the real one shows the groups radiance builds get it.
-// Every probe fails, so no member has URL-test history and each group's
-// first pick is arbitrary; fresh tunnels repeat that pick.
+// the friend's direct outbound could carry. The consumer is lantern-box's own
+// Unbounded outbound, against a discovery server that never offers a peer,
+// because that outbound failing at once is the guarantee under test. Every
+// probe fails, so no member has URL-test history and each group's first pick
+// is arbitrary; each fresh tunnel picks again.
 func TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer(t *testing.T) {
 	// The consumer signals through kindling, which caches into the data
 	// directory once it first sends.

@@ -40,9 +40,8 @@ func consumerServers() servers.ServerList {
 
 // fakeTickets is the ticket service's answer, which a test changes.
 type fakeTickets struct {
-	mu      sync.Mutex
-	tickets helper.Tickets
-	// reconciled receives once per reconcile a ticket change ran.
+	mu         sync.Mutex
+	tickets    helper.Tickets
 	reconciled chan struct{}
 }
 
@@ -72,7 +71,7 @@ func (f *fakeTickets) issue(t *testing.T, pairings map[string]string) {
 }
 
 // withTickets gives r a ticket source answering from the returned fake, as
-// NewLocalBackend wires it, and waits for its first answer.
+// NewLocalBackend wires it, and waits for the reconcile its first answer runs.
 func withTickets(t *testing.T, r *LocalBackend, pairings map[string]string) *fakeTickets {
 	t.Helper()
 	f := &fakeTickets{reconciled: make(chan struct{}, 16)}
