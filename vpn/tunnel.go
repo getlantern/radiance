@@ -103,6 +103,10 @@ type tunnel struct {
 	// replaced under the same tag since the last syncPersonalProxiesLocked,
 	// which swaps them into the personal proxies group. Guarded by outboundMu.
 	replacedHelpers map[string]struct{}
+	// staleConsumers holds the rooms consumers whose restart after the
+	// narrowing last changed failed, so they may still hold slots to other
+	// friends. Guarded by outboundMu.
+	staleConsumers map[string]struct{}
 
 	// closeTimeout bounds how long close() waits for closers to finish; a zero
 	// value uses defaultCloseTimeout.
@@ -916,6 +920,8 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 			errs = append(errs, err)
 		} else {
 			t.optsMap.Store(outbound.Tag, marshalOptions(ctx, outbound))
+			// Created under the current narrowing.
+			delete(t.staleConsumers, outbound.Tag)
 			added++
 		}
 	}

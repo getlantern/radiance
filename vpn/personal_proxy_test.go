@@ -2,9 +2,13 @@ package vpn
 
 import (
 	"context"
+	"errors"
+	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"sync"
 	"testing"
@@ -13,7 +17,10 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -433,4 +440,106 @@ func TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer(t *testing.T) {
 			require.Less(t, time.Since(start), 2*time.Second, "%s waited on the consumer", name)
 		}
 	}
+}
+
+// Switching friends keeps the manual selector on the same group tag, so the
+// selector interrupts nothing; a connection the previous friend's direct
+// outbound carries must still be closed, while new ones go to the new friend.
+func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = echo.Close() })
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
+		}
+	}()
+	inbound, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := uint16(inbound.Addr().(*net.TCPAddr).Port)
+	require.NoError(t, inbound.Close())
+	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
+	standInRoomsConsumer(t)
+	tun := startPersonalProxiesTestTunnelWith(t, []O.Inbound{{Type: C.TypeMixed, Tag: "mixed-in",
+		Options: &O.HTTPMixedInboundOptions{ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port}}}})
+	// No rooms tickets: each friend's group holds only its direct outbound.
+	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(friendA), directServer(friendB)}}))
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+
+	client := socks.NewClient(N.SystemDialer, M.ParseSocksaddrHostPort("127.0.0.1", port), socks.Version5, "", "")
+	dial := func() net.Conn {
+		conn, err := client.DialContext(t.Context(), N.NetworkTCP, M.ParseSocksaddr(echo.Addr().String()))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		_, err = conn.Write([]byte("ping"))
+		require.NoError(t, err)
+		buf := make([]byte, 4)
+		_, err = io.ReadFull(conn, buf)
+		require.NoError(t, err)
+		return conn
+	}
+	viaA := dial()
+	require.Eventually(t, func() bool {
+		for _, c := range tun.clashServer.connTracker.activeConnections() {
+			if slices.Contains(c.ChainList, PersonalProxyTag) {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "the connection is routed through the friend's group")
+
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	require.NoError(t, viaA.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, err = viaA.Read(make([]byte, 1))
+	require.Error(t, err)
+	var netErr net.Error
+	assert.False(t, errors.As(err, &netErr) && netErr.Timeout(), "the connection through the previous friend was left open")
+
+	viaB := dial()
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	_, err = viaB.Write([]byte("pong"))
+	require.NoError(t, err)
+	_, err = io.ReadFull(viaB, make([]byte, 4))
+	assert.NoError(t, err, "reselecting the same friend keeps its connections")
+}
+
+// A rooms consumer that could not be restarted under the new narrowing may
+// still hold slots to the previous friend, so it stays out of the new
+// friend's group, and selecting that friend again retries the restart.
+func TestPersonalProxySelectionRetriesAFailedConsumerRestart(t *testing.T) {
+	tun, _ := startPersonalProxyTestTunnel(t, friendA, friendB)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	good, ok := tun.optsMap.Load(consumer)
+	require.True(t, ok)
+	tun.optsMap.Store(consumer, []byte("{"))
+	consumerOut := tun.liveOutbound(consumer)
+
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	assert.Same(t, consumerOut, tun.liveOutbound(consumer), "the restart failed")
+	assert.Equal(t, []string{friendB}, personalProxyMembers(tun), "the stale consumer stays out")
+	assert.Equal(t, []string{"ticket-" + friendB}, tun.roomTickets())
+
+	tun.optsMap.Store(consumer, good)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	assert.NotSame(t, consumerOut, tun.liveOutbound(consumer), "selecting again retries the restart")
+	assert.ElementsMatch(t, []string{friendB, consumer}, personalProxyMembers(tun))
+}
+
+// A selection left with no member once a stale consumer is excluded is
+// refused, and the previous friend's narrowing is restored.
+func TestPersonalProxySelectionRollsBackWhenOnlyAStaleConsumerRemains(t *testing.T) {
+	tun, tickets := startPersonalProxyTestTunnel(t, friendA)
+	tickets.set(friendC, "ticket-"+friendC)
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	tun.optsMap.Store(consumer, []byte("{"))
+
+	require.ErrorIs(t, tun.selectOutbound(PersonalProxySelection(friendC)), ErrPersonalProxyUnavailable)
+	assert.Equal(t, friendA, tun.selectedFriend())
+	assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets())
+	assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
 }

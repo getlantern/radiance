@@ -3,6 +3,7 @@ package vpn
 import (
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -249,6 +250,16 @@ func (m *connTracker) closeMatchedTo(tag string) {
 			continue
 		}
 		m.closeRecord(r)
+	}
+}
+
+// closeThroughExcept closes the connections routed through group whose leaf
+// outbound is not in keep.
+func (m *connTracker) closeThroughExcept(group string, keep []string) {
+	for _, r := range m.conns.Iter() {
+		if slices.Contains(r.chain, group) && !slices.Contains(keep, r.outbound) {
+			m.closeRecord(r)
+		}
 	}
 }
 
