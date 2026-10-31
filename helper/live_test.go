@@ -4,7 +4,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,10 +24,12 @@ func liveOf(s LiveSnapshot, id string) *LivePairing {
 }
 
 // newManualTracker is a tracker without its sampler goroutine, so a test's
-// fake clock is only read from the test's goroutine.
+// fake clock is only read from the test's goroutine, and with now as its
+// wall clock too.
 func newManualTracker(now func() time.Time) *LiveTracker {
 	lt := NewLiveTracker(now)
 	lt.interval = 0
+	lt.wall = now
 	return lt
 }
 
@@ -148,33 +149,18 @@ func TestLive_BytesAfterALongGapDoNotCount(t *testing.T) {
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected, "after an ordinary gap")
 }
 
-// shiftWallOnly moves t's wall clock by d, a whole number of seconds,
-// leaving its monotonic reading alone, as a device sleep does. It relies on
-// time.Time's layout, which the caller checks.
-func shiftWallOnly(t time.Time, d time.Duration) time.Time {
-	tt := (*struct {
-		wall uint64
-		ext  int64
-		loc  *time.Location
-	})(unsafe.Pointer(&t))
-	tt.wall += uint64(d/time.Second) << 30
-	return t
-}
-
 // After a sleep the monotonic clock has moved one tick and the wall clock
 // minutes: the bytes read then do not count.
 func TestLive_BytesAfterASleepDoNotCount(t *testing.T) {
-	cur := time.Now()
-	lt := newManualTracker(func() time.Time { return cur })
+	mono, wall := newLiveClock(), newLiveClock()
+	lt := newManualTracker(mono.now)
+	lt.wall = wall.now
 	var n atomic.Uint64
 	lt.Open("peer", "c1", "pA", n.Load)
 	lt.sampleNow()
 
-	before := cur
-	cur = shiftWallOnly(cur.Add(time.Second), 5*time.Minute)
-	require.Equal(t, time.Second, cur.Sub(before), "monotonic: one tick")
-	require.Equal(t, 5*time.Minute+time.Second, cur.Round(0).Sub(before.Round(0)), "wall: minutes")
-
+	mono.advance(time.Second)
+	wall.advance(5 * time.Minute)
 	n.Add(LiveThreshold)
 	assert.False(t, liveOf(lt.Snapshot(), "pA").Connected)
 }

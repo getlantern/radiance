@@ -48,8 +48,11 @@ type LiveSnapshot struct {
 // timeline are never written to disk, logged, or sent anywhere but the local
 // app.
 type LiveTracker struct {
-	mu        sync.Mutex
-	now       func() time.Time
+	mu  sync.Mutex
+	now func() time.Time
+	// wall reads the wall clock, which unlike now's monotonic reading keeps
+	// running while the device sleeps.
+	wall      func() time.Time
 	threshold uint64
 	window    time.Duration
 	linger    time.Duration
@@ -68,7 +71,8 @@ type liveFlow struct {
 	pairing string
 	read    func() uint64
 	last    uint64
-	lastAt  time.Time
+	// lastWall is when the flow was last sampled, on the wall clock.
+	lastWall time.Time
 }
 
 type liveSample struct {
@@ -95,6 +99,7 @@ func NewLiveTracker(now func() time.Time) *LiveTracker {
 	}
 	return &LiveTracker{
 		now:       now,
+		wall:      func() time.Time { return time.Now().Round(0) },
 		threshold: LiveThreshold,
 		window:    LiveWindow,
 		linger:    LiveLinger,
@@ -119,7 +124,7 @@ func (t *LiveTracker) Open(owner string, key any, pairing string, read func() ui
 	if old, ok := t.flows[key]; ok {
 		t.closeLocked(key, old, now)
 	}
-	f := &liveFlow{owner: owner, pairing: pairing, read: read, lastAt: now}
+	f := &liveFlow{owner: owner, pairing: pairing, read: read, lastWall: t.wall()}
 	if read != nil {
 		f.last = read()
 	}
@@ -251,8 +256,9 @@ func (t *LiveTracker) sampleLocked(f *liveFlow, now time.Time) {
 	cur := f.read()
 	// On the wall clock: the monotonic clock stops while the device sleeps.
 	// A backward step gives a negative gap, which counts like a tick.
-	gap := now.Round(0).Sub(f.lastAt.Round(0))
-	f.lastAt = now
+	wall := t.wall()
+	gap := wall.Sub(f.lastWall)
+	f.lastWall = wall
 	if cur <= f.last {
 		return
 	}
