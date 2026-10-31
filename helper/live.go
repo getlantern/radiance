@@ -304,7 +304,7 @@ func (t *LiveTracker) addLocked(p *livePairing, now time.Time, n uint64) {
 }
 
 // add buckets by elapsed time from the newest sample's start, keeping the
-// clock's monotonic reading, so a wall-clock step moves no sample.
+// clock's monotonic reading, so a backward wall-clock step moves no sample.
 func (p *livePairing) add(now time.Time, n uint64) {
 	if last := len(p.samples) - 1; last >= 0 && now.Sub(p.samples[last].at) < time.Second {
 		p.samples[last].n += n

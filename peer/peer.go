@@ -1817,10 +1817,9 @@ func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDS
 
 // commitPendingGroupsLocked makes pendingGroups the held groups, keeping
 // the groups they replace, and publishes the map. Pending groups equal to the
-// held ones replace nothing, so a repeated response keeps the previous
-// groups a rotation's box may still hold. With none pending it only
-// publishes. The box must already hold the recorded set, and c.mu must be
-// held.
+// held ones replace nothing, so a repeated response keeps prevGroups. With
+// none pending it only publishes. The box must already hold the recorded
+// set, and c.mu must be held.
 func (c *Client) commitPendingGroupsLocked() {
 	if c.pendingGroups != nil {
 		if !maps.Equal(*c.pendingGroups, c.heldGroups) {

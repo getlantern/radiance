@@ -197,8 +197,8 @@ func TestLive_SleepExpiresTheWindowAndLinger(t *testing.T) {
 	}
 }
 
-// Samples keep the clock's monotonic reading, so a wall-clock step does not
-// move them.
+// Samples keep the clock's monotonic reading, so a backward wall-clock step
+// does not move them.
 func TestLive_SamplesKeepTheMonotonicClock(t *testing.T) {
 	lt := newManualTracker(time.Now)
 	lt.Add("pA", 1)
