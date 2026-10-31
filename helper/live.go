@@ -254,8 +254,7 @@ func (t *LiveTracker) sampleLocked(f *liveFlow, now time.Time) {
 		return
 	}
 	cur := f.read()
-	// On the wall clock: the monotonic clock stops while the device sleeps.
-	// A backward step gives a negative gap, which counts like a tick.
+	// A backward wall-clock step gives a negative gap, which counts like a tick.
 	wall := t.wall()
 	gap := wall.Sub(f.lastWall)
 	f.lastWall = wall

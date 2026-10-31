@@ -23,9 +23,9 @@ func liveOf(s LiveSnapshot, id string) *LivePairing {
 	return nil
 }
 
-// newManualTracker is a tracker without its sampler goroutine, so a test's
-// fake clock is only read from the test's goroutine, and with now as its
-// wall clock too.
+// newManualTracker is a tracker that also uses now as its wall clock and has
+// no sampler goroutine, so a test's fake clock is only read from the test's
+// goroutine.
 func newManualTracker(now func() time.Time) *LiveTracker {
 	lt := NewLiveTracker(now)
 	lt.interval = 0
@@ -132,8 +132,7 @@ func TestLive_BurstAfterTheLingerReconnects(t *testing.T) {
 
 // Bytes read after a wall-clock sampling gap longer than the window, as
 // after the device slept, may have moved before the window, so they do not
-// count. The gap is measured on the wall clock because the monotonic clock
-// stops during sleep.
+// count.
 func TestLive_BytesAfterALongGapDoNotCount(t *testing.T) {
 	clk := newLiveClock()
 	lt := newManualTracker(clk.now)
