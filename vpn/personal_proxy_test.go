@@ -3,7 +3,6 @@ package vpn
 import (
 	"context"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,13 +11,9 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/adapter/outbound"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
-	N "github.com/sagernet/sing/common/network"
-	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,6 +21,8 @@ import (
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/servers"
 )
 
@@ -365,8 +362,7 @@ func TestPersonalProxyGroupDials(t *testing.T) {
 }
 
 // A rooms consumer whose dials fail at once leaves the group carrying
-// traffic over the friend's direct outbound. One whose dials wait for a peer
-// is TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer.
+// traffic over the friend's direct outbound.
 func TestPersonalProxyGroupFailsOverFromADeadConsumer(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(target.Close)
@@ -382,80 +378,60 @@ func TestPersonalProxyGroupFailsOverFromADeadConsumer(t *testing.T) {
 	}
 }
 
-const blockingConsumerType = "blocking-rooms-consumer"
-
-type blockingConsumerOptions struct{}
-
-// blockingConsumer stands in for a rooms consumer with no connected slot,
-// whose dials wait for a peer until the caller gives up.
-type blockingConsumer struct{ outbound.Adapter }
-
-func (b *blockingConsumer) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (b *blockingConsumer) ListenPacket(ctx context.Context, _ M.Socksaddr) (net.PacketConn, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-// registerBlockingConsumer makes blockingConsumer the tunnel's rooms
-// consumer type for the rest of the test.
-func registerBlockingConsumer(t *testing.T, tun *tunnel) {
-	t.Helper()
-	var reg any = service.FromContext[adapter.OutboundRegistry](tun.ctx)
-	for {
-		u, ok := reg.(interface{ Upstream() any })
-		if !ok {
-			break
-		}
-		reg = u.Upstream()
-	}
-	registry, ok := reg.(*outbound.Registry)
-	require.True(t, ok)
-	outbound.Register[blockingConsumerOptions](registry, blockingConsumerType,
-		func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ blockingConsumerOptions) (adapter.Outbound, error) {
-			return &blockingConsumer{outbound.NewAdapter(blockingConsumerType, tag, []string{N.NetworkTCP, N.NetworkUDP}, nil)}, nil
-		})
-	prev := roomsConsumerType
-	roomsConsumerType = blockingConsumerType
-	t.Cleanup(func() { roomsConsumerType = prev })
-}
-
-// A rooms consumer waiting for a peer must not hold a dial that the friend's
-// direct outbound could carry. Neither member has URL-test history here (the
-// probes fail), which is when the group picks among them arbitrarily.
+// A real helper consumer with no connected slot must not hold a dial that
+// the friend's direct outbound could carry. It is lantern-box's Unbounded
+// outbound itself, against a discovery server that never offers a peer,
+// rather than a stand-in: the guarantee comes from that outbound failing at
+// once, and only the real one shows the groups radiance builds get it.
+// Every probe fails, so no member has URL-test history and each group's
+// first pick is arbitrary; fresh tunnels repeat that pick.
 func TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer(t *testing.T) {
-	// TODO: enable once lantern-box bounds each member's dial in
-	// MutableURLTest (or fails a rooms-only consumer's dial at once while it
-	// has no connected slot); radiance cannot bound a member's dial itself.
-	t.Skip("needs the lantern-box fix described in the TODO")
+	// The consumer signals through kindling, which caches into the data
+	// directory once it first sends.
+	dataDir := t.TempDir()
+	settings.Reset()
+	require.NoError(t, settings.InitSettings(dataDir))
+	require.NoError(t, settings.Set(settings.DataPathKey, dataDir))
+	require.NoError(t, kindling.Close())
+	t.Cleanup(func() {
+		_ = kindling.Close()
+		settings.Reset()
+	})
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(target.Close)
-	tun := startPersonalProxiesTestTunnel(t)
-	registerBlockingConsumer(t, tun)
-	setPersonalProxiesProbe(t, "http://127.0.0.1:1/", personalProxiesProbeInterval)
-	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{friendA: {"ticket-" + friendA}}}
-	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{
-		{Tag: consumer, Type: blockingConsumerType, IsLantern: true,
-			Options: O.Outbound{Tag: consumer, Type: blockingConsumerType, Options: &blockingConsumerOptions{}}},
-		directServer(friendA),
-	}}))
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
-	for name, group := range map[string]lbA.MutableOutboundGroup{
-		PersonalProxyTag: tun.personalProxyGroup(), PersonalProxiesTag: tun.personalProxiesGroup(),
-	} {
-		out, ok := group.(adapter.Outbound)
-		require.True(t, ok, name)
-		for range 8 {
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	discovery := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(discovery.Close)
+	for range 4 {
+		tun := startPersonalProxiesTestTunnel(t)
+		setPersonalProxiesProbe(t, "http://127.0.0.1:1/", personalProxiesProbeInterval)
+		tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{friendA: {"ticket-" + friendA}}}
+		require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{
+			{Tag: consumer, Type: lbC.TypeUnbounded, IsLantern: true,
+				Options: O.Outbound{Tag: consumer, Type: lbC.TypeUnbounded, Options: &lbO.UnboundedOutboundOptions{
+					DiscoverySrv: discovery.URL, InsecureDoNotVerifyClientCert: true,
+				}}},
+			directServer(friendA),
+		}}))
+		require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+		require.ElementsMatch(t, []string{friendA, consumer}, personalProxyMembers(tun))
+		for name, group := range map[string]lbA.MutableOutboundGroup{
+			PersonalProxyTag: tun.personalProxyGroup(), PersonalProxiesTag: tun.personalProxiesGroup(),
+		} {
+			out, ok := group.(adapter.Outbound)
+			require.True(t, ok, name)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			start := time.Now()
 			conn, err := out.DialContext(ctx, "tcp", M.ParseSocksaddr(target.Listener.Addr().String()))
 			cancel()
 			require.NoError(t, err, name)
 			require.NoError(t, conn.Close())
-			require.Less(t, time.Since(start), 10*time.Second, "%s waited on the consumer", name)
+			require.Less(t, time.Since(start), 2*time.Second, "%s waited on the consumer", name)
 		}
 	}
 }
