@@ -8,9 +8,11 @@ endif
 ifeq ($(OS),Windows_NT)
    LANTERND := lanternd.exe
    LANTERN := lantern.exe
+   LOGLEAK := logleak.exe
 else
    LANTERND := lanternd
    LANTERN := lantern
+   LOGLEAK := logleak
 endif
 
 VERSION ?=
@@ -58,6 +60,13 @@ endif
 .PHONY: install
 install: install-daemon install-cli
 
+# logleak checks every package for GOOS, the host by default; the analyzer itself is
+# always built for the host.
+.PHONY: logleak
+logleak:
+	GOOS= GOARCH= go build -o bin/$(LOGLEAK) ./cmd/logleak
+	GOFLAGS="$${GOFLAGS:-} -tags=$(TAGS)" bin/$(LOGLEAK) -test=false ./...
+
 .PHONY: proto
 proto:
 	go build -o build/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
@@ -67,7 +76,7 @@ proto:
 
 .PHONY: test
 test:
-	go test -v ./...
+	go test -v -tags "$(TAGS)" ./...
 
 # Runs on a connected device or emulator. Set RADIANCE_SMART_NETWORK_TEST=1 to
 # include the tests that need real egress.

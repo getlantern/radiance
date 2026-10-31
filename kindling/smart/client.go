@@ -265,6 +265,7 @@ func (ht *hostTransport) buildTransport() (trans http.RoundTripper, err error) {
 		if r := recover(); r != nil {
 			slog.Error("smart dialer strategy search panicked",
 				"host", ht.host, "panic", r, "stack", string(debug.Stack()))
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("strategy search panicked: %v", r)
 		}
 	}()

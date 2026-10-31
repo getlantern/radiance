@@ -160,6 +160,7 @@ var lineBreakEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
 func recoverToError(err *error, operation string) {
 	if r := recover(); r != nil {
 		common.WriteRecoveredPanic(operation, r)
+		//logleak:ok recovered panic value
 		*err = fmt.Errorf("panic %s: %s", operation, lineBreakEscaper.Replace(fmt.Sprint(r)))
 	}
 }
@@ -359,6 +360,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Panic starting libbox service", "panic", r)
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("panic starting libbox service: %v", r)
 		}
 	}()

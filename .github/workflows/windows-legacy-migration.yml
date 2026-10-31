@@ -46,7 +46,7 @@ jobs:
       - name: Exercise Windows migration authorization and recovery
         shell: pwsh
         run: |
-          go test -v -tags with_clash_api ./internal/dirsecurity ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
+          go test -v -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme" ./internal/dirsecurity ./common/legacymigration ./common/atomicfile ./common/settings ./account ./backend ./ipc ./cmd/lanternd
           if ($LASTEXITCODE -ne 0) { throw 'Windows identity migration tests failed' }
 
   # The Windows job's own check status is occasionally lost after a successful
