@@ -68,6 +68,7 @@ type liveFlow struct {
 	pairing string
 	read    func() uint64
 	last    uint64
+	lastAt  time.Time
 }
 
 type liveSample struct {
@@ -118,7 +119,7 @@ func (t *LiveTracker) Open(owner string, key any, pairing string, read func() ui
 	if old, ok := t.flows[key]; ok {
 		t.closeLocked(key, old, now)
 	}
-	f := &liveFlow{owner: owner, pairing: pairing, read: read}
+	f := &liveFlow{owner: owner, pairing: pairing, read: read, lastAt: now}
 	if read != nil {
 		f.last = read()
 	}
@@ -193,9 +194,7 @@ func (t *LiveTracker) Add(pairing string, n uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
-	p := t.pairingLocked(pairing, now)
-	p.add(now, n)
-	t.evaluateLocked(p, now)
+	t.addLocked(t.pairingLocked(pairing, now), now, n)
 }
 
 // Snapshot samples every open connection and returns each pairing's state,
@@ -250,21 +249,38 @@ func (t *LiveTracker) sampleLocked(f *liveFlow, now time.Time) {
 		return
 	}
 	cur := f.read()
+	gap := now.Sub(f.lastAt)
+	f.lastAt = now
 	if cur <= f.last {
 		return
 	}
 	n := cur - f.last
 	f.last = cur
-	t.pairingLocked(f.pairing, now).add(now, n)
+	// After a gap longer than the window, as when the device slept, the
+	// bytes may all have moved before the window, so they are not counted.
+	if gap > t.window {
+		return
+	}
+	t.addLocked(t.pairingLocked(f.pairing, now), now, n)
 }
 
+// addLocked counts n bytes for p at now, after settling p's state up to
+// now, so bytes arriving after its linger ended reconnect it rather than
+// extend the old connection.
+func (t *LiveTracker) addLocked(p *livePairing, now time.Time, n uint64) {
+	t.evaluateLocked(p, now)
+	p.add(now, n)
+	t.evaluateLocked(p, now)
+}
+
+// add buckets by elapsed time from the newest sample's start, keeping the
+// clock's monotonic reading, so a wall-clock step moves no sample.
 func (p *livePairing) add(now time.Time, n uint64) {
-	sec := now.Truncate(time.Second)
-	if last := len(p.samples) - 1; last >= 0 && p.samples[last].at.Equal(sec) {
+	if last := len(p.samples) - 1; last >= 0 && now.Sub(p.samples[last].at) < time.Second {
 		p.samples[last].n += n
 		return
 	}
-	p.samples = append(p.samples, liveSample{at: sec, n: n})
+	p.samples = append(p.samples, liveSample{at: now, n: n})
 }
 
 func (t *LiveTracker) evaluateLocked(p *livePairing, now time.Time) {

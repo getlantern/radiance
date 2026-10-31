@@ -99,6 +99,63 @@ func TestLive_DisconnectedSinceTheLingerEnded(t *testing.T) {
 	assert.Equal(t, start.Add(LiveWindow+LiveLinger).UnixMilli(), p.Since)
 }
 
+// A burst sampled after the linger ended starts a new connection rather
+// than extending the old one.
+func TestLive_BurstAfterTheLingerReconnects(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	n.Add(LiveThreshold)
+	lt.sampleNow()
+	require.True(t, liveOf(lt.Snapshot(), "pA").Connected)
+	// The sampler ran each second until 74s; the linger ends at 75s, and
+	// the next sample, at 80s, carries a new burst.
+	for range 74 {
+		clk.advance(time.Second)
+		lt.sampleNow()
+	}
+	clk.advance(6 * time.Second)
+	n.Add(LiveThreshold)
+	p := liveOf(lt.Snapshot(), "pA")
+	assert.True(t, p.Connected)
+	assert.Equal(t, clk.t.UnixMilli(), p.Since, "sampled")
+
+	clk.advance(80 * time.Second)
+	lt.Add("pA", LiveThreshold)
+	p = liveOf(lt.Snapshot(), "pA")
+	assert.True(t, p.Connected)
+	assert.Equal(t, clk.t.UnixMilli(), p.Since, "added")
+}
+
+// Bytes read after a sampling gap longer than the window, as after the
+// device slept, may have moved before the window, so they do not count.
+func TestLive_BytesAfterALongGapDoNotCount(t *testing.T) {
+	clk := newLiveClock()
+	lt := newManualTracker(clk.now)
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	lt.sampleNow()
+	clk.advance(5 * time.Minute)
+	n.Add(LiveThreshold)
+	assert.False(t, liveOf(lt.Snapshot(), "pA").Connected, "after a long gap")
+
+	clk.advance(30 * time.Second)
+	n.Add(LiveThreshold)
+	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected, "after an ordinary gap")
+}
+
+// Samples keep the clock's monotonic reading, so a wall-clock step does not
+// move them.
+func TestLive_SamplesKeepTheMonotonicClock(t *testing.T) {
+	lt := newManualTracker(time.Now)
+	lt.Add("pA", 1)
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	require.Len(t, lt.pairings["pA"].samples, 1)
+	assert.Contains(t, lt.pairings["pA"].samples[0].at.String(), "m=", "monotonic reading kept")
+}
+
 // The sampler runs by itself while a connection is open, with no Snapshot
 // calls, and stops once none is.
 func TestLive_SamplerRunsOnlyWhileConnectionsAreOpen(t *testing.T) {
