@@ -136,6 +136,9 @@ type fakeBoxService struct {
 	// idsAtStart is the set the inbound held when Start was called, nil for
 	// its base ID only.
 	idsAtStart []string
+	// afterUpdate, if set, runs after a set is applied, as connections on
+	// its IDs could arrive then. Set before the box is in use.
+	afterUpdate func()
 }
 
 func (b *fakeBoxService) Start() error {
@@ -172,6 +175,11 @@ func (b *fakeBoxService) UpdateShortIDs(ids []string) error {
 		return b.updateErr
 	}
 	b.shortIDs = append(b.shortIDs, append([]string(nil), ids...))
+	if b.afterUpdate != nil {
+		b.idsMu.Unlock()
+		b.afterUpdate()
+		b.idsMu.Lock()
+	}
 	return nil
 }
 
@@ -238,6 +246,10 @@ type stubServer struct {
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
 	lastVerifyReq      atomic.Value // LifecycleRequest
+
+	// heartbeatShortIDSets, when set, is sent as pairing_short_id_sets with
+	// heartbeatShortIDs.
+	heartbeatShortIDSets atomic.Pointer[[]PairingShortIDSet]
 }
 
 func newStubServer(t *testing.T) *stubServer {
@@ -313,7 +325,11 @@ func newStubServer(t *testing.T) *stubServer {
 			return
 		}
 		if ids != nil {
-			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)})
+			resp := HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)}
+			if sets := s.heartbeatShortIDSets.Load(); sets != nil {
+				resp.PairingShortIDSets = *sets
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

@@ -914,3 +914,11 @@ func (c *Client) HelperActivity(ctx context.Context) (helper.Activity, error) {
 	err := c.doJSON(ctx, http.MethodGet, helperActivityEndpoint, nil, &a)
 	return a, err
 }
+
+// HelperLive reads whether each helper pairing's friend is connected to this
+// volunteer now (see helper.LiveSnapshot).
+func (c *Client) HelperLive(ctx context.Context) (helper.LiveSnapshot, error) {
+	var s helper.LiveSnapshot
+	err := c.doJSON(ctx, http.MethodGet, helperLiveEndpoint, nil, &s)
+	return s, err
+}
