@@ -570,3 +570,48 @@ func TestRestartAppliesASelectionSavedDuringIt(t *testing.T) {
 	assert.Equal(t, "lantern-2", selectedTag(t))
 	assert.Equal(t, "lantern-2", tun.current(), "the rebuilt tunnel carries the stale selection")
 }
+
+// A tunnel built while the selected friend had no member starts on the
+// personal proxies group. If the friend is reachable once the tunnel is up,
+// the connect or restart switches to it; if not, it commits the fallback, so
+// the saved selection never names a friend the tunnel is not on.
+func TestStartOffTheSelectedFriendSettles(t *testing.T) {
+	sel := vpn.PersonalProxySelection(ppFriendA)
+	starts := map[string]func(t *testing.T, r *LocalBackend, tun *fakeHelperTunnel) error{
+		"connect": func(t *testing.T, r *LocalBackend, _ *fakeHelperTunnel) error {
+			return r.ConnectVPN(t.Context(), sel)
+		},
+		"restart": func(_ *testing.T, r *LocalBackend, tun *fakeHelperTunnel) error {
+			tun.up()
+			return r.RestartVPN()
+		},
+	}
+	setup := func(t *testing.T) (*LocalBackend, *fakeHelperTunnel) {
+		r := newPersonalProxiesBackend(t)
+		tun := &fakeHelperTunnel{friendless: true}
+		tun.attach(r)
+		require.NoError(t, r.srvManager.AddServers(directServers("lantern-1", ppFriendA), false))
+		r.persistSelection(sel)
+		return r, tun
+	}
+	for name, start := range starts {
+		t.Run(name+" reachable", func(t *testing.T) {
+			r, tun := setup(t)
+			evts := fallbackEvents(t)
+			require.NoError(t, start(t, r, tun))
+			assert.Equal(t, sel, selectedTag(t))
+			assert.Equal(t, sel, tun.current(), "the tunnel stayed on the personal proxies group")
+			assert.Equal(t, ppFriendA, tun.SelectedPersonalProxy())
+			assert.Empty(t, evts)
+		})
+		t.Run(name+" unreachable", func(t *testing.T) {
+			r, tun := setup(t)
+			tun.refuseFriend = true
+			evts := fallbackEvents(t)
+			require.NoError(t, start(t, r, tun))
+			assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t), "the saved selection names a friend the tunnel is not on")
+			assert.Equal(t, vpn.PersonalProxiesTag, tun.current())
+			requireFallbackEvent(t, evts, vpn.PersonalProxyFallbackEvent{Tag: ppFriendA, Fallback: vpn.PersonalProxiesTag})
+		})
+	}
+}

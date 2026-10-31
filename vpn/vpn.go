@@ -430,6 +430,17 @@ func (c *VPNClient) SelectServer(tag string) error {
 	return nil
 }
 
+// SelectedPersonalProxy returns the friend whose personal proxy group the
+// running tunnel has selected, or "" when it has none or no tunnel is up.
+func (c *VPNClient) SelectedPersonalProxy() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.Status() != Connected {
+		return ""
+	}
+	return c.tunnel.selectedFriend()
+}
+
 // PersonalProxyMember reports what the running tunnel holds for the friend
 // whose direct outbound tag is friend; the zero value while no tunnel is up.
 func (c *VPNClient) PersonalProxyMember(friend string) PersonalProxyMember {
