@@ -67,15 +67,15 @@ type LocalBackend struct {
 
 	srvManager *servers.Manager
 	vpnClient  *vpn.VPNClient
-	// live, if set, replaces vpnClient for the tunnel changes connects, config
-	// updates and selection fallbacks make, for tests that have no tunnel.
+	// live, if set, replaces vpnClient as the liveTunnel, for tests that have
+	// no tunnel.
 	live liveTunnel
 	// beforeManagerRemove, if set, runs in RemoveServers just before the
 	// manager removes the servers, for tests of a concurrent add.
 	beforeManagerRemove func()
-	// beforeRestartSelection, if set, runs in restartBoxOptions between
-	// capturing the outbounds and the saved selection, for tests of a
-	// concurrent selection.
+	// beforeRestartSelection, if set, runs in restartBoxOptions, with
+	// r.selectionMu held, between capturing the outbounds and the saved
+	// selection, for tests of a concurrent selection.
 	beforeRestartSelection func()
 	splitTunnelMgr         *vpn.SplitTunnel
 	sessionHistory         *vpn.SessionHistory
@@ -1085,8 +1085,8 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
-// liveTunnel is the part of vpn.VPNClient that connects, config updates,
-// server selections and restarts change the running tunnel through.
+// liveTunnel is the part of vpn.VPNClient the backend drives the running
+// tunnel through.
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
 	SelectedPersonalProxy() string
@@ -1575,7 +1575,7 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 	defer r.selectionMu.Unlock()
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.serverByTag(tag); !found {
-			slog.Info("Connected server was withdrawn during the connect, falling back")
+			slog.Info("Connected server was withdrawn during the connect, falling back", "tag", tag)
 			r.fallBackLocked(tag)
 			return
 		}
@@ -1586,10 +1586,9 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 	r.persistSelection(tag)
 }
 
-// settleFriendLocked reports whether the running tunnel carries tag, which a
-// tunnel built while tag's friend had no member does not, though the friend
-// may be reachable by the time it is up. Such a tunnel is switched to the
-// friend, or, if it refuses, tag's fallback is committed and false returned.
+// settleFriendLocked moves a running tunnel that is not on tag's friend, as
+// one built while the friend had no member is not, onto it. It returns false
+// only if the tunnel refused and tag's fallback was committed instead.
 // The caller must hold r.selectionMu.
 func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
@@ -1600,9 +1599,7 @@ func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return true
 	}
-	// err names the friend's tag, which must not be logged.
-	slog.Info("Tunnel could not take up the selected personal proxy, falling back",
-		"unavailable", errors.Is(err, vpn.ErrPersonalProxyUnavailable))
+	slog.Info("Tunnel could not take up the selected personal proxy, falling back", "error", err)
 	r.fallBackLocked(tag)
 	return false
 }
