@@ -216,6 +216,22 @@ func settle(t *testing.T, src *Source) {
 	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, time.Millisecond)
 }
 
+// awaitChanges waits until count reaches want: a fetch ends before its change
+// callback runs, so settle alone does not wait for the callback.
+func awaitChanges(t *testing.T, count func() int, want int, msg ...any) {
+	t.Helper()
+	require.Eventually(t, func() bool { return count() >= want }, time.Second, time.Millisecond, msg...)
+	assert.Equal(t, want, count(), msg...)
+}
+
+// assertNoChange gives a callback the fetch that just settled might run time
+// to arrive, then asserts count is still want.
+func assertNoChange(t *testing.T, count func() int, want int, msg ...any) {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, want, count(), msg...)
+}
+
 func (s *Source) dueIn() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -609,6 +625,7 @@ func TestSourceInviterFor(t *testing.T) {
 	src, _ := newTestSource(f)
 	changes := make(chan struct{}, 4)
 	src.SetOnInviterChange(func() { changes <- struct{}{} })
+	count := func() int { return len(changes) }
 
 	tickets, answered := src.InviterFor(tagA)
 	assert.Empty(t, tickets)
@@ -622,19 +639,19 @@ func TestSourceInviterFor(t *testing.T) {
 	tickets, _ = src.InviterFor("helper-cccccccccccc")
 	assert.Empty(t, tickets)
 	assert.ElementsMatch(t, []string{tagA, tagB}, src.InviterTags())
-	assert.Len(t, changes, 1, "the first answer is a change")
+	awaitChanges(t, count, 1, "the first answer is a change")
 
 	// The same pairings again are no change; losing one is.
 	src.Invalidate()
 	src.Inviter()
 	f.results <- fetchResult{t: Tickets{Inviter: []string{invA, invB}, InviterPairings: map[string]string{tagA: pairingA, tagB: pairingB}, Lifetime: 15 * time.Minute}}
 	settle(t, src)
-	assert.Len(t, changes, 1)
+	assertNoChange(t, count, 1)
 	src.Invalidate()
 	src.Inviter()
 	f.results <- fetchResult{t: Tickets{Inviter: []string{invB}, InviterPairings: map[string]string{tagB: pairingB}, Lifetime: 15 * time.Minute}}
 	settle(t, src)
-	assert.Len(t, changes, 2)
+	awaitChanges(t, count, 2)
 	tickets, _ = src.InviterFor(tagA)
 	assert.Empty(t, tickets)
 	assert.Equal(t, []string{tagB}, src.InviterTags())
@@ -644,7 +661,7 @@ func TestSourceInviterFor(t *testing.T) {
 	src.Inviter()
 	f.results <- fetchResult{err: ErrDisabled}
 	settle(t, src)
-	assert.Len(t, changes, 3)
+	awaitChanges(t, count, 3)
 	tickets, answered = src.InviterFor(tagB)
 	assert.Empty(t, tickets)
 	assert.True(t, answered)
@@ -698,6 +715,7 @@ func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
 	src, clock := newTestSource(f)
 	var changes atomic.Int32
 	src.SetOnInviterChange(func() { changes.Add(1) })
+	count := func() int { return int(changes.Load()) }
 	fetch := func() {
 		src.Invalidate()
 		f.results <- fetchResult{t: answer}
@@ -705,10 +723,10 @@ func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
 		settle(t, src)
 	}
 	fetch()
-	require.Equal(t, int32(1), changes.Load(), "the first answer")
+	awaitChanges(t, count, 1, "the first answer")
 
 	fetch()
-	assert.Equal(t, int32(1), changes.Load(), "a renewal of usable tickets")
+	assertNoChange(t, count, 1, "a renewal of usable tickets")
 
 	clock.add(2 * time.Minute)
 	f.results <- fetchResult{t: answer}
@@ -717,5 +735,5 @@ func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
 	settle(t, src)
 	tickets, _ = src.InviterFor(tagA)
 	require.NotEmpty(t, tickets, "renewed")
-	assert.Equal(t, int32(2), changes.Load(), "expired tickets renewed")
+	awaitChanges(t, count, 2, "expired tickets renewed")
 }
