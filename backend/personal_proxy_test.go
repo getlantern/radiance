@@ -42,6 +42,8 @@ func consumerServers() servers.ServerList {
 type fakeTickets struct {
 	mu      sync.Mutex
 	tickets helper.Tickets
+	// reconciled receives once per reconcile a ticket change ran.
+	reconciled chan struct{}
 }
 
 func (f *fakeTickets) fetch(context.Context) (helper.Tickets, error) {
@@ -73,7 +75,7 @@ func (f *fakeTickets) issue(t *testing.T, pairings map[string]string) {
 // NewLocalBackend wires it, and waits for its first answer.
 func withTickets(t *testing.T, r *LocalBackend, pairings map[string]string) *fakeTickets {
 	t.Helper()
-	f := &fakeTickets{}
+	f := &fakeTickets{reconciled: make(chan struct{}, 16)}
 	f.issue(t, pairings)
 	r.helperTickets = helper.NewSource(r.ctx, f.fetch)
 	// A reconcile still running after the test would race the next test's
@@ -93,6 +95,7 @@ func withTickets(t *testing.T, r *LocalBackend, pairings map[string]string) *fak
 		mu.Unlock()
 		defer running.Done()
 		r.reconcilePersonalProxy()
+		f.reconciled <- struct{}{}
 	})
 	t.Cleanup(func() {
 		mu.Lock()
@@ -100,19 +103,29 @@ func withTickets(t *testing.T, r *LocalBackend, pairings map[string]string) *fak
 		mu.Unlock()
 		running.Wait()
 	})
-	require.Eventually(t, func() bool { _, answered := r.helperTickets.InviterFor(ppFriendA); return answered },
-		2*time.Second, 5*time.Millisecond)
+	r.helperTickets.Inviter()
+	f.awaitReconcile(t)
 	return f
 }
 
-// reissue changes the tickets and waits for the source to fetch them.
+// reissue changes the tickets and waits for the reconcile the change runs,
+// which reads settings through sing-box's registry and so must not overlap
+// the test's own reads.
 func (f *fakeTickets) reissue(t *testing.T, r *LocalBackend, pairings map[string]string) {
 	t.Helper()
 	f.issue(t, pairings)
 	r.helperTickets.Invalidate()
-	require.Eventually(t, func() bool {
-		return len(r.helperTickets.InviterTags()) == len(pairings)
-	}, 2*time.Second, 5*time.Millisecond)
+	r.helperTickets.Inviter()
+	f.awaitReconcile(t)
+}
+
+func (f *fakeTickets) awaitReconcile(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.reconciled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no reconcile after the tickets changed")
+	}
 }
 
 func fallbackEvents(t *testing.T) <-chan vpn.PersonalProxyFallbackEvent {
