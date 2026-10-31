@@ -443,11 +443,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		// registered route + router rule.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		defer cancel()
-		// Always clear the connection listener on rollback. The listener is
-		// only Set on the success path, so this is a no-op if Start failed
-		// before reaching it — but cheap insurance against a future re-order
-		// that registers earlier. Drain-flag first so any in-flight Notify
-		// callbacks short-circuit even if SetListener races (see Stop).
+		// Always clear the connection listener on rollback: it is registered
+		// before box.Start and Verify, either of which can fail. Drain-flag
+		// first so any in-flight Notify callbacks short-circuit even if
+		// SetListener races (see Stop).
 		c.listenerDraining.Store(true)
 		peerconn.SetListener(nil)
 		c.resetConnTracking()
@@ -610,9 +609,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// events.Subscribe[ConnectionEvent]. Listener is process-wide
 	// single-active; cleared on Stop and in the rollback defer so
 	// post-teardown accept-loop callbacks land on a no-op rather than
-	// emit events to a torn-down consumer. Registered before box.Start:
-	// samizdat takes the listener once per connection, so a connection
-	// accepted before this, such as one during Verify, is never reported.
+	// emit events to a torn-down consumer.
+	// Registered before box.Start: samizdat binds each connection to the
+	// listener at accept, so registering any later would never report a
+	// connection accepted in between, such as one during Verify.
 	peerconn.SetListener(func(evt peerconn.Event) {
 		state, source := evt.State, evt.Source
 		if c.listenerDraining.Load() {
