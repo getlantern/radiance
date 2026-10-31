@@ -550,7 +550,7 @@ func connectProxy(t *testing.T) uint16 {
 				return
 			}
 			go func() {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				br := bufio.NewReader(c)
 				req, err := http.ReadRequest(br)
 				if err != nil || req.Method != http.MethodConnect {
@@ -560,7 +560,7 @@ func connectProxy(t *testing.T) uint16 {
 				if err != nil {
 					return
 				}
-				defer up.Close()
+				defer func() { _ = up.Close() }()
 				if _, err := c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
 					return
 				}
