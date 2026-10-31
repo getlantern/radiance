@@ -787,6 +787,12 @@ func (s *localapi) serverSelectionEventsHandler(w http.ResponseWriter, r *http.R
 		}
 	})
 	defer sub.Unsubscribe()
+	// Sent once subscribed, so a save the client could not hear, before it
+	// connected or while it reconnected, still prompts a read.
+	if data, err := json.Marshal(vpn.SelectionSavedEvent{}); err == nil {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 	for {
 		select {
 		case data := <-ch:

@@ -184,36 +184,33 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	assert.Equal(t, "/not-a-route", route)
 }
 
+// A connection gets one event as soon as it subscribes, covering a save made
+// before it connected, and then one per save.
 func TestSelectionEventsStream(t *testing.T) {
+	events.Emit(vpn.SelectionSavedEvent{}) // a save no one hears
 	srv := httptest.NewServer(newLocalAPI(&backend.LocalBackend{}, false))
 	t.Cleanup(srv.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
-	// The handler subscribes after its headers, and they reach the client
-	// only with the first event, so emit until one lands.
-	go func() {
-		tick := time.NewTicker(20 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-tick.C:
-				events.Emit(vpn.SelectionSavedEvent{Revision: 7})
-			}
-		}
-	}()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+serverSelectionEventsEndpoint, nil)
 	require.NoError(t, err)
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
-	line, err := bufio.NewReader(resp.Body).ReadString('\n')
-	require.NoError(t, err)
-	data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
-	require.True(t, ok, line)
-	var evt vpn.SelectionSavedEvent
-	require.NoError(t, json.Unmarshal([]byte(data), &evt))
-	assert.Equal(t, uint64(7), evt.Revision)
+	body := bufio.NewReader(resp.Body)
+	requireEvent := func() {
+		t.Helper()
+		line, err := body.ReadString('\n')
+		require.NoError(t, err)
+		data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
+		require.True(t, ok, line)
+		require.NoError(t, json.Unmarshal([]byte(data), &vpn.SelectionSavedEvent{}))
+		_, err = body.ReadString('\n')
+		require.NoError(t, err)
+	}
+	requireEvent()
+
+	events.Emit(vpn.SelectionSavedEvent{})
+	requireEvent()
 }

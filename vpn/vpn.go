@@ -589,12 +589,11 @@ func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	}
 }
 
-// SelectionSavedEvent is emitted after each successful save of the selected
-// server or auto-select, once a settings read sees it. Revision increases
-// with each save in the process, so a reader can drop an older read.
+// SelectionSavedEvent means the saved selection may have changed, so a reader
+// should read it again. It follows each successful save of the selected server
+// or auto-select, once a settings read sees the save, and carries nothing.
 type SelectionSavedEvent struct {
 	events.Event
-	Revision uint64 `json:"revision"`
 }
 
 // PersonalProxyFallbackEvent is emitted when the selected friend's personal

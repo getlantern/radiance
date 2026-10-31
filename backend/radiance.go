@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"slices"
 	"sync"
-	"sync/atomic"
 
 	"time"
 
@@ -1074,8 +1073,8 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
-// liveTunnel is the part of vpn.VPNClient that config updates and selection
-// fallbacks change the running tunnel through.
+// liveTunnel is the part of vpn.VPNClient that config updates and server
+// selections change the running tunnel through.
 type liveTunnel interface {
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
@@ -1817,11 +1816,9 @@ func (r *LocalBackend) persistSelection(tag string) {
 	slog.Info("Selected server", "tag", tag, "type", server.Type)
 }
 
-var selectionRevision atomic.Uint64
-
 // emitSelectionSaved announces a save of the selection that just completed.
 func emitSelectionSaved() {
-	events.Emit(vpn.SelectionSavedEvent{Revision: selectionRevision.Add(1)})
+	events.Emit(vpn.SelectionSavedEvent{})
 }
 
 // VPNConnections returns a list of the active connections. If there are no connections and the

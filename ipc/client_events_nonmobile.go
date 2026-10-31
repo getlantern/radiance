@@ -33,8 +33,8 @@ func (c *Client) PersonalProxyFallbackEvents(ctx context.Context, handler func(v
 	})
 }
 
-// SelectionSavedEvents streams a notification after each save of the selected
-// server; read the selection with SelectedServer. Blocks until ctx is
+// SelectionSavedEvents calls handler on connecting and after each save of the
+// selected server, which handler reads with SelectedServer. Blocks until ctx is
 // cancelled.
 func (c *Client) SelectionSavedEvents(ctx context.Context, handler func(vpn.SelectionSavedEvent)) error {
 	return c.sseRetryLoop(ctx, serverSelectionEventsEndpoint, func(data []byte) {
