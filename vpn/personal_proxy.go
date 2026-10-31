@@ -3,7 +3,6 @@ package vpn
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 
@@ -131,9 +130,8 @@ func (t *tunnel) roomsConsumersLocked(selector lbA.MutableOutboundGroup) []strin
 }
 
 // personalProxyMembersLocked returns what friend's group holds now: its direct
-// outbound if the selector offers it, and the rooms consumers that may reach
-// it and are not stale (see staleConsumers). The caller must hold
-// t.outboundMu.
+// outbound if the selector offers it, and the rooms consumers if they may reach
+// it. The caller must hold t.outboundMu.
 func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, friend string) []string {
 	var members []string
 	if slices.Contains(selector.All(), friend) {
@@ -142,34 +140,17 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 		}
 	}
 	if roomsReachable(t.inviterTickets, friend) {
-		for _, tag := range t.roomsConsumersLocked(selector) {
-			if _, stale := t.staleConsumers[tag]; !stale {
-				members = append(members, tag)
-			}
-		}
+		members = append(members, t.roomsConsumersLocked(selector)...)
 	}
 	return members
 }
 
-// staleConsumersLocked returns the selector's rooms consumers that are stale.
-// The caller must hold t.outboundMu.
-func (t *tunnel) staleConsumersLocked(selector lbA.MutableOutboundGroup) []string {
-	var stale []string
-	for _, tag := range t.roomsConsumersLocked(selector) {
-		if _, ok := t.staleConsumers[tag]; ok {
-			stale = append(stale, tag)
-		}
-	}
-	return stale
-}
-
 // selectPersonalProxyLocked narrows the rooms tickets to friend, gives the
-// tunnel friend's group and selects it. A change of friend restarts the rooms
-// consumers, whose slots to other friends would otherwise outlive the
-// narrowing, and closes the connections through members the new group lacks.
-// A consumer whose restart failed stays out of the group until a later
-// selection restarts it; a selection left with no member is refused, and the
-// previous narrowing restored. The caller must hold t.outboundMu.
+// tunnel friend's group and selects it, closing connections through members
+// the group no longer holds. A change of friend restarts the rooms consumers,
+// whose slots to other friends would otherwise outlive the narrowing; if a
+// restart fails, the selection is refused and the previous narrowing
+// restored. The caller must hold t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if t.mutGrpMgr == nil || t.outboundMgr == nil {
 		return errors.New("tunnel not running")
@@ -179,59 +160,50 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 		return errors.New("manual select group not found")
 	}
 	// Checked before anything changes, so a refused selection changes nothing.
-	if len(t.personalProxyMembersLocked(selector, friend)) == 0 {
-		return ErrPersonalProxyUnavailable
-	}
-	var errs []error
-	prev := t.personalProxy.Load()
-	restart := t.staleConsumersLocked(selector)
-	if t.selectedFriend() != friend {
-		t.personalProxy.Store(&friend)
-		restart = t.roomsConsumersLocked(selector)
-	}
-	restartErr := t.restartRoomsConsumersLocked(restart)
-	if errors.Is(restartErr, errLibboxClosed) {
-		return restartErr
-	}
 	members := t.personalProxyMembersLocked(selector, friend)
 	if len(members) == 0 {
-		if t.personalProxy.Load() != prev {
-			t.personalProxy.Store(prev)
-			restartErr = errors.Join(restartErr, t.restartRoomsConsumersLocked(t.roomsConsumersLocked(selector)))
-		}
-		return errors.Join(restartErr, ErrPersonalProxyUnavailable)
+		return ErrPersonalProxyUnavailable
 	}
-	if restartErr != nil {
-		// The selection stands without the stale consumers.
-		slog.Warn("Failed to restart rooms consumers for a personal proxy", "error", restartErr)
+	if prev := t.personalProxy.Load(); t.selectedFriend() != friend {
+		t.personalProxy.Store(&friend)
+		if err := t.restartRoomsConsumersLocked(selector); err != nil {
+			if errors.Is(err, errLibboxClosed) {
+				return err
+			}
+			// Consumers restarted under the new narrowing go back to the old.
+			t.personalProxy.Store(prev)
+			return errors.Join(err, t.restartRoomsConsumersLocked(selector))
+		}
 	}
 	if err := t.selectMode(ManualSelectTag); err != nil {
-		return errors.Join(append(errs, err)...)
+		return err
 	}
 	// A fresh group replaces any previous friend's under the same tag; the
 	// selector is pointed at it in place, so its selection never lapses.
 	if err := t.createPersonalProxyLocked(members); err != nil {
-		return errors.Join(append(errs, err)...)
+		return err
 	}
 	if slices.Contains(selector.All(), PersonalProxyTag) {
 		replacer, ok := selector.(lbA.MemberReplacer)
 		if !ok {
-			return errors.Join(append(errs, errors.New("manual selector cannot replace members"))...)
+			return errors.New("manual selector cannot replace members")
 		}
 		if _, err := replacer.Replace(PersonalProxyTag); err != nil {
-			return errors.Join(append(errs, fmt.Errorf("offer personal proxy group: %w", err))...)
+			return fmt.Errorf("offer personal proxy group: %w", err)
 		}
 	} else if _, err := selector.Add(PersonalProxyTag); err != nil {
-		return errors.Join(append(errs, fmt.Errorf("offer personal proxy group: %w", err))...)
+		return fmt.Errorf("offer personal proxy group: %w", err)
 	}
+	var err error
 	if !selector.(Selector).SelectOutbound(PersonalProxyTag) {
-		errs = append(errs, ErrPersonalProxyUnavailable)
+		err = ErrPersonalProxyUnavailable
 	}
-	// The selector kept its selected tag, so it interrupted nothing.
+	// The selector keeps the same tag across friends, so it does not close the
+	// previous friend's connections itself.
 	if t.clashServer != nil {
 		t.clashServer.connTracker.closeThroughExcept(PersonalProxyTag, members)
 	}
-	return errors.Join(errs...)
+	return err
 }
 
 // createPersonalProxyLocked creates the group over members, which must not be
@@ -328,7 +300,7 @@ func (t *tunnel) withdrawPersonalProxyLocked(selector lbA.MutableOutboundGroup) 
 	}
 	if t.selectedFriend() != "" {
 		t.personalProxy.Store(nil)
-		if err := t.restartRoomsConsumersLocked(t.roomsConsumersLocked(selector)); errors.Is(err, errLibboxClosed) {
+		if err := t.restartRoomsConsumersLocked(selector); errors.Is(err, errLibboxClosed) {
 			return err
 		} else if err != nil {
 			errs = append(errs, err)
@@ -347,19 +319,13 @@ func (t *tunnel) withdrawPersonalProxyLocked(selector lbA.MutableOutboundGroup) 
 	return errors.Join(errs...)
 }
 
-// restartRoomsConsumersLocked recreates each rooms consumer in consumers under
-// its tag from the options it was loaded with, so it reconnects with the
-// tickets the narrowing now allows, and swaps the new one into every group
-// holding the old. A consumer it cannot recreate is marked stale. The caller
-// must hold t.outboundMu.
-func (t *tunnel) restartRoomsConsumersLocked(consumers []string) error {
+// restartRoomsConsumersLocked recreates each rooms consumer under its tag from
+// the options it was loaded with, so it reconnects with the tickets the
+// narrowing now allows, and swaps the new one into every group holding the
+// old. The caller must hold t.outboundMu.
+func (t *tunnel) restartRoomsConsumersLocked(selector lbA.MutableOutboundGroup) error {
 	var errs []error
-	for _, tag := range consumers {
-		if t.staleConsumers == nil {
-			t.staleConsumers = make(map[string]struct{})
-		}
-		// Cleared when the load below recreates it.
-		t.staleConsumers[tag] = struct{}{}
+	for _, tag := range t.roomsConsumersLocked(selector) {
 		raw, ok := t.optsMap.Load(tag)
 		if !ok {
 			errs = append(errs, errors.New("restart rooms consumer: options unknown"))

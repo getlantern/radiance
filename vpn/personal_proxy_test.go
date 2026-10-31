@@ -508,38 +508,32 @@ func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
 	assert.NoError(t, err, "reselecting the same friend keeps its connections")
 }
 
-// A rooms consumer that could not be restarted under the new narrowing may
-// still hold slots to the previous friend, so it stays out of the new
-// friend's group, and selecting that friend again retries the restart.
-func TestPersonalProxySelectionRetriesAFailedConsumerRestart(t *testing.T) {
-	tun, _ := startPersonalProxyTestTunnel(t, friendA, friendB)
+// A rooms consumer that could not be restarted under the new friend's
+// narrowing would carry its slots to the previous friend into the new group,
+// so the selection is refused and the previous one kept as it was; once the
+// cause clears, the same selection restarts the consumer and succeeds.
+func TestPersonalProxySelectionRefusedWhenAConsumerRestartFails(t *testing.T) {
+	tun, tickets := startPersonalProxyTestTunnel(t, friendA, friendB)
+	tickets.set(friendC, "ticket-"+friendC)
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
 	good, ok := tun.optsMap.Load(consumer)
 	require.True(t, ok)
 	tun.optsMap.Store(consumer, []byte("{"))
-	consumerOut := tun.liveOutbound(consumer)
+	consumerOut, groupOut := tun.liveOutbound(consumer), tun.liveOutbound(PersonalProxyTag)
 
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	assert.Same(t, consumerOut, tun.liveOutbound(consumer), "the restart failed")
-	assert.Equal(t, []string{friendB}, personalProxyMembers(tun), "the stale consumer stays out")
-	assert.Equal(t, []string{"ticket-" + friendB}, tun.roomTickets())
+	for _, friend := range []string{friendB, friendC} {
+		require.Error(t, tun.selectOutbound(PersonalProxySelection(friend)), friend)
+		assert.Equal(t, friendA, tun.selectedFriend(), "the previous narrowing is restored")
+		assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets())
+		assert.Same(t, groupOut, tun.liveOutbound(PersonalProxyTag), "no group for the new friend")
+		assert.ElementsMatch(t, []string{friendA, consumer}, personalProxyMembers(tun))
+		assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
+		assert.Same(t, consumerOut, tun.liveOutbound(consumer))
+	}
 
 	tun.optsMap.Store(consumer, good)
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	assert.NotSame(t, consumerOut, tun.liveOutbound(consumer), "selecting again retries the restart")
+	assert.NotSame(t, consumerOut, tun.liveOutbound(consumer), "the retry restarts the consumer")
 	assert.ElementsMatch(t, []string{friendB, consumer}, personalProxyMembers(tun))
-}
-
-// A selection left with no member once a stale consumer is excluded is
-// refused, and the previous friend's narrowing is restored.
-func TestPersonalProxySelectionRollsBackWhenOnlyAStaleConsumerRemains(t *testing.T) {
-	tun, tickets := startPersonalProxyTestTunnel(t, friendA)
-	tickets.set(friendC, "ticket-"+friendC)
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
-	tun.optsMap.Store(consumer, []byte("{"))
-
-	require.ErrorIs(t, tun.selectOutbound(PersonalProxySelection(friendC)), ErrPersonalProxyUnavailable)
-	assert.Equal(t, friendA, tun.selectedFriend())
-	assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets())
-	assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
+	assert.Equal(t, []string{"ticket-" + friendB}, tun.roomTickets())
 }

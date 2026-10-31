@@ -67,8 +67,8 @@ func (r *LocalBackend) personalProxyServer(friend string) (*servers.Server, bool
 }
 
 // checkConnectSelection refuses a connect that newly chooses a friend who is
-// not selectable. Restoring the persisted friend only needs it to be live,
-// which still holds before the ticket source is first answered.
+// not selectable. The persisted friend is exempt, so a connect can restore it
+// before the ticket source is first answered.
 func (r *LocalBackend) checkConnectSelection(tag string) error {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
 	if !ok {
