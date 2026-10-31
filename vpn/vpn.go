@@ -589,9 +589,9 @@ func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	}
 }
 
-// SelectionSavedEvent means the saved selection may have changed, so a reader
-// should read it again. It follows each successful save of the selected server
-// or auto-select, once a settings read sees the save, and carries nothing.
+// SelectionSavedEvent means the saved selection may have changed since it
+// was last read. It follows each successful save of the selected server or
+// auto-select, once a settings read sees the save.
 type SelectionSavedEvent struct {
 	events.Event
 }

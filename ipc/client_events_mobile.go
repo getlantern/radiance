@@ -50,9 +50,9 @@ func (c *Client) PersonalProxyFallbackEvents(ctx context.Context, handler func(v
 	})
 }
 
-// SelectionSavedEvents calls handler on connecting and after each save of the
-// selected server, which handler reads with SelectedServer. Blocks until ctx is
-// cancelled.
+// SelectionSavedEvents calls handler on subscribing, each time the stream
+// connects or reconnects, and after each save of the selection. Blocks until
+// ctx is cancelled.
 func (c *Client) SelectionSavedEvents(ctx context.Context, handler func(vpn.SelectionSavedEvent)) error {
 	// The bus subscription is not redundant with SSE: when the tunnel process is down,
 	// the client's fallback LocalBackend emits these events on the in-process bus.
