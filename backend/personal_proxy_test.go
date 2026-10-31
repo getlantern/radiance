@@ -419,3 +419,46 @@ func TestSelectionSavedEventsOnlyAfterASave(t *testing.T) {
 	r.persistSelection("lantern-1")
 	requireNoSave(t, saves)
 }
+
+// closableBackend is a personal proxies backend that Close can tear down.
+func closableBackend(t *testing.T) *LocalBackend {
+	t.Helper()
+	r := newPersonalProxiesBackend(t)
+	ctx, cancel := context.WithCancel(r.ctx)
+	r.ctx, r.cancel = ctx, cancel
+	return r
+}
+
+// A ticket-change reconcile delayed until after Close must not touch the
+// saved selection: on mobile a replacement backend may own it by then.
+func TestTicketReconcileStopsAtClose(t *testing.T) {
+	t.Run("after close", func(t *testing.T) {
+		r := closableBackend(t)
+		sel := vpn.PersonalProxySelection(ppFriendA)
+		require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA), false))
+		r.persistSelection(sel)
+		_, err := r.srvManager.RemoveServers([]string{ppFriendA})
+		require.NoError(t, err)
+		r.Close()
+		r.reconcilePersonalProxy()
+		assert.Equal(t, sel, selectedTag(t), "a closed backend fell back")
+	})
+	t.Run("in flight", func(t *testing.T) {
+		r := closableBackend(t)
+		r.selectionMu.Lock() // a reconcile in flight
+		closed := make(chan struct{})
+		go func() { r.Close(); close(closed) }()
+		select {
+		case <-closed:
+			r.selectionMu.Unlock()
+			t.Fatal("Close returned while a reconcile held the selection")
+		case <-time.After(200 * time.Millisecond):
+		}
+		r.selectionMu.Unlock()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close never returned")
+		}
+	})
+}

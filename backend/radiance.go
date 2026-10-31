@@ -102,6 +102,9 @@ type LocalBackend struct {
 	// changes that can withdraw it (config updates and removals), so the
 	// tunnel's choice and the persisted one cannot disagree.
 	selectionMu sync.Mutex
+	// selectionClosed is set by Close; a ticket-change reconcile then does
+	// nothing. Guarded by selectionMu.
+	selectionClosed bool
 
 	deviceID string
 
@@ -523,6 +526,11 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		// Waits out a ticket-change reconcile in flight, and turns away later
+		// ones, so none saves a selection a replacement backend may own.
+		r.selectionMu.Lock()
+		r.selectionClosed = true
+		r.selectionMu.Unlock()
 		// Stop the activity ticker and wait for it, then count the last
 		// partial interval while sharing still runs, so nothing saves
 		// after Close returns.

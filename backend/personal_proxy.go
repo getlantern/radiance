@@ -147,6 +147,9 @@ func (r *LocalBackend) fallBackLocked(tag string) {
 func (r *LocalBackend) reconcilePersonalProxy() {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
+	if r.selectionClosed {
+		return
+	}
 	r.clearSelectedIfMissingLocked()
 	if err := r.reconcileLiveHelpersLocked(); err != nil {
 		slog.Warn("Failed to reconcile helpers after the inviter tickets changed", "error", err)
