@@ -1595,11 +1595,18 @@ func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	if !ok || r.liveTunnel().SelectedPersonalProxy() == friend {
 		return true
 	}
+	// The tunnel may have been built from options captured before the friend
+	// was added, and the Connected listener's reconcile may not have run yet.
+	if err := r.reconcileLiveHelpersLocked(); err != nil {
+		slog.Warn("Failed to reconcile helpers before taking up the selected personal proxy", "error", err)
+	}
 	err := r.liveTunnel().SelectServer(tag)
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return true
 	}
-	slog.Info("Tunnel could not take up the selected personal proxy, falling back", "error", err)
+	// Redaction strips helper tags, but err is left out anyway as defense in depth.
+	slog.Info("Tunnel could not take up the selected personal proxy, falling back",
+		"unavailable", errors.Is(err, vpn.ErrPersonalProxyUnavailable))
 	r.fallBackLocked(tag)
 	return false
 }

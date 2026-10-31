@@ -615,3 +615,27 @@ func TestStartOffTheSelectedFriendSettles(t *testing.T) {
 		})
 	}
 }
+
+// A friend added and selected after a restart captured its options is
+// missing from the rebuilt tunnel until its helpers are reconciled, which
+// must happen before the restart takes the friend up rather than fall back.
+func TestRestartTakesUpAFriendAddedDuringIt(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{rebuild: true}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1", ppFriendA), true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	sel := vpn.PersonalProxySelection(ppFriendB)
+	tun.onRestart = func() {
+		tun.onRestart = nil
+		require.NoError(t, r.updateServers(directServers("lantern-1", ppFriendA, ppFriendB), true))
+		require.NoError(t, r.SelectServer(sel))
+	}
+	evts := fallbackEvents(t)
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, sel, selectedTag(t), "the friend's selection fell back")
+	assert.Equal(t, sel, tun.current())
+	assert.Equal(t, ppFriendB, tun.SelectedPersonalProxy())
+	assert.Empty(t, evts)
+}
