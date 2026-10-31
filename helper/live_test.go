@@ -36,7 +36,7 @@ func newManualTracker(now func() time.Time) *LiveTracker {
 func (lt *LiveTracker) sampleNow() {
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
-	lt.sampleAllLocked(lt.now())
+	lt.sampleAllLocked(lt.clockLocked())
 }
 
 // Traffic that moved minutes ago, with nobody reading the tracker since, is
@@ -162,6 +162,39 @@ func TestLive_BytesAfterASleepDoNotCount(t *testing.T) {
 	wall.advance(5 * time.Minute)
 	n.Add(LiveThreshold)
 	assert.False(t, liveOf(lt.Snapshot(), "pA").Connected)
+}
+
+// A pairing connected just before the device slept is disconnected on waking,
+// dated when its linger ended during the sleep, though the monotonic clock
+// barely moved; one with no connection open is dropped.
+func TestLive_SleepExpiresTheWindowAndLinger(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		mono, wall := newLiveClock(), newLiveClock()
+		lt := newManualTracker(mono.now)
+		lt.wall = wall.now
+		start := wall.t
+		if open {
+			var n atomic.Uint64
+			lt.Open("peer", "c1", "pA", n.Load)
+			n.Add(LiveThreshold)
+			lt.sampleNow()
+		} else {
+			lt.Add("pA", LiveThreshold)
+		}
+		require.True(t, liveOf(lt.Snapshot(), "pA").Connected)
+
+		mono.advance(time.Second)
+		wall.advance(time.Hour)
+		s := lt.Snapshot()
+		if !open {
+			assert.Nil(t, liveOf(s, "pA"), "nothing open")
+			continue
+		}
+		p := liveOf(s, "pA")
+		require.NotNil(t, p)
+		assert.False(t, p.Connected)
+		assert.Equal(t, start.Add(LiveWindow+LiveLinger).UnixMilli(), p.Since)
+	}
 }
 
 // Samples keep the clock's monotonic reading, so a wall-clock step does not

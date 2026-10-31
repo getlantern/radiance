@@ -186,18 +186,33 @@ func TestClient_GroupsFollowTheStrictlyNewerRuleOtherwise(t *testing.T) {
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 
 	// A newer grouped set replaces the mapping, keeping the groups it
-	// replaced until the next one.
+	// replaced until a different grouped set replaces it.
 	onlyB := []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}
 	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 500)
 	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)), "the replaced groups are kept")
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 600)
-	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)), "and dropped at the next")
+	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)), "an unchanged set keeps them")
+	onlyA2 := []PairingShortIDSet{{PairingID: pairingA, ShortIDs: []string{sidA2}}}
+	c.offerPairingShortIDs([]string{sidA2}, onlyA2, true, 700)
+	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)), "and a different one drops them")
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 
 	// An unknown response changes nothing.
 	c.offerPairingShortIDs(nil, groupsAB(), false, 0)
 	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)))
+}
+
+// A repeated response with the held groups keeps the groups they replaced,
+// which a rotation's box may still be serving.
+func TestClient_RepeatedGroupsKeepThePreviousOnes(t *testing.T) {
+	c := pairingClient(t)
+	c.offerPairingShortIDs([]string{sidA1, sidA2, sidB1}, groupsAB(), true, 100)
+	onlyB := []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}
+	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 200)
+	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 200)
+	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)))
+	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 }
 
 func TestClient_HeartbeatGroupsAtTheSameRevision(t *testing.T) {

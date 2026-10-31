@@ -52,7 +52,12 @@ type LiveTracker struct {
 	now func() time.Time
 	// wall reads the wall clock, which unlike now's monotonic reading keeps
 	// running while the device sleeps.
-	wall      func() time.Time
+	wall func() time.Time
+	// slept is how far the wall clock has run ahead of now, as while the
+	// device slept or after a forward wall-clock step.
+	slept     time.Duration
+	lastNow   time.Time
+	lastWall  time.Time
 	threshold uint64
 	window    time.Duration
 	linger    time.Duration
@@ -71,8 +76,8 @@ type liveFlow struct {
 	pairing string
 	read    func() uint64
 	last    uint64
-	// lastWall is when the flow was last sampled, on the wall clock.
-	lastWall time.Time
+	// lastAt is when the flow was last sampled, on clockLocked's clock.
+	lastAt time.Time
 }
 
 type liveSample struct {
@@ -120,11 +125,11 @@ func (t *LiveTracker) Open(owner string, key any, pairing string, read func() ui
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.clockLocked()
 	if old, ok := t.flows[key]; ok {
 		t.closeLocked(key, old, now)
 	}
-	f := &liveFlow{owner: owner, pairing: pairing, read: read, lastWall: t.wall()}
+	f := &liveFlow{owner: owner, pairing: pairing, read: read, lastAt: now}
 	if read != nil {
 		f.last = read()
 	}
@@ -148,7 +153,7 @@ func (t *LiveTracker) sampleLoop(interval time.Duration) {
 			t.mu.Unlock()
 			return
 		}
-		t.sampleAllLocked(t.now())
+		t.sampleAllLocked(t.clockLocked())
 		t.mu.Unlock()
 	}
 }
@@ -170,7 +175,7 @@ func (t *LiveTracker) Close(key any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if f, ok := t.flows[key]; ok {
-		t.closeLocked(key, f, t.now())
+		t.closeLocked(key, f, t.clockLocked())
 	}
 }
 
@@ -182,7 +187,7 @@ func (t *LiveTracker) CloseOwner(owner string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.clockLocked()
 	for key, f := range t.flows {
 		if f.owner == owner {
 			t.closeLocked(key, f, now)
@@ -198,7 +203,7 @@ func (t *LiveTracker) Add(pairing string, n uint64) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.clockLocked()
 	t.addLocked(t.pairingLocked(pairing, now), now, n)
 }
 
@@ -211,13 +216,15 @@ func (t *LiveTracker) Snapshot() LiveSnapshot {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.sampleAllLocked(t.now())
+	now := t.clockLocked()
+	t.sampleAllLocked(now)
 	for id, p := range t.pairings {
 		if !p.connected && p.flows == 0 && len(p.samples) == 0 {
 			delete(t.pairings, id)
 			continue
 		}
-		s.Pairings = append(s.Pairings, LivePairing{PairingID: id, Connected: p.connected, Since: p.since.UnixMilli()})
+		since := t.lastWall.Add(-now.Sub(p.since))
+		s.Pairings = append(s.Pairings, LivePairing{PairingID: id, Connected: p.connected, Since: since.UnixMilli()})
 	}
 	sort.Slice(s.Pairings, func(i, j int) bool { return s.Pairings[i].PairingID < s.Pairings[j].PairingID })
 	return s
@@ -230,6 +237,24 @@ func (t *LiveTracker) Reset() {
 	clear(t.pairings)
 	clear(t.flows)
 }
+
+// clockLocked returns now plus slept, so windows and lingers age through a
+// sleep.
+func (t *LiveTracker) clockLocked() time.Time {
+	now, wall := t.now(), t.wall()
+	if !t.lastNow.IsZero() {
+		// A backward wall-clock step gives a negative skew, which is ignored.
+		if skew := wall.Sub(t.lastWall) - now.Sub(t.lastNow); skew > liveSleepTolerance {
+			t.slept += skew
+		}
+	}
+	t.lastNow, t.lastWall = now, wall
+	return now.Add(t.slept)
+}
+
+// liveSleepTolerance is how far the wall clock may outrun now between reads
+// before the difference counts as sleep.
+const liveSleepTolerance = time.Second
 
 func (t *LiveTracker) pairingLocked(id string, now time.Time) *livePairing {
 	p := t.pairings[id]
@@ -254,18 +279,15 @@ func (t *LiveTracker) sampleLocked(f *liveFlow, now time.Time) {
 		return
 	}
 	cur := f.read()
-	// A backward wall-clock step gives a negative gap, which counts like a tick.
-	wall := t.wall()
-	gap := wall.Sub(f.lastWall)
-	f.lastWall = wall
+	gap := now.Sub(f.lastAt)
+	f.lastAt = now
 	if cur <= f.last {
 		return
 	}
 	n := cur - f.last
 	f.last = cur
-	// After a wall-clock gap longer than the window, as when the device
-	// slept, the bytes may all have moved before the window, so they are not
-	// counted.
+	// After a gap longer than the window, as when the device slept, the
+	// bytes may all have moved before the window, so they are not counted.
 	if gap > t.window {
 		return
 	}
