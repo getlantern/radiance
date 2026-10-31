@@ -1748,8 +1748,6 @@ func (r *LocalBackend) RestartVPN() error {
 	if err := r.liveTunnel().Restart(bOptions); err != nil {
 		return err
 	}
-	// A selection saved after bOptions was built is applied to the rebuilt
-	// tunnel.
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
 	if tag := r.savedSelectionTag(); tag != bOptions.InitialServer {
