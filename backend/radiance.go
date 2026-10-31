@@ -1081,8 +1081,8 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
-// liveTunnel is the part of vpn.VPNClient that config updates and server
-// selections change the running tunnel through.
+// liveTunnel is the part of vpn.VPNClient that config updates, server
+// selections and restarts change the running tunnel through.
 type liveTunnel interface {
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
@@ -1739,10 +1739,12 @@ func (r *LocalBackend) DisconnectVPN() error {
 	return r.vpnClient.Disconnect()
 }
 
+// RestartVPN rebuilds the tunnel on the saved selection, including one saved
+// during the restart.
 func (r *LocalBackend) RestartVPN() error {
 	bOptions := r.restartBoxOptions()
-	// Not held across the restart: a platform restart may reconnect through
-	// this backend, which takes selectionMu.
+	// selectionMu is not held across the restart: a platform restart may
+	// reconnect through this backend, which takes it.
 	if err := r.liveTunnel().Restart(bOptions); err != nil {
 		return err
 	}
@@ -1758,8 +1760,6 @@ func (r *LocalBackend) RestartVPN() error {
 	return nil
 }
 
-// restartBoxOptions is getBoxOptions starting on the saved selection (see
-// savedSelectionTag).
 func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = r.savedSelectionTag()
