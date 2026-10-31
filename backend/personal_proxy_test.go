@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -414,6 +415,9 @@ func TestSelectionSavedEventsOnlyAfterASave(t *testing.T) {
 	require.Error(t, r.SelectServer("lantern-unknown"))
 	requireNoSave(t, saves)
 
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
 	require.NoError(t, os.Chmod(dataDir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
 	r.persistSelection("lantern-1")
