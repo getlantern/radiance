@@ -1524,6 +1524,8 @@ func newPersonalProxiesBackendIn(t *testing.T, dataDir string) *LocalBackend {
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(dataDir))
+	// A connect writes the tunnel's files under the data path.
+	require.NoError(t, settings.Set(settings.DataPathKey, dataDir))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
