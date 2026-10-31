@@ -53,7 +53,7 @@ type LiveTracker struct {
 	// wall reads the wall clock, which unlike now's monotonic reading keeps
 	// running while the device sleeps.
 	wall func() time.Time
-	// slept is how far the wall clock has run ahead of now, as while the
+	// slept totals the wall clock's forward jumps past now, as while the
 	// device slept or after a forward wall-clock step.
 	slept     time.Duration
 	lastNow   time.Time
@@ -253,7 +253,8 @@ func (t *LiveTracker) clockLocked() time.Time {
 }
 
 // liveSleepTolerance is how far the wall clock may outrun now between reads
-// before the difference counts as sleep.
+// before the difference counts as sleep. Smaller would count ordinary skew
+// between the two clocks as sleep; a shorter sleep barely moves the window.
 const liveSleepTolerance = time.Second
 
 func (t *LiveTracker) pairingLocked(id string, now time.Time) *livePairing {
@@ -303,8 +304,6 @@ func (t *LiveTracker) addLocked(p *livePairing, now time.Time, n uint64) {
 	t.evaluateLocked(p, now)
 }
 
-// add buckets by elapsed time from the newest sample's start, keeping the
-// clock's monotonic reading, so a backward wall-clock step moves no sample.
 func (p *livePairing) add(now time.Time, n uint64) {
 	if last := len(p.samples) - 1; last >= 0 && now.Sub(p.samples[last].at) < time.Second {
 		p.samples[last].n += n
