@@ -253,11 +253,10 @@ func (m *connTracker) closeMatchedTo(tag string) {
 	}
 }
 
-// closeThroughExcept closes the connections routed through group whose leaf
-// outbound is not in keep.
-func (m *connTracker) closeThroughExcept(group string, keep []string) {
+// closeThrough closes the connections routed through group.
+func (m *connTracker) closeThrough(group string) {
 	for _, r := range m.conns.Iter() {
-		if slices.Contains(r.chain, group) && !slices.Contains(keep, r.outbound) {
+		if slices.Contains(r.chain, group) {
 			m.closeRecord(r)
 		}
 	}

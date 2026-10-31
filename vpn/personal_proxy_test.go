@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -442,10 +444,11 @@ func TestPersonalProxyGroupDoesNotWaitOnAnUnconnectedConsumer(t *testing.T) {
 	}
 }
 
-// Switching friends keeps the manual selector on the same group tag, so the
-// selector interrupts nothing; a connection the previous friend's direct
-// outbound carries must still be closed, while new ones go to the new friend.
-func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
+// startRoutedPersonalProxyTestTunnel starts a test tunnel with a mixed
+// inbound, and returns it with a dial that opens an echoed connection through
+// that inbound.
+func startRoutedPersonalProxyTestTunnel(t *testing.T) (*tunnel, func() net.Conn) {
+	t.Helper()
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = echo.Close() })
@@ -463,49 +466,141 @@ func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
 	port := uint16(inbound.Addr().(*net.TCPAddr).Port)
 	require.NoError(t, inbound.Close())
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
-	standInRoomsConsumer(t)
 	tun := startPersonalProxiesTestTunnelWith(t, []O.Inbound{{Type: C.TypeMixed, Tag: "mixed-in",
 		Options: &O.HTTPMixedInboundOptions{ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port}}}})
-	// No rooms tickets: each friend's group holds only its direct outbound.
-	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
-	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(friendA), directServer(friendB)}}))
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
-
 	client := socks.NewClient(N.SystemDialer, M.ParseSocksaddrHostPort("127.0.0.1", port), socks.Version5, "", "")
 	dial := func() net.Conn {
+		t.Helper()
 		conn, err := client.DialContext(t.Context(), N.NetworkTCP, M.ParseSocksaddr(echo.Addr().String()))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = conn.Close() })
-		_, err = conn.Write([]byte("ping"))
-		require.NoError(t, err)
-		buf := make([]byte, 4)
-		_, err = io.ReadFull(conn, buf)
-		require.NoError(t, err)
+		requireEcho(t, conn)
 		return conn
 	}
-	viaA := dial()
+	return tun, dial
+}
+
+func requireEcho(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_, err := conn.Write([]byte("ping"))
+	require.NoError(t, err)
+	_, err = io.ReadFull(conn, make([]byte, 4))
+	require.NoError(t, err)
+}
+
+// requireClosed requires conn to be closed rather than left open.
+func requireClosed(t *testing.T, conn net.Conn, msg string) {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	var err error
+	for err == nil {
+		_, err = conn.Read(make([]byte, 64))
+	}
+	var netErr net.Error
+	assert.False(t, errors.As(err, &netErr) && netErr.Timeout(), msg)
+}
+
+// awaitRoutedLeaf waits for a connection through the personal proxy group
+// recorded under leaf.
+func awaitRoutedLeaf(t *testing.T, tun *tunnel, leaf string) {
+	t.Helper()
 	require.Eventually(t, func() bool {
 		for _, c := range tun.clashServer.connTracker.activeConnections() {
-			if slices.Contains(c.ChainList, PersonalProxyTag) {
+			if slices.Contains(c.ChainList, PersonalProxyTag) && strings.HasSuffix(c.Outbound, "/"+leaf) {
 				return true
 			}
 		}
 		return false
-	}, 2*time.Second, 10*time.Millisecond, "the connection is routed through the friend's group")
+	}, 2*time.Second, 10*time.Millisecond, "a connection through the group recorded under %s", leaf)
+}
+
+// Switching friends keeps the manual selector on the same group tag, so the
+// selector interrupts nothing; connections through the previous friend's
+// group must still be closed, while reselecting the same friend keeps its
+// connections.
+func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
+	standInRoomsConsumer(t)
+	tun, dial := startRoutedPersonalProxyTestTunnel(t)
+	// No rooms tickets: each friend's group holds only its direct outbound.
+	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{directServer(friendA), directServer(friendB)}}))
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	viaA := dial()
+	awaitRoutedLeaf(t, tun, friendA)
 
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	require.NoError(t, viaA.SetReadDeadline(time.Now().Add(2*time.Second)))
-	_, err = viaA.Read(make([]byte, 1))
-	require.Error(t, err)
-	var netErr net.Error
-	assert.False(t, errors.As(err, &netErr) && netErr.Timeout(), "the connection through the previous friend was left open")
+	requireClosed(t, viaA, "the connection through the previous friend was left open")
 
 	viaB := dial()
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	_, err = viaB.Write([]byte("pong"))
+	requireEcho(t, viaB)
+}
+
+// connectProxy serves HTTP CONNECT, standing in for a rooms consumer that
+// carries connections.
+func connectProxy(t *testing.T) uint16 {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	_, err = io.ReadFull(viaB, make([]byte, 4))
-	assert.NoError(t, err, "reselecting the same friend keeps its connections")
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				req, err := http.ReadRequest(br)
+				if err != nil || req.Method != http.MethodConnect {
+					return
+				}
+				up, err := net.Dial("tcp", req.Host)
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				if _, err := c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
+					return
+				}
+				go func() { _, _ = io.Copy(up, br) }()
+				_, _ = io.Copy(c, up)
+			}()
+		}
+	}()
+	return uint16(l.Addr().(*net.TCPAddr).Port)
+}
+
+// A connection is recorded under the member the group had selected before it
+// dialed, so one the friend's direct outbound carried after the rooms
+// consumer failed stays recorded under the consumer, which the next friend's
+// group also holds. A switch sees only that record, so here the consumer
+// carries the connection.
+func TestPersonalProxySwitchClosesConnectionsRecordedUnderTheConsumer(t *testing.T) {
+	prev := roomsConsumerType
+	roomsConsumerType = C.TypeHTTP
+	t.Cleanup(func() { roomsConsumerType = prev })
+	tun, dial := startRoutedPersonalProxyTestTunnel(t)
+	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{
+		friendA: {"ticket-" + friendA}, friendB: {"ticket-" + friendB},
+	}}
+	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{
+		{Tag: consumer, Type: C.TypeHTTP, Options: O.Outbound{Tag: consumer, Type: C.TypeHTTP,
+			Options: &O.HTTPOutboundOptions{ServerOptions: O.ServerOptions{Server: "127.0.0.1", ServerPort: connectProxy(t)}}}},
+		directServer(friendB),
+	}}))
+	// Friend A is rooms-only, so its group's only member is the consumer.
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	awaitFirstProbe(t, tun, consumer)
+	require.Eventually(t, func() bool { return tun.personalProxyGroup().(adapter.OutboundGroup).Now() == consumer },
+		5*time.Second, 10*time.Millisecond)
+	viaA := dial()
+	awaitRoutedLeaf(t, tun, consumer)
+
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+	require.Contains(t, personalProxyMembers(tun), consumer, "the next group holds the consumer too")
+	requireClosed(t, viaA, "a connection recorded under the consumer was left open")
 }
 
 // A rooms consumer that could not be restarted under the new friend's

@@ -146,10 +146,10 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 }
 
 // selectPersonalProxyLocked narrows the rooms tickets to friend, gives the
-// tunnel friend's group and selects it, closing connections through members
-// the group no longer holds. A change of friend restarts the rooms consumers,
-// whose slots to other friends would otherwise outlive the narrowing; if a
-// restart fails, the selection is refused and the previous narrowing
+// tunnel friend's group and selects it. A change of friend restarts the rooms
+// consumers, whose slots to other friends would otherwise outlive the
+// narrowing, and closes every connection through the previous friend's group;
+// if a restart fails, the selection is refused and the previous narrowing
 // restored. The caller must hold t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if t.mutGrpMgr == nil || t.outboundMgr == nil {
@@ -164,7 +164,8 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if len(members) == 0 {
 		return ErrPersonalProxyUnavailable
 	}
-	if prev := t.personalProxy.Load(); t.selectedFriend() != friend {
+	changed := t.selectedFriend() != friend
+	if prev := t.personalProxy.Load(); changed {
 		t.personalProxy.Store(&friend)
 		if err := t.restartRoomsConsumersLocked(selector); err != nil {
 			if errors.Is(err, errLibboxClosed) {
@@ -199,9 +200,11 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 		err = ErrPersonalProxyUnavailable
 	}
 	// The selector keeps the same tag across friends, so it does not close the
-	// previous friend's connections itself.
-	if t.clashServer != nil {
-		t.clashServer.connTracker.closeThroughExcept(PersonalProxyTag, members)
+	// previous friend's connections itself. A connection is recorded under the
+	// member selected before it dialed, not the one that carried it, so none
+	// is kept.
+	if changed && t.clashServer != nil {
+		t.clashServer.connTracker.closeThrough(PersonalProxyTag)
 	}
 	return err
 }
