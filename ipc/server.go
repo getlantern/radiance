@@ -96,6 +96,7 @@ const (
 	helperActivityEndpoint              = "/helper/activity"
 	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
 	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
+	helperLiveEndpoint                  = "/helper/live"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -306,6 +307,8 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// inviter in exported telemetry.
 	mux.HandleFunc("GET "+helperPersonalProxiesEndpoint, s.helperPersonalProxiesHandler)
 	mux.HandleFunc("GET "+helperPersonalProxyFallbackEndpoint, s.helperPersonalProxyFallbackHandler)
+	// Not traced either: a traced poll would mark the device as a volunteer.
+	mux.HandleFunc("GET "+helperLiveEndpoint, s.helperLiveHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -1664,4 +1667,8 @@ func (s *localapi) helperPersonalProxyFallbackHandler(w http.ResponseWriter, r *
 			return
 		}
 	}
+}
+
+func (s *localapi) helperLiveHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperLive())
 }

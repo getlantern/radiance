@@ -34,6 +34,10 @@ type PeerBytes struct {
 	IP   string `json:"ip"`
 	Down uint64 `json:"down"`
 	Up   uint64 `json:"up"`
+	// Pairing is the helper pairing of this client's latest connection, ""
+	// for the pool or not yet attributed. It identifies a friend
+	// relationship and must never be logged.
+	Pairing string `json:"pairing,omitempty"`
 }
 
 // relayTally is one client IP's bytes: closed holds its finished
@@ -42,6 +46,11 @@ type relayTally struct {
 	closedDown, closedUp uint64
 	open                 int
 	endedAt              time.Time
+	// pairing is the pairing of the client's latest connection, and
+	// latest that connection's counter, so a connection attributed late
+	// relabels the client only if it is still the latest.
+	pairing string
+	latest  *peerconn.Counter
 }
 
 // relayConn is an open connection's source and, once a later session has
@@ -186,6 +195,12 @@ func (r *relayStats) record(state int, source string, bytes *peerconn.Counter) {
 // recordFor is record for the session with generation gen; an event from any
 // other session is ignored.
 func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peerconn.Counter) {
+	r.recordPairingFor(gen, state, source, "", bytes)
+}
+
+// recordPairingFor is recordFor for a connection that came through pairing,
+// "" for the pool.
+func (r *relayStats) recordPairingFor(gen uint64, state int, source, pairing string, bytes *peerconn.Counter) {
 	if bytes == nil {
 		return
 	}
@@ -219,6 +234,8 @@ func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peer
 			r.ips[ip] = t
 		}
 		t.open++
+		t.pairing = pairing
+		t.latest = bytes
 	case state < 0:
 		rc, ok := r.conns[bytes]
 		if !ok || !rc.retiredAt.IsZero() {
@@ -229,6 +246,20 @@ func (r *relayStats) recordFor(gen uint64, state int, source string, bytes *peer
 		if t := r.ips[ip]; t != nil {
 			t.release(r.clock())
 		}
+	}
+}
+
+// setPairing labels an open connection's client with pairing, for a
+// connection attributed after it was accepted.
+func (r *relayStats) setPairing(bytes *peerconn.Counter, pairing string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rc, ok := r.conns[bytes]
+	if !ok || !rc.retiredAt.IsZero() {
+		return
+	}
+	if t := r.ips[ipOf(rc.source)]; t != nil && t.latest == bytes {
+		t.pairing = pairing
 	}
 }
 
@@ -260,7 +291,7 @@ func (r *relayStats) snapshot(running bool) Snapshot {
 	}
 	for ip, t := range r.ips {
 		pb := live[ip]
-		s.PeerBytes = append(s.PeerBytes, PeerBytes{IP: ip, Down: t.closedDown + pb.Down, Up: t.closedUp + pb.Up})
+		s.PeerBytes = append(s.PeerBytes, PeerBytes{IP: ip, Down: t.closedDown + pb.Down, Up: t.closedUp + pb.Up, Pairing: t.pairing})
 	}
 	sort.Strings(s.Peers)
 	sort.Slice(s.PeerBytes, func(i, j int) bool { return s.PeerBytes[i].IP < s.PeerBytes[j].IP })

@@ -2036,6 +2036,12 @@ func (r *LocalBackend) HelperActivity() helper.Activity {
 	return r.helperActivity.Today()
 }
 
+// HelperLive is whether each helper pairing's friend is connected to this
+// volunteer now.
+func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
+	return helper.DefaultLive.Snapshot()
+}
+
 // SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
 // IPC route, which cannot build a full backend.
 func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {

@@ -238,6 +238,10 @@ type stubServer struct {
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
 	lastVerifyReq      atomic.Value // LifecycleRequest
+
+	// heartbeatShortIDSets, when set, is sent as pairing_short_id_sets with
+	// heartbeatShortIDs.
+	heartbeatShortIDSets atomic.Pointer[[]PairingShortIDSet]
 }
 
 func newStubServer(t *testing.T) *stubServer {
@@ -313,7 +317,11 @@ func newStubServer(t *testing.T) *stubServer {
 			return
 		}
 		if ids != nil {
-			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)})
+			resp := HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)}
+			if sets := s.heartbeatShortIDSets.Load(); sets != nil {
+				resp.PairingShortIDSets = *sets
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		w.WriteHeader(http.StatusOK)

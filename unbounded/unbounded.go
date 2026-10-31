@@ -38,11 +38,13 @@ import (
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/broflake/clientcore"
+	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 )
 
 // ConnectionEvent fires every time a consumer (i.e. a censored client
@@ -206,6 +208,9 @@ type unboundedManager struct {
 	retired []retiredRun
 	// now overrides time.Now for peer retention tests.
 	now func() time.Time
+	// live receives slots serving helper pairings. Nil means
+	// helper.DefaultLive.
+	live *helper.LiveTracker
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -780,6 +785,13 @@ func (m *unboundedManager) startLocked() {
 				Source:    addrStr,
 				Timestamp: time.Now().UnixMilli(),
 			})
+		}
+
+		// broflake calls this just after OnConnectionChangeFunc, with the
+		// helper pairing the consumer came through, which the producer has
+		// checked against its own tickets. The pairing is never logged.
+		bfOpt.OnConnectionChangeInfoFunc = func(state int, workerIdx int, info common.ConsumerInfo) {
+			m.recordPairing(ctx, slots, state, workerIdx, info.Pairing)
 		}
 
 		// Downstream chunks fire per chunk on broflake's data path, so the
