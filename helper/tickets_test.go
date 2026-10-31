@@ -652,8 +652,7 @@ func TestSourceInviterFor(t *testing.T) {
 
 // InviterFor must read the tickets and the pairings they came with together:
 // a fetch landing between separate reads pairs the tickets from before it
-// with the answer it brings, which looks like a pairing with no ticket. This
-// guards against a regression to separate reads.
+// with the answer it brings, which looks like a pairing with no ticket.
 func TestSourceInviterForReadsOneSnapshot(t *testing.T) {
 	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
 	release := make(chan struct{})
