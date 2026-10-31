@@ -315,3 +315,25 @@ func TestPersonalProxyStatus(t *testing.T) {
 		{Tag: ppFriendB, Rooms: true},
 	}, r.PersonalProxyStatus())
 }
+
+// A connect may restore the persisted friend before its tickets are known,
+// but a friend it newly chooses must be selectable, as SelectServer requires.
+func TestConnectRefusesANewFriendWithoutAMember(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	r.helperTickets = helper.NewSource(r.ctx, func(ctx context.Context) (helper.Tickets, error) {
+		select {
+		case <-block:
+		case <-ctx.Done():
+		}
+		return helper.Tickets{}, ctx.Err()
+	})
+	persisted, fresh := vpn.PersonalProxySelection(ppFriendA), vpn.PersonalProxySelection(ppFriendB)
+	r.persistSelection(persisted)
+	require.Equal(t, persisted, selectedTag(t))
+
+	require.ErrorIs(t, r.ConnectVPN(t.Context(), fresh), vpn.ErrPersonalProxyUnavailable)
+	assert.NoError(t, r.checkConnectSelection(persisted), "the persisted friend is restored")
+}

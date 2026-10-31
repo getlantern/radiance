@@ -2,12 +2,14 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
@@ -62,6 +64,25 @@ func (r *LocalBackend) personalProxyServer(friend string) (*servers.Server, bool
 		return nil, false
 	}
 	return &servers.Server{Tag: vpn.PersonalProxySelection(friend), Type: lbC.TypeMutableURLTest}, true
+}
+
+// checkConnectSelection refuses a connect that newly chooses a friend who is
+// not selectable. Restoring the persisted friend only needs it to be live,
+// which still holds before the ticket source is first answered.
+func (r *LocalBackend) checkConnectSelection(tag string) error {
+	friend, ok := vpn.ParsePersonalProxySelection(tag)
+	if !ok {
+		return nil
+	}
+	var persisted servers.Server
+	if err := settings.GetStruct(settings.SelectedServerKey, &persisted); err == nil &&
+		!settings.GetBool(settings.AutoConnectKey) && persisted.Tag == tag {
+		return nil
+	}
+	if !r.friendReach(friend).selectable() {
+		return fmt.Errorf("failed to connect: %w", vpn.ErrPersonalProxyUnavailable)
+	}
+	return nil
 }
 
 // PersonalProxyStatus returns the status of every friend this device invited
