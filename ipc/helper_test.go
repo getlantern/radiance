@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +20,9 @@ import (
 	semconv "github.com/getlantern/semconv"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
+	"github.com/getlantern/radiance/vpn"
 )
 
 func serveHelper(t *testing.T, api *localapi, method, path string, body any) *httptest.ResponseRecorder {
@@ -129,6 +133,14 @@ func TestHelperActivityClientRoundTrip(t *testing.T) {
 	assert.Zero(t, a.RelayedBytes)
 }
 
+func TestPersonalProxyStatusClientRoundTrip(t *testing.T) {
+	c := newClient()
+	c.http.Transport = localTransport{api: newLocalAPI(&backend.LocalBackend{}, false)}
+	statuses, err := c.PersonalProxyStatus(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, statuses)
+}
+
 func TestHelperLiveClientRoundTrip(t *testing.T) {
 	helper.DefaultLive.Reset()
 	t.Cleanup(helper.DefaultLive.Reset)
@@ -202,9 +214,42 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	assert.False(t, ok, "relay")
 	_, ok = routeOf(http.MethodGet, helperActivityEndpoint)
 	assert.False(t, ok, "activity")
+	_, ok = routeOf(http.MethodGet, helperPersonalProxiesEndpoint)
+	assert.False(t, ok, "personal proxies")
 	_, ok = routeOf(http.MethodGet, helperLiveEndpoint)
 	assert.False(t, ok, "live")
 	route, ok := routeOf(http.MethodGet, "/not-a-route")
 	assert.True(t, ok)
 	assert.Equal(t, "/not-a-route", route)
+}
+
+// A connection gets one event as soon as it subscribes, covering a save made
+// before it connected, and then one per save.
+func TestSelectionEventsStream(t *testing.T) {
+	events.Emit(vpn.SelectionSavedEvent{}) // a save no one hears
+	srv := httptest.NewServer(newLocalAPI(&backend.LocalBackend{}, false))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+serverSelectionEventsEndpoint, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	body := bufio.NewReader(resp.Body)
+	requireEvent := func() {
+		t.Helper()
+		line, err := body.ReadString('\n')
+		require.NoError(t, err)
+		data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
+		require.True(t, ok, line)
+		require.NoError(t, json.Unmarshal([]byte(data), &vpn.SelectionSavedEvent{}))
+		_, err = body.ReadString('\n')
+		require.NoError(t, err)
+	}
+	requireEvent()
+
+	events.Emit(vpn.SelectionSavedEvent{})
+	requireEvent()
 }

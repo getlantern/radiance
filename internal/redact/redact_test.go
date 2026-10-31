@@ -91,6 +91,22 @@ func TestHelperRedactsThePersonalProxiesTag(t *testing.T) {
 	assert.True(t, NamesHelper(PersonalProxiesTag))
 }
 
+func TestHelperRedactsThePersonalProxyTag(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"group logger", "outbound/mutableurltest[personal-proxy]: dial tcp 203.0.113.7:443: refused",
+			"outbound/mutableurltest[helper]: dial tcp <redacted>: refused"},
+		{"selection", "Selected server tag=personal-proxy:helper-0123456789ab", "Selected server tag=helper:helper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Helper(tc.in))
+			assert.Equal(t, []byte(tc.want), HelperBytes([]byte(tc.in)))
+		})
+	}
+	assert.True(t, NamesHelper(PersonalProxyTag))
+	assert.Equal(t, "helper", Tag(PersonalProxyTag))
+	assert.Equal(t, "helper / helper", Tag("personal-proxy / personal-proxies"))
+}
+
 func TestTagRedactsHelperAndGroupTags(t *testing.T) {
 	assert.Equal(t, "helper", Tag(PersonalProxiesTag))
 	assert.Equal(t, "helper", Tag(tag))

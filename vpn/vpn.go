@@ -89,6 +89,11 @@ type VPNClient struct {
 // Inviter is called on the signaling path, so it must not block.
 type InviterTickets interface {
 	Inviter() []string
+	// InviterFor returns the inviter tickets for the pairing whose outbound
+	// tag is tag, and whether the source has been answered: until then, no
+	// tickets means only that none are known yet. Like Inviter, it is called
+	// on the signaling path and must not block.
+	InviterFor(tag string) (tickets []string, answered bool)
 }
 
 // SetInviterTickets sets the inviter ticket source for tunnels started from
@@ -102,7 +107,7 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 
 // newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
 func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
-	return &tunnel{
+	t := &tunnel{
 		dataPath:             boxOptions.BasePath,
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
 		initialLanternTags:   boxOptions.LanternServerTags,
@@ -110,6 +115,19 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
 	}
+	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
+		t.personalProxy.Store(&friend)
+	}
+	return t
+}
+
+// withPersonalProxyRooms records in boxOptions whether a rooms consumer may
+// reach the friend its InitialServer selects. Caller holds c.mu.
+func (c *VPNClient) withPersonalProxyRooms(boxOptions BoxOptions) BoxOptions {
+	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
+		boxOptions.personalProxyRooms = roomsReachable(c.inviterTickets, friend)
+	}
+	return boxOptions
 }
 
 // PlatformInterface defines the methods to interact with platform-specific services
@@ -178,6 +196,7 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 	}
 
 	c.logger.Info("Connecting VPN")
+	boxOptions = c.withPersonalProxyRooms(boxOptions)
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
@@ -289,6 +308,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if err := c.close(); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
+	boxOptions = c.withPersonalProxyRooms(boxOptions)
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
@@ -399,7 +419,7 @@ func (c *VPNClient) SelectServer(tag string) error {
 	}
 	t := c.tunnel
 	if tag == AutoSelectTag || tag == "" {
-		return c.tunnel.selectMode(AutoSelectTag)
+		return t.selectAuto()
 	}
 
 	c.logger.Info("Selecting server", "tag", tag)
@@ -408,6 +428,17 @@ func (c *VPNClient) SelectServer(tag string) error {
 		return fmt.Errorf("failed to select server %s: %w", tag, err)
 	}
 	return nil
+}
+
+// PersonalProxyMember reports what the running tunnel holds for the friend
+// whose direct outbound tag is friend; the zero value while no tunnel is up.
+func (c *VPNClient) PersonalProxyMember(friend string) PersonalProxyMember {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.Status() != Connected {
+		return PersonalProxyMember{}
+	}
+	return c.tunnel.personalProxyMember(friend)
 }
 
 func (c *VPNClient) UpdateOutbounds(list servers.ServerList) error {
@@ -556,6 +587,24 @@ func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	if tracker != nil {
 		tracker.SetObserver(observer)
 	}
+}
+
+// SelectionSavedEvent means the saved selection may have changed since it
+// was last read. It follows each successful save of the selected server or
+// auto-select, once a settings read sees the save.
+type SelectionSavedEvent struct {
+	events.Event
+}
+
+// PersonalProxyFallbackEvent is emitted when the selected friend's personal
+// proxy lost its last member and the selection fell back.
+type PersonalProxyFallbackEvent struct {
+	events.Event
+	// Tag is the friend's direct outbound tag.
+	Tag string `json:"tag"`
+	// Fallback is the selection now in effect: PersonalProxiesTag or
+	// AutoSelectTag.
+	Fallback string `json:"fallback"`
 }
 
 // AutoSelectedEvent is emitted when the auto-selected server changes.
