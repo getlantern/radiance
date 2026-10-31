@@ -687,3 +687,35 @@ func TestSourceInviterTagsFetches(t *testing.T) {
 	require.Eventually(t, func() bool { return len(src.InviterTags()) == 1 }, time.Second, time.Millisecond)
 	assert.Equal(t, int32(1), f.calls.Load())
 }
+
+// A pairing whose tickets expired and are then renewed changes no pairing,
+// but it becomes usable again, which a holder of InviterFor must hear about;
+// a renewal of tickets that were still usable must not fire.
+func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	answer := Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: time.Minute}
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, clock := newTestSource(f)
+	var changes atomic.Int32
+	src.SetOnInviterChange(func() { changes.Add(1) })
+	fetch := func() {
+		src.Invalidate()
+		f.results <- fetchResult{t: answer}
+		src.Inviter()
+		settle(t, src)
+	}
+	fetch()
+	require.Equal(t, int32(1), changes.Load(), "the first answer")
+
+	fetch()
+	assert.Equal(t, int32(1), changes.Load(), "a renewal of usable tickets")
+
+	clock.add(2 * time.Minute)
+	f.results <- fetchResult{t: answer}
+	tickets, _ := src.InviterFor(tagA)
+	require.Empty(t, tickets, "expired, and due for renewal")
+	settle(t, src)
+	tickets, _ = src.InviterFor(tagA)
+	require.NotEmpty(t, tickets, "renewed")
+	assert.Equal(t, int32(2), changes.Load(), "expired tickets renewed")
+}

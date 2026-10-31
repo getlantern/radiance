@@ -242,6 +242,25 @@ func (s *Source) InviterTags() []string {
 	return tags
 }
 
+// usableTagsLocked returns the tags in s.pairings whose pairing has an inviter
+// ticket unexpired at now. The caller must hold s.mu.
+func (s *Source) usableTagsLocked(now time.Time) map[string]bool {
+	held := make(map[string]bool, len(s.inviter))
+	for _, h := range s.inviter {
+		if now.Before(h.expires) {
+			_, p := helperticket.Peek(h.ticket)
+			held[p] = true
+		}
+	}
+	usable := make(map[string]bool, len(s.pairings))
+	for tag, pairing := range s.pairings {
+		if held[pairing] {
+			usable[tag] = true
+		}
+	}
+	return usable
+}
+
 // inviterSnapshot reads the current inviter tickets, starting a fetch if one
 // is due, together with the pairings and answered state they came with. The
 // map must not be modified.
@@ -251,9 +270,9 @@ func (s *Source) inviterSnapshot() (tickets []string, pairings map[string]string
 	return s.readLocked(helperticket.RoleInviter, false), s.pairings, s.answered
 }
 
-// SetOnInviterChange sets f to run after a fetch changes the inviter pairings
-// InviterFor knows, or first answers. f runs on the fetch's goroutine, with
-// no lock held.
+// SetOnInviterChange sets f to run after a fetch first answers, or changes the
+// inviter pairings InviterFor knows or which of them have an unexpired
+// ticket. f runs on the fetch's goroutine, with no lock held.
 func (s *Source) SetOnInviterChange(f func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -325,7 +344,7 @@ func (s *Source) refresh(gen uint64) {
 	s.mu.Lock()
 	now := s.now()
 	s.fetching = false
-	prevPairings, prevAnswered := s.pairings, s.answered
+	prevPairings, prevAnswered, prevUsable := s.pairings, s.answered, s.usableTagsLocked(now)
 	switch {
 	case errors.Is(err, ErrDisabled):
 		s.inviter, s.volunteer = nil, nil
@@ -355,7 +374,8 @@ func (s *Source) refresh(gen uint64) {
 		s.due = time.Time{}
 	}
 	var onChange func()
-	if s.answered != prevAnswered || !maps.Equal(s.pairings, prevPairings) {
+	if s.answered != prevAnswered || !maps.Equal(s.pairings, prevPairings) ||
+		!maps.Equal(s.usableTagsLocked(now), prevUsable) {
 		onChange = s.onChange
 	}
 	s.mu.Unlock()
