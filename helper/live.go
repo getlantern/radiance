@@ -249,15 +249,18 @@ func (t *LiveTracker) sampleLocked(f *liveFlow, now time.Time) {
 		return
 	}
 	cur := f.read()
-	gap := now.Sub(f.lastAt)
+	// On the wall clock: the monotonic clock stops while the device sleeps.
+	// A backward step gives a negative gap, which counts like a tick.
+	gap := now.Round(0).Sub(f.lastAt.Round(0))
 	f.lastAt = now
 	if cur <= f.last {
 		return
 	}
 	n := cur - f.last
 	f.last = cur
-	// After a gap longer than the window, as when the device slept, the
-	// bytes may all have moved before the window, so they are not counted.
+	// After a wall-clock gap longer than the window, as when the device
+	// slept, the bytes may all have moved before the window, so they are not
+	// counted.
 	if gap > t.window {
 		return
 	}

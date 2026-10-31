@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,8 +129,10 @@ func TestLive_BurstAfterTheLingerReconnects(t *testing.T) {
 	assert.Equal(t, clk.t.UnixMilli(), p.Since, "added")
 }
 
-// Bytes read after a sampling gap longer than the window, as after the
-// device slept, may have moved before the window, so they do not count.
+// Bytes read after a wall-clock sampling gap longer than the window, as
+// after the device slept, may have moved before the window, so they do not
+// count. The gap is measured on the wall clock because the monotonic clock
+// stops during sleep.
 func TestLive_BytesAfterALongGapDoNotCount(t *testing.T) {
 	clk := newLiveClock()
 	lt := newManualTracker(clk.now)
@@ -143,6 +146,37 @@ func TestLive_BytesAfterALongGapDoNotCount(t *testing.T) {
 	clk.advance(30 * time.Second)
 	n.Add(LiveThreshold)
 	assert.True(t, liveOf(lt.Snapshot(), "pA").Connected, "after an ordinary gap")
+}
+
+// shiftWallOnly moves t's wall clock by d, a whole number of seconds,
+// leaving its monotonic reading alone, as a device sleep does. It relies on
+// time.Time's layout, which the caller checks.
+func shiftWallOnly(t time.Time, d time.Duration) time.Time {
+	tt := (*struct {
+		wall uint64
+		ext  int64
+		loc  *time.Location
+	})(unsafe.Pointer(&t))
+	tt.wall += uint64(d/time.Second) << 30
+	return t
+}
+
+// After a sleep the monotonic clock has moved one tick and the wall clock
+// minutes: the bytes read then do not count.
+func TestLive_BytesAfterASleepDoNotCount(t *testing.T) {
+	cur := time.Now()
+	lt := newManualTracker(func() time.Time { return cur })
+	var n atomic.Uint64
+	lt.Open("peer", "c1", "pA", n.Load)
+	lt.sampleNow()
+
+	before := cur
+	cur = shiftWallOnly(cur.Add(time.Second), 5*time.Minute)
+	require.Equal(t, time.Second, cur.Sub(before), "monotonic: one tick")
+	require.Equal(t, 5*time.Minute+time.Second, cur.Round(0).Sub(before.Round(0)), "wall: minutes")
+
+	n.Add(LiveThreshold)
+	assert.False(t, liveOf(lt.Snapshot(), "pA").Connected)
 }
 
 // Samples keep the clock's monotonic reading, so a wall-clock step does not
