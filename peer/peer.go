@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"runtime/debug"
@@ -264,14 +265,17 @@ type Client struct {
 	// pairingConfirmedAt is when a known set was last accepted. A rotation
 	// that reuses the record keeps it.
 	pairingConfirmedAt time.Time
-	// pairingByShortID maps each short ID of the newest grouped set pushed
-	// to the inbound to its pairing ID. Written under c.mu, read lock-free
-	// by the connection listener.
+	// pairingByShortID maps a short ID to its pairing ID for every grouped
+	// set a serving box may accept: heldGroups, prevGroups, and
+	// pendingGroups while a push of them is in flight. Written under c.mu,
+	// read lock-free by the connection listener.
 	pairingByShortID atomic.Pointer[map[[8]byte]string]
-	// pendingGroups are the recorded set's groups while the box does not
-	// hold that set yet. They replace pairingByShortID only once it does,
-	// so the map never drops IDs the inbound still accepts. Guarded by
-	// c.mu.
+	// heldGroups are the groups of the newest grouped set pushed to the
+	// inbound, and prevGroups those it replaced, which a box built during a
+	// rotation may still hold. pendingGroups are the recorded set's groups
+	// until a push of that set succeeds. Guarded by c.mu.
+	heldGroups    map[[8]byte]string
+	prevGroups    map[[8]byte]string
 	pendingGroups *map[[8]byte]string
 	// liveMu orders the listener's LiveTracker updates against a session's
 	// end. liveGen identifies the running session and changes at every
@@ -449,6 +453,9 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		c.resetConnTracking()
 		c.relay.end()
 		c.endLive()
+		c.mu.Lock()
+		c.clearGroupsLocked()
+		c.mu.Unlock()
 		if box != nil {
 			_ = c.closeBox(box)
 		}
@@ -586,23 +593,16 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		}
 	}
 
-	if err := box.Start(); err != nil {
-		cancelRun()
-		return fmt.Errorf("start sing-box: %w", err)
+	// Published before serving, so connections accepted from the start
+	// resolve their pairing.
+	c.mu.Lock()
+	c.heldGroups, c.prevGroups, c.pendingGroups = nil, nil, startGroups
+	if startPairingApplied {
+		c.commitPendingGroupsLocked()
+	} else {
+		c.publishGroupsLocked(false)
 	}
-
-	c.emitPhase(PhaseVerifying, "")
-	// Now that sing-box is listening with the just-built creds, ask the
-	// server to dial back through them. Splitting verify out of Register
-	// into this explicit follow-up avoids the chicken-and-egg where the
-	// server tried to verify before the peer could possibly be listening
-	// (the cert/key only arrive in the Register response). Failure here
-	// is fatal — the server has already deprecated the row, so the
-	// deferred cleanup tears the rest of the session down.
-	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
-		cancelRun()
-		return fmt.Errorf("verify with lantern-cloud: %w", err)
-	}
+	c.mu.Unlock()
 
 	// Forward inbound accept/close events from lantern-box's samizdat
 	// inbound to the radiance event bus. Consumers (lantern-core's
@@ -610,8 +610,9 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// events.Subscribe[ConnectionEvent]. Listener is process-wide
 	// single-active; cleared on Stop and in the rollback defer so
 	// post-teardown accept-loop callbacks land on a no-op rather than
-	// emit events to a torn-down consumer. Must run AFTER box.Start so
-	// the accept loop is serving when notifications start flowing.
+	// emit events to a torn-down consumer. Registered before box.Start:
+	// samizdat takes the listener once per connection, so a connection
+	// accepted before this, such as one during Verify, is never reported.
 	peerconn.SetListener(func(evt peerconn.Event) {
 		state, source := evt.State, evt.Source
 		if c.listenerDraining.Load() {
@@ -651,6 +652,24 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	})
 	slog.Info("peer listener: registered with peerconn", "route_id", regResp.RouteID)
 
+	if err := box.Start(); err != nil {
+		cancelRun()
+		return fmt.Errorf("start sing-box: %w", err)
+	}
+
+	c.emitPhase(PhaseVerifying, "")
+	// Now that sing-box is listening with the just-built creds, ask the
+	// server to dial back through them. Splitting verify out of Register
+	// into this explicit follow-up avoids the chicken-and-egg where the
+	// server tried to verify before the peer could possibly be listening
+	// (the cert/key only arrive in the Register response). Failure here
+	// is fatal — the server has already deprecated the row, so the
+	// deferred cleanup tears the rest of the session down.
+	if err := c.cfg.API.Verify(ctx, regResp.RouteID); err != nil {
+		cancelRun()
+		return fmt.Errorf("verify with lantern-cloud: %w", err)
+	}
+
 	// HeartbeatIntervalSeconds is server-driven so lantern-cloud can dial up
 	// the cadence on registrations it wants to expire faster. Honor any
 	// positive value verbatim — clamping short intervals up would defeat
@@ -683,10 +702,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	c.pairingRevision = startRevision
 	if startPairingKnown {
 		c.pairingConfirmedAt = c.cfg.Now()
-	}
-	c.pendingGroups = startGroups
-	if c.pairingApplied {
-		c.commitPendingGroupsLocked()
 	}
 	c.runCtx = runCtx
 	c.cancelRun = cancelRun
@@ -821,8 +836,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.pairingApplied = false
 	c.pairingRevision = 0
 	c.pairingConfirmedAt = time.Time{}
-	c.pendingGroups = nil
-	c.setPairingByShortID(nil)
+	c.clearGroupsLocked()
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
@@ -1351,6 +1365,9 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		}
 		c.mu.Lock()
 		rotPairing, rotKnown = slices.Clone(c.pairingShortIDs), c.pairingKnown
+		if rotKnown {
+			c.publishGroupsLocked(true)
+		}
 		c.mu.Unlock()
 		rotApplied = rotKnown && c.applyShortIDs(b, newBase, rotPairing)
 		return b, nil
@@ -1406,15 +1423,22 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	c.pairingApplied = held
 	if held {
 		c.commitPendingGroupsLocked()
+	} else {
+		c.publishGroupsLocked(true)
 	}
 	c.status.RouteID = regResp.RouteID
 	c.status.ExternalIP = externalIP
 	c.mu.Unlock()
-	if !held && c.applyShortIDs(newBox, newBase, want) {
+	if !held {
+		ok := c.applyShortIDs(newBox, newBase, want)
 		c.mu.Lock()
 		if c.box == newBox {
-			c.pairingApplied = true
-			c.commitPendingGroupsLocked()
+			if ok {
+				c.pairingApplied = true
+				c.commitPendingGroupsLocked()
+			} else {
+				c.publishGroupsLocked(false)
+			}
 		}
 		c.mu.Unlock()
 	}
@@ -1774,27 +1798,54 @@ func (c *Client) offerPairingShortIDs(pairing []string, groups []PairingShortIDS
 	if c.pairingKnown {
 		record = slices.Clone(c.pairingShortIDs)
 	}
+	// Staged before the push, so a stream the inbound accepts on a new ID
+	// resolves its pairing at once.
+	c.publishGroupsLocked(true)
 	c.mu.Unlock()
-	if !c.applyShortIDs(b, base, record) {
-		return
-	}
+	ok := c.applyShortIDs(b, base, record)
 	c.mu.Lock()
 	if c.box == b {
-		c.pairingApplied = true
-		c.commitPendingGroupsLocked()
+		if ok {
+			c.pairingApplied = true
+			c.commitPendingGroupsLocked()
+		} else {
+			c.publishGroupsLocked(false)
+		}
 	}
 	c.mu.Unlock()
 }
 
-// commitPendingGroupsLocked makes pendingGroups the short ID to pairing
-// map and leaves the map unchanged if none are pending. The box must
-// already hold the recorded set, and c.mu must be held.
+// commitPendingGroupsLocked makes pendingGroups the held groups, keeping
+// the groups they replace, and publishes the map. With none pending it
+// only publishes. The box must already hold the recorded set, and c.mu
+// must be held.
 func (c *Client) commitPendingGroupsLocked() {
-	if c.pendingGroups == nil {
-		return
+	if c.pendingGroups != nil {
+		c.prevGroups, c.heldGroups = c.heldGroups, *c.pendingGroups
+		c.pendingGroups = nil
 	}
-	c.setPairingByShortID(*c.pendingGroups)
-	c.pendingGroups = nil
+	c.publishGroupsLocked(false)
+}
+
+// publishGroupsLocked sets the pairing map to the held and previous groups,
+// and the pending ones too when staged is true. Called with c.mu held.
+func (c *Client) publishGroupsLocked(staged bool) {
+	sets := []map[[8]byte]string{c.prevGroups, c.heldGroups}
+	if staged && c.pendingGroups != nil {
+		sets = append(sets, *c.pendingGroups)
+	}
+	m := make(map[[8]byte]string)
+	for _, set := range sets {
+		maps.Copy(m, set)
+	}
+	c.setPairingByShortID(m)
+}
+
+// clearGroupsLocked forgets every group and empties the pairing map.
+// Called with c.mu held.
+func (c *Client) clearGroupsLocked() {
+	c.heldGroups, c.prevGroups, c.pendingGroups = nil, nil, nil
+	c.setPairingByShortID(nil)
 }
 
 // pairingMaxUnconfirmed is how long a pairing set is kept without the server
@@ -1832,8 +1883,7 @@ func (c *Client) expireUnconfirmedPairing() {
 		c.pairingKnown = false
 		c.pairingApplied = true
 		c.pairingConfirmedAt = time.Time{}
-		c.pendingGroups = nil
-		c.setPairingByShortID(nil)
+		c.clearGroupsLocked()
 	}
 	c.mu.Unlock()
 	slog.Info("peer: pairing short IDs unconfirmed for too long; dropped")

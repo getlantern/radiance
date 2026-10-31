@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,9 +185,14 @@ func TestClient_GroupsFollowTheStrictlyNewerRuleOtherwise(t *testing.T) {
 	assert.Equal(t, []string{sidB1}, ids)
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 
-	// A newer grouped set replaces the mapping.
-	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 500)
-	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)))
+	// A newer grouped set replaces the mapping, keeping the groups it
+	// replaced until the next one.
+	onlyB := []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}
+	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 500)
+	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)), "the replaced groups are kept")
+	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
+	c.offerPairingShortIDs([]string{sidB1}, onlyB, true, 600)
+	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)), "and dropped at the next")
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 
 	// An unknown response changes nothing.
@@ -459,9 +465,77 @@ func TestClient_GroupsReplaceTheMapOnlyOnceTheSetIsPushed(t *testing.T) {
 
 	b.setUpdateErr(nil)
 	c.offerPairingShortIDs(nil, nil, false, 0) // a heartbeat's retry
-	assert.Equal(t, "", c.pairingFor(sid(t, sidA1)))
+	assert.Equal(t, pairingA, c.pairingFor(sid(t, sidA1)), "the replaced groups are kept until the next set")
 	assert.Equal(t, pairingB, c.pairingFor(sid(t, sidB1)))
 	s := live.Snapshot()
 	require.Len(t, s.Pairings, 1, "the stream waiting for the set is attributed")
 	assert.Equal(t, pairingB, s.Pairings[0].PairingID)
+}
+
+// A stream the inbound accepts on a new ID as soon as the set is pushed, and
+// that ends before the push returns, is attributed: the groups are published
+// before the push.
+func TestClient_StreamRightAfterThePushIsAttributed(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	b := &fakeBoxService{}
+	live := helper.NewLiveTracker(nil)
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.Live = live
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	var once sync.Once
+	b.afterUpdate = func() {
+		once.Do(func() {
+			friend := counter(0, 0)
+			peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: friend, ShortID: sid(t, sidB1)})
+			friend.AddDown(helper.LiveThreshold)
+			peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.1:1000", Bytes: friend, ShortID: sid(t, sidB1)})
+		})
+	}
+	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 100)
+	s := live.Snapshot()
+	require.Len(t, s.Pairings, 1)
+	assert.Equal(t, pairingB, s.Pairings[0].PairingID)
+	assert.True(t, s.Pairings[0].Connected)
+}
+
+// A friend who connects while the server verifies the route, before Start
+// returns, is reported and tracked.
+func TestClient_ConnectionDuringVerifyIsTracked(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{sidA1}
+	srv.registerResp.PairingShortIDsKnown = true
+	srv.registerResp.PairingShortIDSets = []PairingShortIDSet{{PairingID: pairingA, ShortIDs: []string{sidA1}}}
+	srv.onVerify = func(LifecycleRequest) int {
+		peerconn.Notify(peerconn.Event{State: +1, Source: "198.51.100.1:1000", Destination: "example.com:443", Bytes: counter(0, 0), ShortID: sid(t, sidA1)})
+		return 0
+	}
+	live := helper.NewLiveTracker(nil)
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.Live = live
+	})
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	s := live.Snapshot()
+	require.Len(t, s.Pairings, 1)
+	assert.Equal(t, pairingA, s.Pairings[0].PairingID)
+}
+
+// A failed push publishes none of its groups.
+func TestClient_FailedPushUnstagesItsGroups(t *testing.T) {
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	b := &fakeBoxService{}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) { cfg.HeartbeatInterval = time.Hour })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	b.setUpdateErr(errors.New("refused"))
+	c.offerPairingShortIDs([]string{sidB1}, []PairingShortIDSet{{PairingID: pairingB, ShortIDs: []string{sidB1}}}, true, 100)
+	assert.Equal(t, "", c.pairingFor(sid(t, sidB1)))
 }

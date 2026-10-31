@@ -136,6 +136,9 @@ type fakeBoxService struct {
 	// idsAtStart is the set the inbound held when Start was called, nil for
 	// its base ID only.
 	idsAtStart []string
+	// afterUpdate, if set, runs after a set is applied, as connections on
+	// its IDs could arrive then. Set before the box is in use.
+	afterUpdate func()
 }
 
 func (b *fakeBoxService) Start() error {
@@ -172,6 +175,11 @@ func (b *fakeBoxService) UpdateShortIDs(ids []string) error {
 		return b.updateErr
 	}
 	b.shortIDs = append(b.shortIDs, append([]string(nil), ids...))
+	if b.afterUpdate != nil {
+		b.idsMu.Unlock()
+		b.afterUpdate()
+		b.idsMu.Lock()
+	}
 	return nil
 }
 
