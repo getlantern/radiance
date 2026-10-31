@@ -502,12 +502,12 @@ func requireClosed(t *testing.T, conn net.Conn, msg string) {
 }
 
 // awaitRoutedLeaf waits for a connection through the personal proxy group
-// recorded under leaf.
+// recorded under leaf, or under any member if leaf is "".
 func awaitRoutedLeaf(t *testing.T, tun *tunnel, leaf string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		for _, c := range tun.clashServer.connTracker.activeConnections() {
-			if slices.Contains(c.ChainList, PersonalProxyTag) && strings.HasSuffix(c.Outbound, "/"+leaf) {
+			if slices.Contains(c.ChainList, PersonalProxyTag) && (leaf == "" || strings.HasSuffix(c.Outbound, "/"+leaf)) {
 				return true
 			}
 		}
@@ -537,31 +537,80 @@ func TestPersonalProxySwitchClosesThePreviousFriendsConnections(t *testing.T) {
 	requireEcho(t, viaB)
 }
 
-// A switch that narrows to the new friend but then fails leaves the previous
-// friend's group installed; retrying the same friend must still close the
-// connections through it.
-func TestPersonalProxyRetriedSwitchClosesThePreviousFriendsConnections(t *testing.T) {
-	standInRoomsConsumer(t)
-	tun, dial := startRoutedPersonalProxyTestTunnel(t)
-	tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{}}
-	require.NoError(t, tun.addOutbounds(servers.ServerList{Servers: []*servers.Server{
-		consumerServer(consumer), directServer(friendA), directServer(friendB),
-	}}))
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
-	viaA := dial()
-	awaitRoutedLeaf(t, tun, friendA)
+// A friend switch is all or nothing: whichever step after the narrowing
+// fails, the previous friend's narrowing, group and selection stay as they
+// were, its connections stay open, and a later sync keeps them. Retrying once
+// the cause clears switches and closes them.
+func TestPersonalProxyFailedSwitchRestoresThePreviousSelection(t *testing.T) {
+	for _, step := range []string{"create", "offer", "mode", "select"} {
+		t.Run(step, func(t *testing.T) {
+			standInRoomsConsumer(t)
+			tun, dial := startRoutedPersonalProxyTestTunnel(t)
+			tun.inviterTickets = &fakeInviterTickets{byFriend: map[string][]string{
+				friendA: {"ticket-" + friendA}, friendB: {"ticket-" + friendB},
+			}}
+			list := servers.ServerList{Servers: []*servers.Server{
+				consumerServer(consumer), directServer(friendA), directServer(friendB),
+			}}
+			require.NoError(t, tun.addOutbounds(list))
+			require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+			viaA := dial()
+			awaitRoutedLeaf(t, tun, "")
+			members := personalProxyMembers(tun)
 
-	// selectMode fails without a box, after the consumers have restarted.
-	box := tun.boxInstance
-	tun.boxInstance = nil
-	consumerOut := tun.liveOutbound(consumer)
-	require.Error(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	tun.boxInstance = box
-	require.NotSame(t, consumerOut, tun.liveOutbound(consumer), "the failure came after the restart")
-	require.Equal(t, friendB, tun.selectedFriend())
+			tun.personalProxyFault = func(s string) error {
+				if s == step {
+					return errors.New("injected")
+				}
+				return nil
+			}
+			require.Error(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+			assertSelected := func() {
+				t.Helper()
+				assert.Equal(t, friendA, tun.selectedFriend())
+				assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets())
+				assert.ElementsMatch(t, members, personalProxyMembers(tun))
+				assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
+				assert.Equal(t, ManualSelectTag, tun.clashServer.selectedMode())
+			}
+			assertSelected()
+			requireEcho(t, viaA)
+			require.NoError(t, tun.reconcileHelpers(list))
+			assertSelected()
 
-	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
-	requireClosed(t, viaA, "the retry left the previous friend's connection open")
+			tun.personalProxyFault = nil
+			require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendB)))
+			assert.Equal(t, friendB, tun.selectedFriend())
+			requireClosed(t, viaA, "the switch left the previous friend's connection open")
+		})
+	}
+}
+
+// A failed first friend selection leaves the tunnel as it was: no narrowing,
+// no group, and the previous mode and manual choice.
+func TestPersonalProxyFailedFirstSelectionRestoresTheTunnel(t *testing.T) {
+	for _, mode := range []string{AutoSelectTag, ManualSelectTag} {
+		t.Run(mode, func(t *testing.T) {
+			tun, _ := startPersonalProxyTestTunnel(t, friendA)
+			if mode == ManualSelectTag {
+				require.NoError(t, tun.selectOutbound("lantern-1"))
+			}
+			before := selectedInManual(t, tun)
+			tun.personalProxyFault = func(s string) error {
+				if s == "select" {
+					return errors.New("injected")
+				}
+				return nil
+			}
+			require.Error(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+			assert.Empty(t, tun.selectedFriend())
+			assert.Len(t, tun.roomTickets(), 1, "every ticket")
+			assert.Nil(t, tun.personalProxyGroup())
+			assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
+			assert.Equal(t, before, selectedInManual(t, tun))
+			assert.Equal(t, mode, tun.clashServer.selectedMode())
+		})
+	}
 }
 
 // connectProxy serves HTTP CONNECT, standing in for a rooms consumer that

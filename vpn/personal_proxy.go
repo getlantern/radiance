@@ -148,13 +148,11 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 // selectPersonalProxyLocked narrows the rooms tickets to friend, gives the
 // tunnel friend's group and selects it. A change of friend restarts the rooms
 // consumers, whose slots to other friends would otherwise outlive the
-// narrowing; if a restart fails, the selection is refused and the previous
-// narrowing restored. Once friend's group replaces another friend's in the
-// selector, every connection through the group is closed, even when an
-// earlier attempt already narrowed to friend. The caller must hold
-// t.outboundMu.
+// narrowing, and closes every connection through the previous friend's group.
+// On any failure the selection is refused and the previous one restored. The
+// caller must hold t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
-	if t.mutGrpMgr == nil || t.outboundMgr == nil {
+	if t.mutGrpMgr == nil || t.outboundMgr == nil || t.clashServer == nil {
 		return errors.New("tunnel not running")
 	}
 	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
@@ -166,7 +164,9 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if len(members) == 0 {
 		return ErrPersonalProxyUnavailable
 	}
-	if prev := t.personalProxy.Load(); t.selectedFriend() != friend {
+	prev, prevMode, prevSelected := t.personalProxy.Load(), t.clashServer.selectedMode(), selector.Now()
+	changed := t.selectedFriend() != friend
+	if changed {
 		t.personalProxy.Store(&friend)
 		if err := t.restartRoomsConsumersLocked(selector); err != nil {
 			if errors.Is(err, errLibboxClosed) {
@@ -177,12 +177,63 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 			return errors.Join(err, t.restartRoomsConsumersLocked(selector))
 		}
 	}
+	if err := t.installPersonalProxyLocked(selector, members); err != nil {
+		if errors.Is(err, errLibboxClosed) {
+			return err
+		}
+		return errors.Join(err, t.restorePersonalProxyLocked(selector, changed, prev, prevMode, prevSelected))
+	}
+	// The selector keeps the same tag across friends, so it does not close the
+	// previous friend's connections itself. A connection is recorded under the
+	// member selected before it dialed, not the one that carried it, so none
+	// is kept.
+	if changed {
+		t.clashServer.connTracker.closeThrough(PersonalProxyTag)
+	}
+	return nil
+}
+
+// installPersonalProxyLocked offers a fresh group over members in place of any
+// previous one, and selects it in manual mode. The caller must hold
+// t.outboundMu.
+func (t *tunnel) installPersonalProxyLocked(selector lbA.MutableOutboundGroup, members []string) error {
+	if err := t.offerPersonalProxyLocked(selector, members, t.personalProxyFault); err != nil {
+		return err
+	}
+	if err := faultAt(t.personalProxyFault, "mode"); err != nil {
+		return err
+	}
 	if err := t.selectMode(ManualSelectTag); err != nil {
 		return err
 	}
-	// A fresh group replaces any previous friend's under the same tag; the
-	// selector is pointed at it in place, so its selection never lapses.
+	if err := faultAt(t.personalProxyFault, "select"); err != nil {
+		return err
+	}
+	if !selector.(Selector).SelectOutbound(PersonalProxyTag) {
+		return ErrPersonalProxyUnavailable
+	}
+	return nil
+}
+
+func faultAt(fault func(step string) error, step string) error {
+	if fault == nil {
+		return nil
+	}
+	return fault(step)
+}
+
+// offerPersonalProxyLocked creates the group over members, which must not be
+// empty, and has the selector offer it; a group already offered is replaced
+// in place, so a selection of it never lapses. fault, if set, can fail it
+// before a named step. The caller must hold t.outboundMu.
+func (t *tunnel) offerPersonalProxyLocked(selector lbA.MutableOutboundGroup, members []string, fault func(step string) error) error {
+	if err := faultAt(fault, "create"); err != nil {
+		return err
+	}
 	if err := t.createPersonalProxyLocked(members); err != nil {
+		return err
+	}
+	if err := faultAt(fault, "offer"); err != nil {
 		return err
 	}
 	if slices.Contains(selector.All(), PersonalProxyTag) {
@@ -196,19 +247,51 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	} else if _, err := selector.Add(PersonalProxyTag); err != nil {
 		return fmt.Errorf("offer personal proxy group: %w", err)
 	}
-	var err error
-	if !selector.(Selector).SelectOutbound(PersonalProxyTag) {
-		err = ErrPersonalProxyUnavailable
+	return nil
+}
+
+// restorePersonalProxyLocked undoes a failed selectPersonalProxyLocked: the
+// narrowing, if changed, goes back to prev with the consumers restarted under
+// it, the group back to prev's or away, and the manual choice and mode back
+// to prevSelected and prevMode. Best effort. The caller must hold
+// t.outboundMu.
+func (t *tunnel) restorePersonalProxyLocked(selector lbA.MutableOutboundGroup, changed bool, prev *string,
+	prevMode, prevSelected string) error {
+	var errs []error
+	if changed {
+		t.personalProxy.Store(prev)
+		errs = append(errs, t.restartRoomsConsumersLocked(selector))
 	}
-	// The selector keeps the same tag across friends, so it does not close the
-	// previous friend's connections itself. A connection is recorded under the
-	// member selected before it dialed, not the one that carried it, so none
-	// is kept.
-	if t.groupFriend != friend && t.clashServer != nil {
-		t.clashServer.connTracker.closeThrough(PersonalProxyTag)
+	if friend := t.selectedFriend(); friend != "" {
+		if members := t.personalProxyMembersLocked(selector, friend); len(members) > 0 {
+			errs = append(errs, t.offerPersonalProxyLocked(selector, members, nil))
+		}
+	} else {
+		errs = append(errs, t.removePersonalProxyGroupLocked(selector))
 	}
-	t.groupFriend = friend
-	return err
+	if prevSelected != "" && selector.Now() != prevSelected && !selector.(Selector).SelectOutbound(prevSelected) {
+		errs = append(errs, fmt.Errorf("restore the manual selection"))
+	}
+	errs = append(errs, t.selectMode(prevMode))
+	return errors.Join(errs...)
+}
+
+// removePersonalProxyGroupLocked takes the group out of the selector and then
+// the outbound manager, so the selector never holds a closed group. The
+// caller must hold t.outboundMu.
+func (t *tunnel) removePersonalProxyGroupLocked(selector lbA.MutableOutboundGroup) error {
+	var errs []error
+	if slices.Contains(selector.All(), PersonalProxyTag) {
+		if _, err := selector.Remove(PersonalProxyTag); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if t.personalProxyGroup() != nil {
+		if err := t.outboundMgr.Remove(PersonalProxyTag); err != nil {
+			errs = append(errs, fmt.Errorf("remove personal proxy group: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // createPersonalProxyLocked creates the group over members, which must not be
@@ -251,7 +334,6 @@ func (t *tunnel) syncPersonalProxyLocked(replaced map[string]struct{}) error {
 				return fmt.Errorf("offer personal proxy group: %w", err)
 			}
 		}
-		t.groupFriend = friend
 		return nil
 	}
 	// Added before the stale members go, so the group is never empty.
@@ -312,17 +394,7 @@ func (t *tunnel) withdrawPersonalProxyLocked(selector lbA.MutableOutboundGroup) 
 			errs = append(errs, err)
 		}
 	}
-	if slices.Contains(selector.All(), PersonalProxyTag) {
-		if _, err := selector.Remove(PersonalProxyTag); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if t.personalProxyGroup() != nil {
-		if err := t.outboundMgr.Remove(PersonalProxyTag); err != nil {
-			errs = append(errs, fmt.Errorf("remove personal proxy group: %w", err))
-		}
-	}
-	t.groupFriend = ""
+	errs = append(errs, t.removePersonalProxyGroupLocked(selector))
 	return errors.Join(errs...)
 }
 

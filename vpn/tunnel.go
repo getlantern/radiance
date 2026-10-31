@@ -96,10 +96,9 @@ type tunnel struct {
 	// narrowed to, while the personal proxy group exists. Written under
 	// outboundMu; read lock-free on the signaling path.
 	personalProxy atomic.Pointer[string]
-	// groupFriend is the friend whose group the manual selector offers, which
-	// trails personalProxy when a selection fails after narrowing. Guarded by
-	// outboundMu.
-	groupFriend string
+	// personalProxyFault, if set, can fail selectPersonalProxyLocked before a
+	// named step. For tests.
+	personalProxyFault func(step string) error
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
@@ -222,7 +221,6 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	if !slices.ContainsFunc(options.Outbounds, func(o O.Outbound) bool { return o.Tag == PersonalProxyTag }) {
 		t.personalProxy.Store(nil)
 	}
-	t.groupFriend = t.selectedFriend()
 	// An Unbounded consumer joins its helper pairings' rooms on freddie with
 	// the inviter tickets lantern-cloud issues this device. lantern-box gives
 	// the source only to helper-tagged Unbounded outbounds, which read it at
