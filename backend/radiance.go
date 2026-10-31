@@ -1604,7 +1604,6 @@ func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return true
 	}
-	// Redaction strips helper tags, but err is left out anyway as defense in depth.
 	slog.Info("Tunnel could not take up the selected personal proxy, falling back",
 		"unavailable", errors.Is(err, vpn.ErrPersonalProxyUnavailable))
 	r.fallBackLocked(tag)
