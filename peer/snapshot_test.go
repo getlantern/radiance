@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/lantern-box/tracker/peerconn"
+
+	"github.com/getlantern/radiance/helper"
 )
 
 func counter(down, up int) *peerconn.Counter {
@@ -280,4 +282,66 @@ func TestClient_RelaySnapshot(t *testing.T) {
 	s = c.RelaySnapshot()
 	assert.False(t, s.Running)
 	assert.Equal(t, uint64(1200), s.BytesDown, "a poll after Stop still sees the final bytes")
+}
+
+const (
+	usagePairingA = "11111111-1111-4111-8111-111111111111"
+	usagePairingB = "22222222-2222-4222-8222-222222222222"
+)
+
+func TestRelayStats_UsageAddsUpPairedAndTotal(t *testing.T) {
+	var r relayStats
+	gen := r.begin()
+	pool, a, b := counter(100, 10), counter(50, 5), counter(7, 3)
+	r.recordPairingFor(gen, 1, "203.0.113.7:1000", "", pool)
+	r.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, a)
+	r.recordPairingFor(gen, 1, "203.0.113.9:1000", usagePairingB, b)
+
+	assert.Equal(t, RelayUsage{RelayedBytes: 175, PairedBytes: []helper.PairedBytes{
+		{PairingID: usagePairingA, Bytes: 55}, {PairingID: usagePairingB, Bytes: 10}}}, r.takeUsage())
+
+	a.AddDown(45)
+	r.recordPairingFor(gen, -1, "203.0.113.8:1000", usagePairingA, a)
+	a.AddDown(1000) // a closed connection is no longer read
+	pool.AddUp(1)
+	assert.Equal(t, RelayUsage{RelayedBytes: 46, PairedBytes: []helper.PairedBytes{
+		{PairingID: usagePairingA, Bytes: 45}}}, r.takeUsage())
+	assert.Equal(t, RelayUsage{}, r.takeUsage(), "nothing new, nothing to report")
+	assert.Equal(t, uint64(202), r.snapshot(true).BytesDown, "taking usage leaves the snapshot's totals alone")
+}
+
+func TestRelayStats_RestoredUsageIsReportedAgain(t *testing.T) {
+	var r relayStats
+	gen := r.begin()
+	a := counter(1000, 24)
+	r.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, a)
+	failed := r.takeUsage()
+	a.AddUp(1)
+	r.restoreUsage(failed)
+	assert.Equal(t, RelayUsage{RelayedBytes: 1025, PairedBytes: []helper.PairedBytes{
+		{PairingID: usagePairingA, Bytes: 1025}}}, r.takeUsage())
+}
+
+func TestRelayStats_LateAttributionCreditsThePairing(t *testing.T) {
+	var r relayStats
+	gen := r.begin()
+	a := counter(300, 0)
+	r.recordPairingFor(gen, 1, "203.0.113.8:1000", "", a)
+	r.setPairing(a, usagePairingA)
+	assert.Equal(t, RelayUsage{RelayedBytes: 300, PairedBytes: []helper.PairedBytes{
+		{PairingID: usagePairingA, Bytes: 300}}}, r.takeUsage(),
+		"bytes not yet reported go to the pairing the connection turned out to belong to")
+}
+
+func TestRelayStats_UsageSurvivesSessionEnd(t *testing.T) {
+	now := time.Unix(1000, 0)
+	r := relayStats{now: func() time.Time { return now }}
+	gen := r.begin()
+	a := counter(10, 0)
+	r.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, a)
+	r.end()
+	now = now.Add(relayRetention + time.Second)
+	_ = r.snapshot(false) // prunes the ended session's connections
+	assert.Equal(t, RelayUsage{RelayedBytes: 10, PairedBytes: []helper.PairedBytes{
+		{PairingID: usagePairingA, Bytes: 10}}}, r.takeUsage())
 }

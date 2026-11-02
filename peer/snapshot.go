@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/getlantern/lantern-box/tracker/peerconn"
+
+	"github.com/getlantern/radiance/helper"
 )
 
 // relayRetention keeps a departed client's byte totals in the snapshot long
@@ -60,6 +62,12 @@ type relayTally struct {
 type relayConn struct {
 	source    string
 	retiredAt time.Time
+	// pairing is the helper pairing the connection came through, "" for the
+	// pool or not yet attributed.
+	pairing string
+	// reported is how many of the counter's bytes are already in the
+	// pending usage.
+	reported uint64
 }
 
 // relayStats accumulates relayed bytes from the counters lantern-box
@@ -84,7 +92,12 @@ type relayStats struct {
 	// carries an old generation, so its event is ignored rather than counted
 	// after the session it belongs to has ended.
 	gen uint64
-	now func() time.Time
+	// pendingTotal and pendingPaired are the bytes relayed since the last
+	// heartbeat that reported them. Only takeUsage clears them: they carry
+	// across sessions, unlike the snapshot's retention.
+	pendingTotal  uint64
+	pendingPaired helper.Usage
+	now           func() time.Time
 }
 
 func (r *relayStats) clock() time.Time {
@@ -92,6 +105,48 @@ func (r *relayStats) clock() time.Time {
 		return r.now()
 	}
 	return time.Now()
+}
+
+// RelayUsage is the traffic a heartbeat reports: every byte relayed since the
+// last heartbeat that succeeded, and the part of it that came through each
+// helper pairing.
+type RelayUsage struct {
+	RelayedBytes uint64
+	PairedBytes  []helper.PairedBytes
+}
+
+// accrueLocked adds c's bytes since its last accrual to the pending usage and
+// returns rc marked with them. Caller must hold r.mu.
+func (r *relayStats) accrueLocked(c *peerconn.Counter, rc relayConn) relayConn {
+	cur := c.Down() + c.Up()
+	if cur <= rc.reported {
+		return rc
+	}
+	n := cur - rc.reported
+	rc.reported = cur
+	r.pendingTotal += n
+	r.pendingPaired.Add(rc.pairing, n)
+	return rc
+}
+
+// takeUsage returns the bytes relayed since the last take and forgets them.
+func (r *relayStats) takeUsage() RelayUsage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for c, rc := range r.conns {
+		r.conns[c] = r.accrueLocked(c, rc)
+	}
+	u := RelayUsage{RelayedBytes: r.pendingTotal, PairedBytes: r.pendingPaired.Take()}
+	r.pendingTotal = 0
+	return u
+}
+
+// restoreUsage puts back a takeUsage result whose heartbeat failed.
+func (r *relayStats) restoreUsage(u RelayUsage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingTotal += u.RelayedBytes
+	r.pendingPaired.Restore(u.PairedBytes)
 }
 
 // begin starts a session and returns its generation. Totals carry on from
@@ -131,13 +186,15 @@ func (r *relayStats) end() {
 	r.gen++
 }
 
-// foldLocked moves a finished connection's count into the totals and its
-// client's tally. Caller must hold r.mu and remove c from r.conns.
-func (r *relayStats) foldLocked(c *peerconn.Counter, source string) {
+// foldLocked moves a finished connection's count into the totals, its
+// client's tally and the pending usage. Caller must hold r.mu and remove c
+// from r.conns.
+func (r *relayStats) foldLocked(c *peerconn.Counter, rc relayConn) {
+	r.accrueLocked(c, rc)
 	down, up := c.Down(), c.Up()
 	r.closedDown += down
 	r.closedUp += up
-	if t := r.ips[ipOf(source)]; t != nil {
+	if t := r.ips[ipOf(rc.source)]; t != nil {
 		t.closedDown += down
 		t.closedUp += up
 	}
@@ -168,7 +225,7 @@ func (r *relayStats) pruneLocked(now time.Time) {
 	ended := !r.endedAt.IsZero() && now.Sub(r.endedAt) > relayRetention
 	for c, rc := range r.conns {
 		if ended || (!rc.retiredAt.IsZero() && now.Sub(rc.retiredAt) > relayRetention) {
-			r.foldLocked(c, rc.source)
+			r.foldLocked(c, rc)
 			delete(r.conns, c)
 		}
 	}
@@ -227,7 +284,8 @@ func (r *relayStats) recordPairingFor(gen uint64, state int, source, pairing str
 	}
 	switch {
 	case state > 0:
-		r.conns[bytes] = relayConn{source: source}
+		// A counter seen again keeps what it has already reported.
+		r.conns[bytes] = relayConn{source: source, pairing: pairing, reported: r.conns[bytes].reported}
 		t := r.ips[ip]
 		if t == nil {
 			t = &relayTally{}
@@ -242,7 +300,7 @@ func (r *relayStats) recordPairingFor(gen uint64, state int, source, pairing str
 			return
 		}
 		delete(r.conns, bytes)
-		r.foldLocked(bytes, rc.source)
+		r.foldLocked(bytes, rc)
 		if t := r.ips[ip]; t != nil {
 			t.release(r.clock())
 		}
@@ -258,6 +316,8 @@ func (r *relayStats) setPairing(bytes *peerconn.Counter, pairing string) {
 	if !ok || !rc.retiredAt.IsZero() {
 		return
 	}
+	rc.pairing = pairing
+	r.conns[bytes] = rc
 	if t := r.ips[ipOf(rc.source)]; t != nil && t.latest == bytes {
 		t.pairing = pairing
 	}
