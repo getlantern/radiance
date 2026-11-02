@@ -22,10 +22,10 @@ import (
 	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/portforward"
 )
 
 type fakeForwarder struct {
@@ -41,7 +41,7 @@ type fakeForwarder struct {
 	cancelRenew context.CancelFunc
 }
 
-func (f *fakeForwarder) MapPort(_ context.Context, internalPort uint16, _ string) (*portforward.Mapping, error) {
+func (f *fakeForwarder) MapPort(_ context.Context, _ string, internalPort uint16, _ string) (*portforward.Mapping, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mapErr != nil {
@@ -105,7 +105,7 @@ type slowMapForwarder struct {
 	entered chan struct{}
 }
 
-func (f *slowMapForwarder) MapPort(_ context.Context, internalPort uint16, _ string) (*portforward.Mapping, error) {
+func (f *slowMapForwarder) MapPort(_ context.Context, _ string, internalPort uint16, _ string) (*portforward.Mapping, error) {
 	select {
 	case f.entered <- struct{}{}:
 	default:
@@ -830,7 +830,7 @@ func TestPickManualForwarder(t *testing.T) {
 			require.NotNil(t, fwd, "expected manual forwarder, got nil")
 			// Verify the chosen port via the public MapPort surface —
 			// ManualForwarder.port is unexported, MapPort echoes it.
-			mapping, err := fwd.MapPort(context.Background(), 0, "")
+			mapping, err := fwd.MapPort(context.Background(), portforward.TCP, 0, "")
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantPort, mapping.ExternalPort)
 			assert.Equal(t, tc.wantPort, mapping.InternalPort)

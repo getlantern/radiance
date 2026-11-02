@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"syscall"
 
-	"github.com/getlantern/radiance/portforward"
+	"github.com/getlantern/lantern-box/portforward"
 )
 
 // Start's failures reach the user as raw Go error text: the desktop share card
