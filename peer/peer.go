@@ -28,11 +28,11 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
-	"github.com/getlantern/radiance/portforward"
 )
 
 // StatusEvent fires whenever the Client's session state changes — successful
@@ -76,7 +76,7 @@ const (
 )
 
 type portForwarder interface {
-	MapPort(ctx context.Context, internalPort uint16, description string) (*portforward.Mapping, error)
+	MapPort(ctx context.Context, protocol string, internalPort uint16, description string) (*portforward.Mapping, error)
 	UnmapPort(ctx context.Context) error
 	StartRenewal(ctx context.Context)
 	ExternalIP(ctx context.Context) (string, error)
@@ -516,10 +516,15 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		return fmt.Errorf("discover gateway: %w", err)
 	}
 	internalPort := pickInternalPort()
-	mapping, err := fwd.MapPort(ctx, internalPort, "Lantern Share My Connection")
+	mapping, err := fwd.MapPort(ctx, portforward.TCP, internalPort, "Lantern Share My Connection")
 	if err != nil {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
+	// Renew from the moment the port is mapped: a PCP or NAT-PMP gateway can
+	// grant a lease shorter than registering, starting the box and verifying
+	// take. Not tied to the caller's ctx, which ends with Start: UnmapPort,
+	// which both rollback and Stop call, stops the renewal.
+	fwd.StartRenewal(context.Background())
 
 	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
@@ -722,7 +727,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		rotation = peerCredRotationInterval
 	}
 
-	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
 	go c.credRotationLoop(runCtx, rotation)
 
