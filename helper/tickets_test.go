@@ -790,3 +790,88 @@ func TestFetcherWithoutUsageSendsAnEmptyObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{}`, body)
 }
+
+func TestFetcherDropsUsageTheServerRejects(t *testing.T) {
+	_, vol := testTickets(t)
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		if strings.Contains(string(b), "paired_bytes") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tickets":["` + vol + `"]}`))
+	}))
+	defer srv.Close()
+	u := &Usage{}
+	f := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(u)
+	u.Add(usagePairingA, 70)
+
+	got, err := f.Fetch(context.Background())
+	require.NoError(t, err, "the fetch goes through without the usage")
+	assert.Len(t, got.Volunteer, 1)
+	u.Add(usagePairingA, 5)
+	_, err = f.Fetch(context.Background())
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, bodies, 4)
+	assert.JSONEq(t, `{"paired_bytes":[{"pairing_id":"`+usagePairingA+`","bytes":70}]}`, bodies[0])
+	assert.JSONEq(t, `{}`, bodies[1], "resent once without the usage")
+	assert.JSONEq(t, `{"paired_bytes":[{"pairing_id":"`+usagePairingA+`","bytes":5}]}`, bodies[2],
+		"rejected usage is dropped, not sent again")
+	assert.JSONEq(t, `{}`, bodies[3])
+}
+
+func TestFetcherWithoutUsageIsNotResentOn400(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	_, err := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(&Usage{}).Fetch(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestFetcherKeepsUsageOnServerError(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		var fail atomic.Bool
+		var mu sync.Mutex
+		var bodies []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			if fail.Load() {
+				w.WriteHeader(status)
+				return
+			}
+			_, _ = w.Write([]byte(`{"tickets":[]}`))
+		}))
+		u := &Usage{}
+		f := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(u)
+		u.Add(usagePairingA, 70)
+
+		fail.Store(true)
+		_, err := f.Fetch(context.Background())
+		require.Error(t, err, "status %d", status)
+		fail.Store(false)
+		_, err = f.Fetch(context.Background())
+		require.NoError(t, err)
+		srv.Close()
+
+		want := `{"paired_bytes":[{"pairing_id":"` + usagePairingA + `","bytes":70}]}`
+		mu.Lock()
+		require.Len(t, bodies, 2, "status %d is not resent", status)
+		assert.JSONEq(t, want, bodies[1], "status %d keeps the usage for the next fetch", status)
+		mu.Unlock()
+	}
+}

@@ -1059,13 +1059,18 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 
 // sendHeartbeat sends one heartbeat carrying the traffic relayed since the
 // last one that succeeded. A heartbeat that fails keeps that traffic for the
-// next.
+// next, except on a 400: a server that predates the usage fields rejects
+// them, so the traffic is dropped and the heartbeat sent again without it.
 func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
 	usage := c.relay.takeUsage()
 	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
-	if err != nil {
-		c.relay.restoreUsage(usage)
+	if err == nil {
+		return resp, nil
 	}
+	if (usage.RelayedBytes > 0 || len(usage.PairedBytes) > 0) && isBadRequest(err) {
+		return c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), RelayUsage{})
+	}
+	c.relay.restoreUsage(usage)
 	return resp, err
 }
 
@@ -1135,6 +1140,11 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+func isBadRequest(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 400
 }
 
 // credRotationLoop periodically rotates the peer's samizdat credentials
