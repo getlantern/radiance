@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/clientcore"
+
+	"github.com/getlantern/radiance/helper"
 )
 
 var snapshotEpoch = strconv.FormatInt(time.Now().UnixNano(), 10)
@@ -37,6 +39,10 @@ type PeerBytes struct {
 	IP   string `json:"ip"`
 	Down uint64 `json:"down"`
 	Up   uint64 `json:"up"`
+	// Pairing is the helper pairing this consumer most recently came
+	// through, "" for the pool or one broflake could not attribute. It
+	// identifies a friend relationship and must never be logged.
+	Pairing string `json:"pairing,omitempty"`
 }
 
 // slotBytes holds bytes relayed through one broflake worker slot since they
@@ -44,6 +50,9 @@ type PeerBytes struct {
 // atomics, so the per-chunk data path never contends on m.mu.
 type slotBytes struct {
 	down, up atomic.Uint64
+	// total is every byte the slot has relayed, never reset, which the
+	// LiveTracker samples for a slot serving a helper pairing.
+	total atomic.Uint64
 }
 
 // slotTable is created per worker run so chunks a stopped worker delivers late
@@ -63,6 +72,7 @@ func (t *slotTable) add(idx int, size uint64, down bool) {
 		return
 	}
 	s := t.slot(idx)
+	s.total.Add(size)
 	if down {
 		s.down.Add(size)
 	} else {
@@ -91,6 +101,8 @@ type peerTally struct {
 	// active counts slots currently held by this IP; endedAt is set when it drops to zero.
 	active  int
 	endedAt time.Time
+	// pairing is the helper pairing of the IP's latest slot, "" for the pool.
+	pairing string
 }
 
 // chunkCounter returns a broflake ChunkFunc that adds relayed bytes to the
@@ -134,7 +146,7 @@ func (m *unboundedManager) snapshot() Snapshot {
 	}
 	sort.Strings(s.Peers)
 	for ip, t := range m.peerBytes {
-		s.PeerBytes = append(s.PeerBytes, PeerBytes{IP: ip, Down: t.down, Up: t.up})
+		s.PeerBytes = append(s.PeerBytes, PeerBytes{IP: ip, Down: t.down, Up: t.up, Pairing: t.pairing})
 	}
 	sort.Slice(s.PeerBytes, func(i, j int) bool { return s.PeerBytes[i].IP < s.PeerBytes[j].IP })
 	return s
@@ -189,6 +201,50 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 	}
 }
 
+// liveOwner groups this package's slots in the LiveTracker.
+const liveOwner = "unbounded"
+
+// liveSlot identifies one slot of one run in the LiveTracker.
+type liveSlot struct {
+	slots *slotTable
+	idx   int
+}
+
+// recordPairing follows broflake's pairing for a slot's connection change,
+// which arrives just after recordConnection's.
+func (m *unboundedManager) recordPairing(ctx context.Context, slots *slotTable, state, slot int, pairing string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() != nil || slots == nil {
+		return
+	}
+	key := liveSlot{slots: slots, idx: slot}
+	if state < 0 {
+		m.liveTracker().Close(key)
+		return
+	}
+	if state == 0 {
+		return
+	}
+	if source := m.peers[slot]; source != "" {
+		if t := m.peerBytes[source]; t != nil {
+			t.pairing = pairing
+		}
+	}
+	if pairing == "" {
+		m.liveTracker().Close(key)
+		return
+	}
+	m.liveTracker().Open(liveOwner, key, pairing, slots.slot(slot).total.Load)
+}
+
+func (m *unboundedManager) liveTracker() *helper.LiveTracker {
+	if m.live != nil {
+		return m.live
+	}
+	return helper.DefaultLive
+}
+
 // retiredRun keeps a stopped run's slot table and its final slot owners, so
 // bytes broflake delivers during its asynchronous teardown are still counted
 // and credited to the consumers that relayed them.
@@ -203,6 +259,7 @@ type retiredRun struct {
 // table for the same period. Caller must hold m.mu.
 func (m *unboundedManager) releaseAllPeers() {
 	m.prunePeerBytes()
+	m.liveTracker().CloseOwner(liveOwner)
 	for _, source := range m.peers {
 		m.releasePeer(source)
 	}

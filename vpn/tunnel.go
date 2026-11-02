@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
@@ -91,6 +92,13 @@ type tunnel struct {
 	// inviterTickets, if non-nil, supplies the Unbounded consumer's helper
 	// inviter tickets.
 	inviterTickets InviterTickets
+	// personalProxy is the friend tag the rooms consumer's tickets are
+	// narrowed to, while the personal proxy group exists. Written under
+	// outboundMu; read lock-free on the signaling path.
+	personalProxy atomic.Pointer[string]
+	// personalProxyFault, if set, can fail a personal proxy group step by
+	// name. For tests.
+	personalProxyFault func(step string) error
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
@@ -210,12 +218,15 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	// recursively re-enters itself. streamingRoundTripper forces kindling to
 	// skip AMP (non-streamable) so freddie's long-poll genesis stream works.
 	boxCtx = lbA.ContextWithDirectTransport(boxCtx, streamingRoundTripper{inner: kindling.HTTPClient().Transport})
+	if !slices.ContainsFunc(options.Outbounds, func(o O.Outbound) bool { return o.Tag == PersonalProxyTag }) {
+		t.personalProxy.Store(nil)
+	}
 	// An Unbounded consumer joins its helper pairings' rooms on freddie with
 	// the inviter tickets lantern-cloud issues this device. lantern-box gives
 	// the source only to helper-tagged Unbounded outbounds, which read it at
 	// every subscribe; the source fetches on first use and renews in the
 	// background, outside the tunnel like the signaling itself.
-	boxCtx = withHelperRoomTickets(boxCtx, t.inviterTickets)
+	boxCtx = withHelperRoomTickets(boxCtx, t)
 	t.prefetchInviterTickets(options.Outbounds)
 
 	t.ctx = boxCtx
@@ -335,9 +346,10 @@ func newMutableGroupManager(
 
 	var mutGroups []lbA.MutableOutboundGroup
 	for _, out := range oMgr.Outbounds() {
-		// The personal proxies group stays out: the manager's map is fixed at
-		// construction, and the tunnel removes and recreates the group.
-		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup && g.Tag() != PersonalProxiesTag {
+		// The personal proxy groups stay out: the manager's map is fixed at
+		// construction, and the tunnel removes and recreates them.
+		if g, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup &&
+			g.Tag() != PersonalProxiesTag && g.Tag() != PersonalProxyTag {
 			mutGroups = append(mutGroups, g)
 		}
 	}
@@ -510,6 +522,12 @@ func (t *tunnel) selectOutbound(tag string) error {
 	// in the manual selector, which restores its selection, cannot interleave.
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
+	if friend, ok := ParsePersonalProxySelection(tag); ok {
+		return t.selectPersonalProxyLocked(friend)
+	}
+	if tag == PersonalProxyTag {
+		return ErrPersonalProxyUnavailable
+	}
 	// Checked before the mode switch, so a refused selection changes nothing.
 	if tag == PersonalProxiesTag && !t.offersPersonalProxies() {
 		return ErrPersonalProxiesUnavailable
@@ -526,7 +544,18 @@ func (t *tunnel) selectOutbound(tag string) error {
 	if !outbound.(Selector).SelectOutbound(tag) && tag == PersonalProxiesTag {
 		return ErrPersonalProxiesUnavailable
 	}
-	return nil
+	return t.deselectPersonalProxyLocked()
+}
+
+// selectAuto switches the tunnel to auto-select, withdrawing a selected
+// friend's group.
+func (t *tunnel) selectAuto() error {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	if err := t.selectMode(AutoSelectTag); err != nil {
+		return err
+	}
+	return t.deselectPersonalProxyLocked()
 }
 
 // offersPersonalProxies reports whether the manual selector offers the
@@ -596,14 +625,25 @@ func (t *tunnel) swapIntoSelectionGroupsLocked(tag string) error {
 	return nil
 }
 
-// syncPersonalProxiesLocked makes the personal proxies group hold exactly the
-// helper outbounds the manual selector offers, as the outbound manager now
-// holds them. It creates the group with its first member and removes it with
-// its last (a url-test group must never be empty), and keeps the selector
-// offering it exactly while it exists. The caller must hold t.outboundMu.
+// syncPersonalProxiesLocked brings the personal proxies group and then the
+// selected friend's group in line with the helper outbounds the tunnel now
+// holds. The caller must hold t.outboundMu.
 func (t *tunnel) syncPersonalProxiesLocked() error {
 	replaced := t.replacedHelpers
 	t.replacedHelpers = nil
+	// The personal proxies group first: a friend's group that lost its last
+	// member falls back to it.
+	err := t.syncPersonalProxiesGroupLocked(replaced)
+	return errors.Join(err, t.syncPersonalProxyLocked(replaced))
+}
+
+// syncPersonalProxiesGroupLocked makes the personal proxies group hold exactly
+// the helper outbounds the manual selector offers, as the outbound manager now
+// holds them, pointing those in replaced at their new outbounds. It creates the
+// group with its first member and removes it with its last (a url-test group
+// must never be empty), and keeps the selector offering it exactly while it
+// exists. The caller must hold t.outboundMu.
+func (t *tunnel) syncPersonalProxiesGroupLocked(replaced map[string]struct{}) error {
 	if t.mutGrpMgr == nil || t.outboundMgr == nil {
 		return nil
 	}
@@ -1054,8 +1094,8 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 		errs      []error
 	)
 	for _, tag := range tags {
-		if tag == PersonalProxiesTag {
-			continue // the tunnel's own group: syncPersonalProxiesLocked manages it
+		if tag == PersonalProxiesTag || tag == PersonalProxyTag {
+			continue // the tunnel's own groups: syncPersonalProxiesLocked manages them
 		}
 		if out, loaded := mutGrpMgr.OutboundGroup(tag); loaded {
 			if _, isMutGroup := out.(lbA.MutableOutboundGroup); isMutGroup {
@@ -1283,11 +1323,11 @@ func (t *tunnel) prefetchInviterTickets(outbounds []O.Outbound) {
 	}
 }
 
-// withHelperRoomTickets gives the Unbounded outbound src's inviter tickets.
-// With no source, ctx is returned unchanged.
-func withHelperRoomTickets(ctx context.Context, src InviterTickets) context.Context {
-	if src == nil {
+// withHelperRoomTickets gives the Unbounded outbound t's room tickets (see
+// tunnel.roomTickets). With no ticket source, ctx is returned unchanged.
+func withHelperRoomTickets(ctx context.Context, t *tunnel) context.Context {
+	if t.inviterTickets == nil {
 		return ctx
 	}
-	return lbA.ContextWithRoomTicketSource(ctx, src.Inviter)
+	return lbA.ContextWithRoomTicketSource(ctx, t.roomTickets)
 }
