@@ -124,6 +124,11 @@ func (r *Relayer) Relay(ctx context.Context, op string, body []byte) (RelayResul
 	}
 	out := RelayResult{Status: resp.StatusCode}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		// lantern-cloud's JSON bindings answer an Empty with no body unless
+		// told otherwise; that is a success with nothing to return.
+		if len(bytes.TrimSpace(data)) == 0 {
+			data = []byte("{}")
+		}
 		if !json.Valid(data) {
 			return RelayResult{}, errors.New("helper response is not JSON")
 		}

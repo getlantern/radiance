@@ -295,3 +295,21 @@ func TestRestartIfCurrentStartsAfterASlowStop(t *testing.T) {
 	close(block)
 	waitForCount(t, &count, 2, 2*time.Second)
 }
+
+func TestWidgetReportsTheVPNStatus(t *testing.T) {
+	count, opts, _ := recordingWidgets(t)
+	SetVPNStatus(func() string { return "connected" })
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	require.NotNil(t, opts(0).VPNStatus)
+	assert.Equal(t, "connected", opts(0).VPNStatus())
+}
+
+func TestWidgetWithoutVPNStatusReportsNone(t *testing.T) {
+	count, opts, _ := recordingWidgets(t)
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	assert.Nil(t, opts(0).VPNStatus)
+}
