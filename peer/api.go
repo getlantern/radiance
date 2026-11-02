@@ -14,6 +14,7 @@ import (
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/helper"
 )
 
 type RegisterRequest struct {
@@ -103,6 +104,12 @@ type HeartbeatRequest struct {
 	// one TCP conn, and a client may hold several, so a connection count would
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
+	// RelayedBytes is every byte relayed since the last heartbeat that
+	// succeeded; omitted when zero.
+	RelayedBytes uint64 `json:"relayed_bytes,omitempty"`
+	// PairedBytes is the part of RelayedBytes that came through each helper
+	// pairing.
+	PairedBytes []helper.PairedBytes `json:"paired_bytes,omitempty"`
 }
 
 // decodeError is a 2xx response whose body did not decode, so callers can
@@ -173,8 +180,12 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // server has recorded the heartbeat, so a body that doesn't decode, including
 // the empty body of a server that predates the IDs, never fails it: the
 // response comes back as not known and the peer keeps the set it has.
-func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) (*HeartbeatResponse, error) {
-	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
+//
+// usage is the traffic to report; a heartbeat that returns an error was not
+// recorded, so the caller reports its usage again.
+func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int, usage RelayUsage) (*HeartbeatResponse, error) {
+	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients,
+		RelayedBytes: usage.RelayedBytes, PairedBytes: usage.PairedBytes}
 	var resp HeartbeatResponse
 	err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp)
 	var de *decodeError

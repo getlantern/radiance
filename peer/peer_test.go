@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -1213,7 +1214,7 @@ func TestAPI_ForwardsCommonHeaders(t *testing.T) {
 	_, err := api.Register(ctx, RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698, InternalPort: 35698})
 	require.NoError(t, err)
 	require.NoError(t, api.Verify(ctx, "00000000-0000-0000-0000-000000000123"))
-	_, err = api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123", 0)
+	_, err = api.Heartbeat(ctx, "00000000-0000-0000-0000-000000000123", 0, RelayUsage{})
 	require.NoError(t, err)
 	require.NoError(t, api.Deregister(ctx, "00000000-0000-0000-0000-000000000123"))
 
@@ -1460,14 +1461,14 @@ func TestTrackConn_DropsCountsWhileDraining(t *testing.T) {
 func TestAPI_HeartbeatReturnsPairingShortIDs(t *testing.T) {
 	srv := newStubServer(t)
 	api := NewAPI(srv.server.Client(), srv.server.URL+"/v1", "test-device")
-	resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+	resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0, RelayUsage{})
 	require.NoError(t, err, "an empty body is a heartbeat from a server that predates pairings")
 	assert.Empty(t, resp.PairingShortIDs)
 	assert.False(t, resp.PairingShortIDsKnown)
 
 	srv.heartbeatShortIDs.Store(&[]string{"1111111111111111"})
 	srv.heartbeatRevision.Store(1761004800000)
-	resp, err = api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+	resp, err = api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0, RelayUsage{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1111111111111111"}, resp.PairingShortIDs)
 	assert.True(t, resp.PairingShortIDsKnown)
@@ -1511,7 +1512,7 @@ func TestAPI_HeartbeatToleratesMissingPairingFields(t *testing.T) {
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
 			api := NewAPI(srv.Client(), srv.URL, "test-device")
-			resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0)
+			resp, err := api.Heartbeat(context.Background(), "00000000-0000-0000-0000-000000000123", 0, RelayUsage{})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantIDs, resp.PairingShortIDs)
 			assert.Equal(t, tc.wantKnown, resp.PairingShortIDsKnown)
@@ -1592,4 +1593,48 @@ func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
 	api := NewAPI(srv.Client(), srv.URL, "test-device")
 	_, err := api.Register(context.Background(), RegisterRequest{ExternalIP: "203.0.113.42", ExternalPort: 5698})
 	require.Error(t, err, "a register without a route or config is unusable")
+}
+
+func TestHeartbeatReportsUsageUntilDelivered(t *testing.T) {
+	var fail atomic.Bool
+	var mu sync.Mutex
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(b, &m))
+		mu.Lock()
+		bodies = append(bodies, m)
+		mu.Unlock()
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := &Client{cfg: Config{API: NewAPI(srv.Client(), srv.URL, "dev")}}
+	gen := c.relay.begin()
+	c.relay.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, counter(1000, 24))
+	c.relay.recordPairingFor(gen, 1, "203.0.113.9:1000", "", counter(76, 0))
+	ctx := context.Background()
+
+	fail.Store(true)
+	_, err := c.sendHeartbeat(ctx, "route")
+	require.Error(t, err)
+	fail.Store(false)
+	_, err = c.sendHeartbeat(ctx, "route")
+	require.NoError(t, err)
+	_, err = c.sendHeartbeat(ctx, "route")
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, bodies, 3)
+	want := map[string]any{"route_id": "route", "active_clients": 0.0, "relayed_bytes": 1100.0,
+		"paired_bytes": []any{map[string]any{"pairing_id": usagePairingA, "bytes": 1024.0}}}
+	assert.Equal(t, want, bodies[0], "only the pairing ID and bytes are sent")
+	assert.Equal(t, want, bodies[1], "a failed heartbeat's usage goes out again")
+	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 0.0}, bodies[2],
+		"a delivered report is cleared, and zero usage sends no fields")
 }

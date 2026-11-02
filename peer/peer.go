@@ -1057,6 +1057,18 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 	return true
 }
 
+// sendHeartbeat sends one heartbeat carrying the traffic relayed since the
+// last one that succeeded. A heartbeat that fails keeps that traffic for the
+// next.
+func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
+	usage := c.relay.takeUsage()
+	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
+	if err != nil {
+		c.relay.restoreUsage(usage)
+	}
+	return resp, err
+}
+
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
 // tearing down resources. The channel is passed in rather than read off the
 // Client because Stop nils c.runDone before waiting on its local copy.
@@ -1077,7 +1089,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			resp, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			resp, err := c.sendHeartbeat(hbCtx, routeID)
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
