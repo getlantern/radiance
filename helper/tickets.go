@@ -122,15 +122,13 @@ func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
 	return &Fetcher{httpClient: httpClient, baseURL: baseURL}
 }
 
-// WithUsage makes every fetch report the rooms-mode bytes u has accumulated.
-// A fetch lantern-cloud does not answer with a 2xx puts them back for the
-// next.
+// WithUsage makes every fetch report the bytes u has accumulated. A fetch
+// that fails to send or gets a non-2xx response puts them back for the next.
 func (f *Fetcher) WithUsage(u *Usage) *Fetcher {
 	f.usage = u
 	return f
 }
 
-// ticketRequest is the body of POST /helper/tickets.
 type ticketRequest struct {
 	PairedBytes []PairedBytes `json:"paired_bytes,omitempty"`
 }
