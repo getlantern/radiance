@@ -9,12 +9,15 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	wire "github.com/getlantern/common/usermessage"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/vpn"
 )
 
 func TestFallbackOptionsPreserveUserMessageCapabilities(t *testing.T) {
@@ -74,4 +77,32 @@ func TestRemoteClientNeverCreatesFallback(t *testing.T) {
 	require.Equal(t, "connected", event)
 	client.Close()
 	require.Nil(t, client.localapi)
+}
+
+// The in-process subscription cannot hear a save made before it, so the
+// handler runs once on subscribing, then once per save.
+func TestSelectionSavedEventsLocalCallsOnSubscribe(t *testing.T) {
+	client := newClient()
+	client.localOnly = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := make(chan struct{}, 4)
+	done := make(chan struct{})
+	go func() {
+		_ = client.SelectionSavedEvents(ctx, func(vpn.SelectionSavedEvent) { calls <- struct{}{} })
+		close(done)
+	}()
+	waitCall := func() {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler not called")
+		}
+	}
+	waitCall()
+	events.Emit(vpn.SelectionSavedEvent{})
+	waitCall()
+	cancel()
+	<-done
 }

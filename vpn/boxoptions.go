@@ -59,7 +59,7 @@ var (
 	personalProxiesProbeInterval = urlTestInterval
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block"}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -81,7 +81,9 @@ type BoxOptions struct {
 	NonSelectableOutbounds []string `json:"non_selectable_outbounds,omitempty"`
 	// InitialServer chooses the outbound selected when the tunnel starts.
 	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
-	// must match an outbound or endpoint and forces manual selection.
+	// must match an outbound or endpoint, or be a PersonalProxySelection, and
+	// forces manual selection. A friend with no member at the start selects
+	// PersonalProxiesTag instead, or auto mode without helpers.
 	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
@@ -97,6 +99,10 @@ type BoxOptions struct {
 	// outbounds baked into the initial config get no data-usage attribution.
 	// The Injector covers outbounds only, so endpoint tags have no effect.
 	LanternServerTags []string `json:"lantern_server_tags,omitempty"`
+
+	// personalProxyRooms reports whether a rooms consumer may reach the
+	// friend InitialServer selects; the VPN client sets it.
+	personalProxyRooms bool
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
@@ -394,10 +400,11 @@ func tunHasIPv6(opts O.Options) bool {
 	return false
 }
 
-// buildOptions builds the box options using the config options and user servers.
+// buildOptions builds the box options using the config options and user servers,
+// and returns the clash mode the tunnel must start in.
 // Denied outbounds, endpoints and services are dropped; denied DNS or route
 // options fail the build with an error wrapping [hostaccess.ErrDenied].
-func buildOptions(bOptions BoxOptions) (O.Options, error) {
+func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
@@ -405,10 +412,10 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	bOptions.Options.Endpoints = allowedEndpoints(bOptions.Options.Endpoints)
 	bOptions.Options.Services = allowedServices(bOptions.Options.Services)
 	if err := hostaccess.CheckOptions(bOptions.Options); err != nil {
-		return O.Options{}, err
+		return O.Options{}, "", err
 	}
 	if len(bOptions.Options.Outbounds) == 0 && len(bOptions.Options.Endpoints) == 0 {
-		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+		return O.Options{}, "", errors.New("no outbounds or endpoints found in config or user servers")
 	}
 
 	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
@@ -447,11 +454,26 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		selectable = append(slices.Clone(tags), PersonalProxiesTag)
 	}
 
-	if initial := bOptions.InitialServer; modeForServer(initial) == ManualSelectTag {
+	initial := bOptions.InitialServer
+	var friendMembers []string
+	if friend, ok := ParsePersonalProxySelection(initial); ok {
+		friendMembers = personalProxyStartMembers(friend, helpers, bOptions.Options.Outbounds, bOptions.personalProxyRooms)
+		switch {
+		case len(friendMembers) > 0:
+			selectable = append(slices.Clone(selectable), PersonalProxyTag)
+			initial = PersonalProxyTag
+		case len(helpers) > 0:
+			initial = PersonalProxiesTag
+		default:
+			initial = AutoSelectTag
+		}
+	}
+	mode := modeForServer(initial)
+	if mode == ManualSelectTag {
 		// The manual selector defaults to its first tag, so place initial at index 0.
 		i := slices.Index(selectable, initial)
 		if i == -1 {
-			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
+			return O.Options{}, "", fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
 		}
 		selectable[0], selectable[i] = selectable[i], selectable[0]
 	}
@@ -465,6 +487,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	if len(helpers) > 0 {
 		opts.Outbounds = append(opts.Outbounds, personalProxiesOutbound(helpers))
 	}
+	if len(friendMembers) > 0 {
+		opts.Outbounds = append(opts.Outbounds, personalProxyOutbound(friendMembers))
+	}
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
@@ -475,10 +500,10 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	opts, err := jsonRoundTrip(bOptions.BasePath, opts)
 	if err != nil {
-		return opts, fmt.Errorf("validating options: %w", err)
+		return opts, "", fmt.Errorf("validating options: %w", err)
 	}
 
-	return opts, nil
+	return opts, mode, nil
 }
 
 // jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.

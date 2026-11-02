@@ -1524,6 +1524,8 @@ func newPersonalProxiesBackendIn(t *testing.T, dataDir string) *LocalBackend {
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(dataDir))
+	// A connect writes the tunnel's files under the data path.
+	require.NoError(t, settings.Set(settings.DataPathKey, dataDir))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
@@ -1827,12 +1829,59 @@ func TestConnectedSelectionFallsBackWhenWithdrawnDuringConnect(t *testing.T) {
 // the real update does when its guards keep old outbounds; ReconcileHelpers
 // does what the real one does. calls records each call in order.
 type fakeHelperTunnel struct {
-	mu      sync.Mutex
-	live    map[string]string
-	removed [][]string
-	calls   []string
-	fail    bool
-	gate    func() // if set, runs before each reconciliation
+	mu       sync.Mutex
+	live     map[string]string
+	removed  [][]string
+	calls    []string
+	fail     bool
+	gate     func() // if set, runs before each reconciliation
+	onSelect func() // if set, runs as each selection is applied
+	// onRestart, if set, runs as a restart begins, before it rebuilds.
+	onRestart func()
+	// selected is the selection the tunnel last applied.
+	selected string
+	// friend is the friend whose group the tunnel has selected, or "".
+	friend string
+	// friendless starts a connect or restart that selects a friend on the
+	// personal proxies group, as a tunnel built while the friend had no
+	// member does; refuseFriend refuses every selection of a friend.
+	friendless, refuseFriend bool
+	// rebuild makes a restart hold only the outbounds in its options, and a
+	// selection of a friend require the friend's outbound.
+	rebuild bool
+}
+
+// startOn applies initial as a tunnel built with it would. The caller must
+// hold f.mu.
+func (f *fakeHelperTunnel) startOn(initial string) {
+	f.selected, f.friend = initial, ""
+	if friend, ok := vpn.ParsePersonalProxySelection(initial); ok {
+		if f.friendless {
+			f.selected = vpn.PersonalProxiesTag
+		} else {
+			f.friend = friend
+		}
+	}
+}
+
+func (f *fakeHelperTunnel) Connect(_ context.Context, boxOptions vpn.BoxOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "connect:"+boxOptions.InitialServer)
+	if f.live == nil {
+		f.live = make(map[string]string)
+	}
+	f.startOn(boxOptions.InitialServer)
+	return nil
+}
+
+func (f *fakeHelperTunnel) SelectedPersonalProxy() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil {
+		return ""
+	}
+	return f.friend
 }
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
@@ -1875,13 +1924,50 @@ func (f *fakeHelperTunnel) RemoveOutbounds(tags []string) error {
 }
 
 func (f *fakeHelperTunnel) SelectServer(tag string) error {
+	if f.onSelect != nil {
+		f.onSelect()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "select:"+tag)
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
+	friend, isFriend := vpn.ParsePersonalProxySelection(tag)
+	if isFriend && f.refuseFriend {
+		return vpn.ErrPersonalProxyUnavailable
+	}
+	if _, held := f.live[friend]; isFriend && f.rebuild && !held {
+		return vpn.ErrPersonalProxyUnavailable
+	}
+	f.selected, f.friend = tag, friend
 	return nil
+}
+
+func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
+	if f.onRestart != nil {
+		f.onRestart()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "restart:"+boxOptions.InitialServer)
+	if f.live == nil {
+		return vpn.ErrTunnelNotConnected
+	}
+	if f.rebuild {
+		f.live = make(map[string]string)
+		for _, out := range boxOptions.Options.Outbounds {
+			f.live[out.Tag] = out.Type
+		}
+	}
+	f.startOn(boxOptions.InitialServer)
+	return nil
+}
+
+func (f *fakeHelperTunnel) current() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.selected
 }
 
 func (f *fakeHelperTunnel) ReconcileHelpers(helpers servers.ServerList) error {

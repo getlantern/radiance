@@ -112,3 +112,20 @@ func TestIssueArchiveRedactsThePersonalProxiesTag(t *testing.T) {
 		assert.NotContains(t, e.content, "203.0.113.7", e.name)
 	}
 }
+
+func TestIssueArchiveRedactsAPersonalProxySelection(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "lantern.log"),
+		[]byte("outbound/mutableurltest[personal-proxy]: dial tcp 203.0.113.7:443\n"), 0644))
+	settingsFile := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.WriteFile(settingsFile,
+		[]byte(`{"selected_server":{"tag":"personal-proxy:helper-0123456789ab","type":"mutableurltest","isLantern":false}}`), 0644))
+
+	result, err := buildIssueArchive(log.NoOpLogger(), dir, []string{settingsFile}, 1024*1024)
+	require.NoError(t, err)
+	for _, e := range readZipEntries(t, result) {
+		assert.NotContains(t, e.content, "personal-proxy", e.name)
+		assert.NotContains(t, e.content, "helper-0123456789ab", e.name)
+		assert.NotContains(t, e.content, "203.0.113.7", e.name)
+	}
+}

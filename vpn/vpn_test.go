@@ -442,3 +442,18 @@ func TestCurrentSelectedServer_WhileRejecting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "srv-a", tag)
 }
+
+func TestSelectedPersonalProxy(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.Empty(t, c.SelectedPersonalProxy(), "no tunnel")
+
+	friend := "helper-aaaaaaaaaaaa"
+	c.tunnel = &tunnel{}
+	c.tunnel.personalProxy.Store(&friend)
+	assert.Empty(t, c.SelectedPersonalProxy(), "a tunnel that is not connected")
+
+	c.status.Store(Connected)
+	assert.Equal(t, friend, c.SelectedPersonalProxy())
+	c.tunnel.personalProxy.Store(nil)
+	assert.Empty(t, c.SelectedPersonalProxy())
+}

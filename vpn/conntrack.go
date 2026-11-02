@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -459,6 +460,14 @@ func (m *connTracker) flowChain(matchedRule A.Rule, leaf A.Outbound) []string {
 	}
 	chain[0] = leaf.Tag()
 	return chain
+}
+
+func (m *connTracker) closeThrough(group string) {
+	for _, r := range m.conns.Iter() {
+		if slices.Contains(r.chain, group) {
+			m.closeRecord(r)
+		}
+	}
 }
 
 // tcpConn and udpConn wrap a counted connection. Upstream/ReaderReplaceable/WriterReplaceable let
