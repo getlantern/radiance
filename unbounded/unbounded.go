@@ -208,6 +208,9 @@ type unboundedManager struct {
 	// lastOwner keeps a closed slot's tally so bytes broflake reports after the
 	// close are still credited to it.
 	lastOwner map[int]*peerTally
+	// slotPairing is each slot's helper pairing, kept after the slot closes
+	// until its next accept, the same as lastOwner.
+	slotPairing map[int]string
 	// retired holds stopped runs' tables still absorbing late bytes.
 	retired []retiredRun
 	// now overrides time.Now for peer retention tests.
@@ -215,8 +218,8 @@ type unboundedManager struct {
 	// live receives slots serving helper pairings. Nil means
 	// helper.DefaultLive.
 	live *helper.LiveTracker
-	// usage receives the bytes relayed for each helper pairing, which the
-	// ticket fetch reports. Nil counts nothing.
+	// usage receives the bytes relayed for each helper pairing. Nil counts
+	// nothing.
 	usage *helper.Usage
 }
 

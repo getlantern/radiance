@@ -447,3 +447,84 @@ func TestPairedSlotBytesAccrueToUsage(t *testing.T) {
 	require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 5}}, u.Take(), "a snapshot's fold accrues too")
 	require.Equal(t, uint64(1104), m.snapshot().BytesDown, "the widget's own totals are unchanged")
 }
+
+func TestPairedUsageIsPerSlotNotPerIP(t *testing.T) {
+	for _, pairedFirst := range []bool{true, false} {
+		now := time.Unix(1000, 0)
+		m, slots := newBytesManager(&now)
+		m.live = helper.NewLiveTracker(nil)
+		u := &helper.Usage{}
+		m.usage = u
+		u.SetFlush(m.foldPending)
+		ctx := context.Background()
+		down := chunkCounter(slots, true)
+
+		paired, pool := 0, 1
+		if !pairedFirst {
+			paired, pool = 1, 0
+		}
+		for _, slot := range []int{0, 1} {
+			m.recordConnection(ctx, 1, slot, "198.51.100.7")
+			if slot == paired {
+				m.recordPairing(ctx, slots, 1, slot, testPairing)
+			} else {
+				m.recordPairing(ctx, slots, 1, slot, "")
+			}
+		}
+		down(100, paired)
+		down(999, pool)
+		require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 100}}, u.Take(),
+			"paired first: %v", pairedFirst)
+
+		m.recordConnection(ctx, -1, paired, "")
+		m.recordPairing(ctx, slots, -1, paired, "")
+		down(7, paired)
+		down(999, pool)
+		require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 7}}, u.Take(),
+			"late bytes on a closed paired slot keep its pairing, paired first: %v", pairedFirst)
+
+		m.recordConnection(ctx, 1, paired, "198.51.100.9")
+		m.recordPairing(ctx, slots, 1, paired, "")
+		down(50, paired)
+		require.Nil(t, u.Take(), "a pool consumer reusing the slot is not paired")
+	}
+}
+
+func TestPairedUsageCreditsRetiredRunBytes(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, oldSlots := newBytesManager(&now)
+	m.live = helper.NewLiveTracker(nil)
+	u := &helper.Usage{}
+	m.usage = u
+	u.SetFlush(m.foldPending)
+	ctx := context.Background()
+	oldDown := chunkCounter(oldSlots, true)
+
+	m.recordConnection(ctx, 1, 0, "198.51.100.7")
+	m.recordPairing(ctx, oldSlots, 1, 0, testPairing)
+	oldDown(10, 0)
+	m.mu.Lock()
+	m.releaseAllPeers()
+	newSlots := &slotTable{}
+	m.slots = newSlots
+	m.peers = make(map[int]string)
+	m.mu.Unlock()
+
+	oldDown(4, 0)
+	m.recordConnection(ctx, 1, 0, "198.51.100.8")
+	m.recordPairing(ctx, newSlots, 1, 0, "")
+	chunkCounter(newSlots, true)(999, 0)
+	require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 14}}, u.Take())
+}
+
+func TestPairedTrafficWithoutUsage(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, slots := newBytesManager(&now)
+	m.live = helper.NewLiveTracker(nil)
+	ctx := context.Background()
+	m.recordConnection(ctx, 1, 0, "198.51.100.7")
+	m.recordPairing(ctx, slots, 1, 0, testPairing)
+	chunkCounter(slots, true)(10, 0)
+	require.NotPanics(t, m.foldPending)
+	require.Equal(t, uint64(10), m.snapshot().BytesDown)
+}
