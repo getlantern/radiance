@@ -1059,8 +1059,9 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 
 // sendHeartbeat sends one heartbeat carrying the traffic relayed since the
 // last one that succeeded. A heartbeat that fails keeps that traffic for the
-// next, except on a 400: a server that predates the usage fields rejects
-// them, so the traffic is dropped and the heartbeat sent again without it.
+// next, except on a 400 for a heartbeat that carried traffic: a server that
+// predates the usage fields rejects them, so the traffic is dropped and the
+// heartbeat sent again without it.
 func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
 	usage := c.relay.takeUsage()
 	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
