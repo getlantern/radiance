@@ -134,8 +134,8 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
-	// helperUsage is the rooms-mode bytes relayed per helper pairing, which
-	// the widget adds to and the ticket fetch reports.
+	// helperUsage is the rooms-mode bytes relayed per helper pairing, shared
+	// by the widget and the ticket fetcher.
 	helperUsage *helper.Usage
 	// helperRelay sends the app's helper-invite requests to lantern-cloud.
 	helperRelay *helper.Relayer

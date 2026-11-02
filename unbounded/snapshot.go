@@ -353,8 +353,8 @@ func (m *unboundedManager) slotOwner(idx int) *peerTally {
 	return m.lastOwner[idx]
 }
 
-// addSlotBytes counts a nil t toward the totals and m.usage all the same.
-// Caller must hold m.mu.
+// addSlotBytes drains s into the totals, and into m.usage for a non-empty
+// pairing, even when t is nil. Caller must hold m.mu.
 func (m *unboundedManager) addSlotBytes(t *peerTally, pairing string, s *slotBytes) {
 	down, up := s.down.Swap(0), s.up.Swap(0)
 	if down == 0 && up == 0 {
