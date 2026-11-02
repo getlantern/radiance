@@ -312,7 +312,8 @@ func (m *unboundedManager) foldRetiredRuns() {
 }
 
 // foldSlot moves a slot's pending bytes into the totals and, when the slot's
-// IP is known, that IP's tally. Caller must hold m.mu.
+// IP is known, that IP's tally, and credits them to m.usage when the slot
+// serves a helper pairing. Caller must hold m.mu.
 func (m *unboundedManager) foldSlot(idx int) {
 	if m.slots == nil {
 		return
@@ -352,8 +353,8 @@ func (m *unboundedManager) slotOwner(idx int) *peerTally {
 	return m.lastOwner[idx]
 }
 
-// addSlotBytes moves a slot's pending bytes into the totals and t, and
-// credits them to m.usage when the slot serves a helper pairing.
+// addSlotBytes counts a nil t toward the totals and m.usage all the same.
+// Caller must hold m.mu.
 func (m *unboundedManager) addSlotBytes(t *peerTally, pairing string, s *slotBytes) {
 	down, up := s.down.Swap(0), s.up.Swap(0)
 	if down == 0 && up == 0 {
