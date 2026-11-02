@@ -215,6 +215,9 @@ type unboundedManager struct {
 	// live receives slots serving helper pairings. Nil means
 	// helper.DefaultLive.
 	live *helper.LiveTracker
+	// usage receives the bytes relayed for each helper pairing, which the
+	// ticket fetch reports. Nil counts nothing.
+	usage *helper.Usage
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -300,6 +303,15 @@ func SetTicketSource(src roomTickets) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.tickets = src
+}
+
+// SetPairedUsage sets where the widget counts the bytes it relays for each
+// helper pairing. A take from u first folds the widget's pending slot bytes.
+func SetPairedUsage(u *helper.Usage) {
+	manager.mu.Lock()
+	manager.usage = u
+	manager.mu.Unlock()
+	u.SetFlush(manager.foldPending)
 }
 
 // SetVPNStatus sets where the widget reads the VPN tunnel's state, which it

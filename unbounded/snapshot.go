@@ -321,6 +321,15 @@ func (m *unboundedManager) foldAllSlots() {
 	})
 }
 
+// foldPending moves every slot's pending bytes into the totals, crediting
+// paired bytes to m.usage.
+func (m *unboundedManager) foldPending() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.foldAllSlots()
+	m.foldRetiredRuns()
+}
+
 // slotOwner is the tally credited with a live slot's bytes: its current
 // consumer's, or the last one's while the slot is vacant. Owners are held as
 // tallies rather than IPs, so bytes from a pruned lifetime never reach a
@@ -342,6 +351,9 @@ func (m *unboundedManager) addSlotBytes(t *peerTally, s *slotBytes) {
 	if t != nil {
 		t.down += down
 		t.up += up
+		if t.pairing != "" {
+			m.usage.Add(t.pairing, down+up)
+		}
 	}
 }
 

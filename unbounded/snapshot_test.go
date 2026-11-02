@@ -9,6 +9,7 @@ import (
 
 	"github.com/getlantern/broflake/clientcore"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/helper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -417,4 +418,32 @@ func TestSnapshotLateBytesAfterPruneSkipReturningIP(t *testing.T) {
 	s := m.snapshot()
 	require.Equal(t, uint64(7), s.BytesUp)
 	require.Equal(t, []PeerBytes{{IP: "192.0.2.1"}}, s.PeerBytes)
+}
+
+func TestPairedSlotBytesAccrueToUsage(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m, slots := newBytesManager(&now)
+	m.live = helper.NewLiveTracker(nil)
+	u := &helper.Usage{}
+	m.usage = u
+	u.SetFlush(m.foldPending)
+	ctx := context.Background()
+	down, up := chunkCounter(slots, true), chunkCounter(slots, false)
+
+	m.recordConnection(ctx, 1, 0, "198.51.100.7")
+	m.recordPairing(ctx, slots, 1, 0, testPairing)
+	m.recordConnection(ctx, 1, 1, "198.51.100.8")
+	m.recordPairing(ctx, slots, 1, 1, "")
+	down(100, 0)
+	up(20, 0)
+	down(999, 1)
+
+	require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 120}}, u.Take(),
+		"a take folds the slots first; pool bytes are not paired")
+	require.Nil(t, u.Take())
+
+	down(5, 0)
+	_ = m.snapshot()
+	require.Equal(t, []helper.PairedBytes{{PairingID: testPairing, Bytes: 5}}, u.Take(), "a snapshot's fold accrues too")
+	require.Equal(t, uint64(1104), m.snapshot().BytesDown, "the widget's own totals are unchanged")
 }
