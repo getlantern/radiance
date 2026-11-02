@@ -104,8 +104,8 @@ type HeartbeatRequest struct {
 	// one TCP conn, and a client may hold several, so a connection count would
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
-	// RelayedBytes is the bytes relayed since the last delivered report;
-	// omitted when zero.
+	// RelayedBytes is the bytes relayed since the last heartbeat that
+	// succeeded; omitted when zero.
 	RelayedBytes uint64 `json:"relayed_bytes,omitempty"`
 	// PairedBytes omits traffic that came through no pairing, so its sum can
 	// be less than RelayedBytes.

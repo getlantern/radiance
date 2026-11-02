@@ -307,7 +307,7 @@ func (r *relayStats) recordPairingFor(gen uint64, state int, source, pairing str
 	}
 }
 
-// setPairing labels an open connection's client with pairing, for a
+// setPairing attributes an open connection, and its client, to pairing, for a
 // connection attributed after it was accepted.
 func (r *relayStats) setPairing(bytes *peerconn.Counter, pairing string) {
 	r.mu.Lock()
