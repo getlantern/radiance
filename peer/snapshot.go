@@ -55,8 +55,9 @@ type relayTally struct {
 	latest  *peerconn.Counter
 }
 
-// relayConn is an open connection's source and, once a later session has
-// begun, when its own session was retired. A retired connection may still be
+// relayConn is an open connection's source, pairing and accrual state and,
+// once a later session has begun, when its own session was retired. A retired
+// connection may still be
 // draining in a box that has not finished closing, so its counter is read
 // live for relayRetention before being folded into the totals.
 type relayConn struct {
@@ -65,8 +66,8 @@ type relayConn struct {
 	// pairing is the helper pairing the connection came through, "" for the
 	// pool or not yet attributed.
 	pairing string
-	// reported is how many of the counter's bytes are already in the
-	// pending usage.
+	// reported is how many of the counter's bytes have already been added
+	// to the pending usage.
 	reported uint64
 }
 
@@ -92,10 +93,12 @@ type relayStats struct {
 	// carries an old generation, so its event is ignored rather than counted
 	// after the session it belongs to has ended.
 	gen uint64
-	// pendingTotal and pendingPaired are the bytes relayed since the last
-	// heartbeat that reported them. Only takeUsage clears them: they carry
-	// across sessions, unlike the snapshot's retention.
-	pendingTotal  uint64
+	// pendingTotal and pendingPaired are the bytes accrued but not yet taken.
+	// Only takeUsage clears them: they carry across sessions, unlike the
+	// snapshot's retention.
+	pendingTotal uint64
+	// pendingPaired is taken with r.mu held, so it must never be given a
+	// flush.
 	pendingPaired helper.Usage
 	now           func() time.Time
 }
@@ -107,9 +110,8 @@ func (r *relayStats) clock() time.Time {
 	return time.Now()
 }
 
-// RelayUsage is the traffic a heartbeat reports: every byte relayed since the
-// last heartbeat that succeeded, and the part of it that came through each
-// helper pairing.
+// RelayUsage is the bytes relayed over one usage interval: RelayedBytes in
+// total, and PairedBytes the part of it that came through each helper pairing.
 type RelayUsage struct {
 	RelayedBytes uint64
 	PairedBytes  []helper.PairedBytes

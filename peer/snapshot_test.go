@@ -345,3 +345,19 @@ func TestRelayStats_UsageSurvivesSessionEnd(t *testing.T) {
 	assert.Equal(t, RelayUsage{RelayedBytes: 10, PairedBytes: []helper.PairedBytes{
 		{PairingID: usagePairingA, Bytes: 10}}}, r.takeUsage())
 }
+
+func TestRelayStats_UsageCreditsEachConnectionsOwnPairing(t *testing.T) {
+	for _, other := range []string{"", usagePairingB} {
+		var r relayStats
+		gen := r.begin()
+		a, o := counter(40, 2), counter(500, 9)
+		r.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, a)
+		r.recordPairingFor(gen, 1, "203.0.113.8:2000", other, o)
+		want := []helper.PairedBytes{{PairingID: usagePairingA, Bytes: 42}}
+		if other != "" {
+			want = append(want, helper.PairedBytes{PairingID: other, Bytes: 509})
+		}
+		assert.Equal(t, RelayUsage{RelayedBytes: 551, PairedBytes: want}, r.takeUsage(),
+			"same IP, other pairing %q: each connection credits only its own pairing", other)
+	}
+}
