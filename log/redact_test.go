@@ -367,3 +367,12 @@ func TestRedactingWriterRedactsThePersonalProxiesTag(t *testing.T) {
 	assert.Equal(t, len(in), n)
 	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp [REDACTED]\n", buf.String())
 }
+
+func TestRedactingWriterRedactsThePersonalProxyTag(t *testing.T) {
+	var buf bytes.Buffer
+	w := newRedactingWriter(&buf)
+	in := []byte("outbound/mutableurltest[personal-proxy]: dial tcp 203.0.113.7:443\n")
+	_, err := w.Write(in)
+	require.NoError(t, err)
+	assert.Equal(t, "outbound/mutableurltest[helper]: dial tcp [REDACTED]\n", buf.String())
+}

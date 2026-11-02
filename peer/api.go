@@ -43,6 +43,18 @@ type RegisterResponse struct {
 	// in Unix milliseconds, so the peer never replaces a set with an older
 	// one. Non-zero exactly when PairingShortIDsKnown is true.
 	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
+	// PairingShortIDSets is PairingShortIDs grouped by pairing, so the peer
+	// can tell which pairing a connection came through. Joined in order, the
+	// groups' IDs are PairingShortIDs. Covered by the same Known and
+	// Revision. Absent from servers that predate it.
+	PairingShortIDSets []PairingShortIDSet `json:"pairing_short_id_sets"`
+}
+
+// PairingShortIDSet is one pairing's short IDs. PairingID identifies a
+// friend relationship and must never be logged or persisted.
+type PairingShortIDSet struct {
+	PairingID string   `json:"pairing_id"`
+	ShortIDs  []string `json:"short_ids"`
 }
 
 // Revision is an int64 that decodes from a JSON number or, as lantern-cloud's
@@ -73,6 +85,8 @@ type HeartbeatResponse struct {
 	PairingShortIDs         []string `json:"pairing_short_ids"`
 	PairingShortIDsKnown    bool     `json:"pairing_short_ids_known"`
 	PairingShortIDsRevision Revision `json:"pairing_short_ids_revision"`
+	// PairingShortIDSets is as for RegisterResponse.
+	PairingShortIDSets []PairingShortIDSet `json:"pairing_short_id_sets"`
 }
 
 type LifecycleRequest struct {

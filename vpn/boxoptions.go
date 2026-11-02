@@ -59,7 +59,7 @@ var (
 	personalProxiesProbeInterval = urlTestInterval
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block"}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -81,7 +81,9 @@ type BoxOptions struct {
 	NonSelectableOutbounds []string `json:"non_selectable_outbounds,omitempty"`
 	// InitialServer chooses the outbound selected when the tunnel starts.
 	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
-	// must match an outbound or endpoint and forces manual selection.
+	// must match an outbound or endpoint, or be a PersonalProxySelection, and
+	// forces manual selection. A friend with no member at the start selects
+	// PersonalProxiesTag instead, or auto mode without helpers.
 	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
@@ -97,6 +99,10 @@ type BoxOptions struct {
 	// outbounds baked into the initial config get no data-usage attribution.
 	// The Injector covers outbounds only, so endpoint tags have no effect.
 	LanternServerTags []string `json:"lantern_server_tags,omitempty"`
+
+	// personalProxyRooms reports whether a rooms consumer may reach the
+	// friend InitialServer selects; the VPN client sets it.
+	personalProxyRooms bool
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
@@ -452,6 +458,19 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	initial := bOptions.InitialServer
+	var friendMembers []string
+	if friend, ok := ParsePersonalProxySelection(initial); ok {
+		friendMembers = personalProxyStartMembers(friend, helpers, bOptions.Options.Outbounds, bOptions.personalProxyRooms)
+		switch {
+		case len(friendMembers) > 0:
+			selectable = append(slices.Clone(selectable), PersonalProxyTag)
+			initial = PersonalProxyTag
+		case len(helpers) > 0:
+			initial = PersonalProxiesTag
+		default:
+			initial = AutoSelectTag
+		}
+	}
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
 	} else {
@@ -472,6 +491,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
 	if len(helpers) > 0 {
 		opts.Outbounds = append(opts.Outbounds, personalProxiesOutbound(helpers))
+	}
+	if len(friendMembers) > 0 {
+		opts.Outbounds = append(opts.Outbounds, personalProxyOutbound(friendMembers))
 	}
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))

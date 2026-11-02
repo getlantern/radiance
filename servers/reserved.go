@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/sagernet/sing-box/option"
 
@@ -15,9 +16,13 @@ import (
 var ErrReservedTag = errors.New("tag is reserved")
 
 // reservedTags are the tags the tunnel reserves: its selection groups, the
-// personal proxies group and the built-in outbounds. vpn.ReservedTags must
+// personal proxy groups and the built-in outbounds. vpn.ReservedTags must
 // match it.
-var reservedTags = []string{"auto", "manual", redact.PersonalProxiesTag, "direct", "block"}
+var reservedTags = []string{"auto", "manual", redact.PersonalProxiesTag, redact.PersonalProxyTag, "direct", "block"}
+
+// reservedPrefix starts the tags that select one friend's personal proxy
+// (vpn.PersonalProxySelection), which a user server's tag would shadow.
+const reservedPrefix = redact.PersonalProxyTag + ":"
 
 // ReservedTags returns the tags no user server may use.
 func ReservedTags() []string {
@@ -61,7 +66,7 @@ func normalizeUserTag(srv *Server) {
 // servers are exempt: a config may carry the built-in outbounds, which the
 // tunnel merges but never offers.
 func checkUserTag(srv *Server) error {
-	if !srv.IsLantern && slices.Contains(reservedTags, srv.Tag) {
+	if !srv.IsLantern && (slices.Contains(reservedTags, srv.Tag) || strings.HasPrefix(srv.Tag, reservedPrefix)) {
 		return fmt.Errorf("server %q: %w", srv.Tag, ErrReservedTag)
 	}
 	return nil
