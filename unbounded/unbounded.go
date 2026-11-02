@@ -41,6 +41,7 @@ import (
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
@@ -834,7 +835,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		// A genesis POST carries this widget's room tickets; never let a
 		// redirect replay it to another origin.
-		rtcOpt.HTTPClient = sameOriginRedirects(rtcOpt.HTTPClient)
+		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
 		if ucfg != nil {

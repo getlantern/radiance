@@ -1751,3 +1751,74 @@ func TestHeartbeatKeepsUsageOnServerError(t *testing.T) {
 		mu.Unlock()
 	}
 }
+
+// A heartbeat carries pairing IDs, so a redirect to another origin must not
+// replay it there.
+func TestHeartbeatRefusesCrossOriginRedirects(t *testing.T) {
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var other atomic.Int32
+			elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				other.Add(1)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer elsewhere.Close()
+			var redirect atomic.Bool
+			redirect.Store(true)
+			var mu sync.Mutex
+			var bodies []map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if redirect.Load() {
+					http.Redirect(w, r, elsewhere.URL+r.URL.Path, code)
+					return
+				}
+				var m map[string]any
+				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&m)) {
+					return
+				}
+				mu.Lock()
+				bodies = append(bodies, m)
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+			c := &Client{cfg: Config{API: NewAPI(srv.Client(), srv.URL, "dev")}}
+			gen := c.relay.begin()
+			c.relay.recordPairingFor(gen, 1, "203.0.113.8:1000", usagePairingA, counter(1000, 24))
+			ctx := context.Background()
+
+			_, err := c.sendHeartbeat(ctx, "route")
+			require.Error(t, err)
+			assert.Zero(t, other.Load(), "the other origin never receives the heartbeat")
+			redirect.Store(false)
+			_, err = c.sendHeartbeat(ctx, "route")
+			require.NoError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, bodies, 1)
+			assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 0.0, "relayed_bytes": 1024.0,
+				"paired_bytes": []any{map[string]any{"pairing_id": usagePairingA, "bytes": 1024.0}}}, bodies[0],
+				"the refused heartbeat's usage goes out again")
+		})
+	}
+}
+
+func TestAPIFollowsSameOriginRedirects(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peer/heartbeat" {
+			http.Redirect(w, r, "/v2/peer/heartbeat", http.StatusPermanentRedirect)
+			return
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&got)) {
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewAPI(srv.Client(), srv.URL+"/v1", "dev").Heartbeat(context.Background(), "route", 2, RelayUsage{})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 2.0}, got)
+}

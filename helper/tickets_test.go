@@ -875,3 +875,50 @@ func TestFetcherKeepsUsageOnServerError(t *testing.T) {
 		mu.Unlock()
 	}
 }
+
+// A ticket request carries pairing IDs, so a redirect to another origin must
+// not replay it there.
+func TestFetcherRefusesCrossOriginRedirects(t *testing.T) {
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var other atomic.Int32
+			elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				other.Add(1)
+				_, _ = w.Write([]byte(`{"tickets":[]}`))
+			}))
+			defer elsewhere.Close()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, elsewhere.URL+r.URL.Path, code)
+			}))
+			defer srv.Close()
+			u := &Usage{}
+			u.Add(usagePairingA, 70)
+
+			_, err := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(u).Fetch(context.Background())
+			require.Error(t, err)
+			assert.Zero(t, other.Load(), "the other origin never receives the request")
+			assert.Equal(t, []PairedBytes{{PairingID: usagePairingA, Bytes: 70}}, u.Take(), "the usage is kept for the next fetch")
+		})
+	}
+}
+
+func TestFetcherFollowsSameOriginRedirects(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/helper/tickets" {
+			http.Redirect(w, r, "/v2/helper/tickets", http.StatusPermanentRedirect)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		_, _ = w.Write([]byte(`{"tickets":[]}`))
+	}))
+	defer srv.Close()
+	u := &Usage{}
+	u.Add(usagePairingA, 70)
+
+	_, err := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(u).Fetch(context.Background())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"paired_bytes":[{"pairing_id":"`+usagePairingA+`","bytes":70}]}`, body)
+	assert.Empty(t, u.Take())
+}

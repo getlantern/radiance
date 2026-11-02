@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/helper"
 )
@@ -140,8 +141,10 @@ type API struct {
 // suffixed with either ".../v1" or ".../api/v1". Per-endpoint paths are
 // appended to baseURL without re-adding any version segment, matching
 // how every other radiance caller of common.GetBaseURL composes URLs.
+// The API uses a copy of httpClient that follows redirects only within the
+// request's origin, since a heartbeat body carries pairing IDs.
 func NewAPI(httpClient *http.Client, baseURL, deviceID string) *API {
-	return &API{httpClient: httpClient, baseURL: baseURL, deviceID: deviceID}
+	return &API{httpClient: sameorigin.Client(httpClient, "peer api"), baseURL: baseURL, deviceID: deviceID}
 }
 
 func (a *API) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {

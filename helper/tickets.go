@@ -24,6 +24,7 @@ import (
 	"github.com/getlantern/broflake/common/helperticket"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 )
@@ -117,9 +118,11 @@ type Fetcher struct {
 }
 
 // NewFetcher returns a Fetcher. baseURL includes the API version segment,
-// as common.GetBaseURL() returns it.
+// as common.GetBaseURL() returns it. The Fetcher uses a copy of httpClient
+// that follows redirects only within the request's origin, since a request
+// body carries pairing IDs.
 func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
-	return &Fetcher{httpClient: httpClient, baseURL: baseURL}
+	return &Fetcher{httpClient: sameorigin.Client(httpClient, "helper: tickets"), baseURL: baseURL}
 }
 
 // WithUsage makes every fetch report the bytes u has accumulated. A fetch
