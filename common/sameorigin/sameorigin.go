@@ -14,9 +14,8 @@ import (
 // MaxRedirects matches net/http's default redirect limit.
 const MaxRedirects = 10
 
-// Client returns a copy of c, or of a zero client if c is nil, whose
-// redirects are checked by CheckRedirect(name). Its transport and timeout are
-// kept.
+// Client returns a shallow copy of c, or of a zero client if c is nil, with
+// its CheckRedirect replaced by CheckRedirect(name).
 func Client(c *http.Client, name string) *http.Client {
 	out := &http.Client{}
 	if c != nil {

@@ -120,7 +120,7 @@ type Fetcher struct {
 // NewFetcher returns a Fetcher. baseURL includes the API version segment,
 // as common.GetBaseURL() returns it. The Fetcher uses a copy of httpClient
 // that follows redirects only within the request's origin, since a request
-// body carries pairing IDs.
+// body can carry pairing IDs.
 func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
 	return &Fetcher{httpClient: sameorigin.Client(httpClient, "helper: tickets"), baseURL: baseURL}
 }

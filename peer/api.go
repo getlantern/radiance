@@ -142,7 +142,7 @@ type API struct {
 // appended to baseURL without re-adding any version segment, matching
 // how every other radiance caller of common.GetBaseURL composes URLs.
 // The API uses a copy of httpClient that follows redirects only within the
-// request's origin, since a heartbeat body carries pairing IDs.
+// request's origin, since a heartbeat body can carry pairing IDs.
 func NewAPI(httpClient *http.Client, baseURL, deviceID string) *API {
 	return &API{httpClient: sameorigin.Client(httpClient, "peer api"), baseURL: baseURL, deviceID: deviceID}
 }
