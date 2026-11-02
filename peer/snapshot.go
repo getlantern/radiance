@@ -55,9 +55,8 @@ type relayTally struct {
 	latest  *peerconn.Counter
 }
 
-// relayConn is an open connection's source, pairing and accrual state and,
-// once a later session has begun, when its own session was retired. A retired
-// connection may still be
+// relayConn is an open connection's state and, once a later session has
+// begun, when its own session was retired. A retired connection may still be
 // draining in a box that has not finished closing, so its counter is read
 // live for relayRetention before being folded into the totals.
 type relayConn struct {
@@ -95,10 +94,9 @@ type relayStats struct {
 	gen uint64
 	// pendingTotal and pendingPaired are the bytes accrued but not yet taken.
 	// Only takeUsage clears them: they carry across sessions, unlike the
-	// snapshot's retention.
-	pendingTotal uint64
-	// pendingPaired is taken with r.mu held, so it must never be given a
-	// flush.
+	// snapshot's retention. takeUsage calls pendingPaired.Take with r.mu
+	// held, so SetFlush must never be called on pendingPaired.
+	pendingTotal  uint64
 	pendingPaired helper.Usage
 	now           func() time.Time
 }
