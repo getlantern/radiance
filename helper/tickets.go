@@ -8,6 +8,7 @@
 package helper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +113,7 @@ func inviterPairings(tickets, tags []string) map[string]string {
 type Fetcher struct {
 	httpClient *http.Client
 	baseURL    string
+	usage      *Usage
 }
 
 // NewFetcher returns a Fetcher. baseURL includes the API version segment,
@@ -121,11 +122,35 @@ func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
 	return &Fetcher{httpClient: httpClient, baseURL: baseURL}
 }
 
+// WithUsage makes every fetch report the rooms-mode bytes u has accumulated.
+// A fetch lantern-cloud does not answer with a 2xx puts them back for the
+// next.
+func (f *Fetcher) WithUsage(u *Usage) *Fetcher {
+	f.usage = u
+	return f
+}
+
+// ticketRequest is the body of POST /helper/tickets.
+type ticketRequest struct {
+	PairedBytes []PairedBytes `json:"paired_bytes,omitempty"`
+}
+
 // Fetch calls POST {baseURL}/helper/tickets, authenticated by the device ID
 // header like the peer API, and splits the tickets by role.
 func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
+	paired := f.usage.Take()
+	delivered := false
+	defer func() {
+		if !delivered {
+			f.usage.Restore(paired)
+		}
+	}()
+	payload, err := json.Marshal(ticketRequest{PairedBytes: paired})
+	if err != nil {
+		return Tickets{}, fmt.Errorf("encode ticket request: %w", err)
+	}
 	// Untraced also keeps a redirect off /helper/ out of traces.
-	r, err := common.NewRequestWithHeaders(traces.Untraced(ctx), http.MethodPost, f.baseURL+"/helper/tickets", strings.NewReader("{}"))
+	r, err := common.NewRequestWithHeaders(traces.Untraced(ctx), http.MethodPost, f.baseURL+"/helper/tickets", bytes.NewReader(payload))
 	if err != nil {
 		return Tickets{}, fmt.Errorf("build ticket request: %w", err)
 	}
@@ -138,6 +163,7 @@ func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
 		return Tickets{}, fmt.Errorf("send ticket request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	delivered = resp.StatusCode >= 200 && resp.StatusCode < 300
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
 		return Tickets{}, ErrDisabled

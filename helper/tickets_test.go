@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -736,4 +737,56 @@ func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
 	tickets, _ = src.InviterFor(tagA)
 	require.NotEmpty(t, tickets, "renewed")
 	awaitChanges(t, count, 2, "expired tickets renewed")
+}
+
+func TestFetcherReportsPairedBytesUntilDelivered(t *testing.T) {
+	var fail atomic.Bool
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		if fail.Load() {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tickets":[]}`))
+	}))
+	defer srv.Close()
+	u := &Usage{}
+	f := NewFetcher(srv.Client(), srv.URL+"/v1").WithUsage(u)
+	u.Add(usagePairingB, 30)
+	u.Add(usagePairingA, 70)
+
+	fail.Store(true)
+	_, err := f.Fetch(context.Background())
+	require.ErrorIs(t, err, ErrUnavailable)
+	fail.Store(false)
+	_, err = f.Fetch(context.Background())
+	require.NoError(t, err)
+	_, err = f.Fetch(context.Background())
+	require.NoError(t, err)
+
+	want := `{"paired_bytes":[{"pairing_id":"` + usagePairingA + `","bytes":70},{"pairing_id":"` + usagePairingB + `","bytes":30}]}`
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, bodies, 3)
+	assert.JSONEq(t, want, bodies[0])
+	assert.JSONEq(t, want, bodies[1], "a refused report is sent again")
+	assert.JSONEq(t, `{}`, bodies[2], "a delivered report is not, and no zero entry goes out")
+}
+
+func TestFetcherWithoutUsageSendsAnEmptyObject(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		_, _ = w.Write([]byte(`{"tickets":[]}`))
+	}))
+	defer srv.Close()
+	_, err := NewFetcher(srv.Client(), srv.URL+"/v1").Fetch(context.Background())
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, body)
 }
