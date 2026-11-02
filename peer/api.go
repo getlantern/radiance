@@ -104,11 +104,11 @@ type HeartbeatRequest struct {
 	// one TCP conn, and a client may hold several, so a connection count would
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
-	// RelayedBytes is every byte relayed since the last heartbeat that
-	// succeeded; omitted when zero.
+	// RelayedBytes is the bytes relayed since the last delivered report;
+	// omitted when zero.
 	RelayedBytes uint64 `json:"relayed_bytes,omitempty"`
-	// PairedBytes is the part of RelayedBytes that came through each helper
-	// pairing.
+	// PairedBytes omits traffic that came through no pairing, so its sum can
+	// be less than RelayedBytes.
 	PairedBytes []helper.PairedBytes `json:"paired_bytes,omitempty"`
 }
 
@@ -181,8 +181,8 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // the empty body of a server that predates the IDs, never fails it: the
 // response comes back as not known and the peer keeps the set it has.
 //
-// usage is the traffic to report; a heartbeat that returns an error was not
-// recorded, so the caller reports its usage again.
+// A non-2xx response means the heartbeat, and the usage it carries, was not
+// recorded; a transport error or timeout leaves that unknown.
 func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int, usage RelayUsage) (*HeartbeatResponse, error) {
 	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients,
 		RelayedBytes: usage.RelayedBytes, PairedBytes: usage.PairedBytes}

@@ -1600,9 +1600,14 @@ func TestHeartbeatReportsUsageUntilDelivered(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
 		var m map[string]any
-		require.NoError(t, json.Unmarshal(b, &m))
+		if !assert.NoError(t, json.Unmarshal(b, &m)) {
+			return
+		}
 		mu.Lock()
 		bodies = append(bodies, m)
 		mu.Unlock()
@@ -1610,7 +1615,7 @@ func TestHeartbeatReportsUsageUntilDelivered(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
 	c := &Client{cfg: Config{API: NewAPI(srv.Client(), srv.URL, "dev")}}
