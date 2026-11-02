@@ -520,6 +520,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
+	// Renew from the moment the port is mapped: a PCP or NAT-PMP gateway can
+	// grant a lease shorter than registering, starting the box and verifying
+	// take. Not tied to the caller's ctx, which ends with Start: UnmapPort,
+	// which both rollback and Stop call, stops the renewal.
+	fwd.StartRenewal(context.Background())
 
 	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
@@ -722,7 +727,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		rotation = peerCredRotationInterval
 	}
 
-	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
 	go c.credRotationLoop(runCtx, rotation)
 

@@ -29,16 +29,19 @@ import (
 )
 
 type fakeForwarder struct {
-	mu          sync.Mutex
-	mapErr      error
-	extIPErr    error
-	unmapErr    error
-	mapped      bool
-	unmapped    bool
-	renewals    int
-	externalIP  string
-	mapping     *portforward.Mapping
-	cancelRenew context.CancelFunc
+	mu       sync.Mutex
+	mapErr   error
+	extIPErr error
+	unmapErr error
+	mapped   bool
+	unmapped bool
+	renewals int
+	// renewStopped is set when UnmapPort stops renewal, as the real
+	// Forwarder's does.
+	renewStopped bool
+	externalIP   string
+	mapping      *portforward.Mapping
+	cancelRenew  context.CancelFunc
 }
 
 func (f *fakeForwarder) MapPort(_ context.Context, _ string, internalPort uint16, _ string) (*portforward.Mapping, error) {
@@ -63,6 +66,11 @@ func (f *fakeForwarder) UnmapPort(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unmapped = true
+	if f.cancelRenew != nil {
+		f.cancelRenew()
+		f.cancelRenew = nil
+		f.renewStopped = true
+	}
 	return f.unmapErr
 }
 
@@ -592,6 +600,23 @@ func TestClient_Start_RegisterFailureUnwinds(t *testing.T) {
 	assert.False(t, c.IsActive())
 	assert.True(t, fwd.wasUnmapped())
 	assert.False(t, box.started.Load())
+}
+
+// Renewal starts as soon as the port is mapped, before registering: a PCP or
+// NAT-PMP gateway can grant a lease shorter than the rest of Start takes. A
+// failed Start stops it when it unmaps.
+func TestClient_Start_RenewsFromMappingAndStopsOnRollback(t *testing.T) {
+	fwd := &fakeForwarder{}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	srv.registerStatus = http.StatusUnprocessableEntity
+	c := newTestClient(t, fwd, box, srv)
+
+	require.Error(t, c.Start(context.Background()))
+	fwd.mu.Lock()
+	defer fwd.mu.Unlock()
+	assert.Equal(t, 1, fwd.renewals, "renewal must already run when registering")
+	assert.True(t, fwd.renewStopped, "rollback must stop renewal")
 }
 
 func TestClient_Start_BoxStartFailureUnwinds(t *testing.T) {
