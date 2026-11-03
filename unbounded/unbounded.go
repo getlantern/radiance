@@ -41,6 +41,7 @@ import (
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
@@ -208,6 +209,9 @@ type unboundedManager struct {
 	// lastOwner keeps a closed slot's tally so bytes broflake reports after the
 	// close are still credited to it.
 	lastOwner map[int]*peerTally
+	// slotPairing is each slot's helper pairing, kept after the slot closes
+	// until its next accept, the same as lastOwner.
+	slotPairing map[int]string
 	// retired holds stopped runs' tables still absorbing late bytes.
 	retired []retiredRun
 	// now overrides time.Now for peer retention tests.
@@ -215,6 +219,9 @@ type unboundedManager struct {
 	// live receives slots serving helper pairings. Nil means
 	// helper.DefaultLive.
 	live *helper.LiveTracker
+	// usage receives the bytes relayed for each helper pairing. Nil counts
+	// nothing.
+	usage *helper.Usage
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -300,6 +307,15 @@ func SetTicketSource(src roomTickets) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.tickets = src
+}
+
+// SetPairedUsage sets where the widget counts the bytes it relays for each
+// helper pairing. A take from u first folds the widget's pending slot bytes.
+func SetPairedUsage(u *helper.Usage) {
+	manager.mu.Lock()
+	manager.usage = u
+	manager.mu.Unlock()
+	u.SetFlush(manager.foldPending)
 }
 
 // SetVPNStatus sets where the widget reads the VPN tunnel's state, which it
@@ -819,7 +835,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		// A genesis POST carries this widget's room tickets; never let a
 		// redirect replay it to another origin.
-		rtcOpt.HTTPClient = sameOriginRedirects(rtcOpt.HTTPClient)
+		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
 		if ucfg != nil {
