@@ -838,6 +838,9 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
+		// freddie counts outcomes for each kind of volunteer, so the apps can be
+		// compared with the browser widget and lantern-box nodes.
+		rtcOpt.VolunteerKind = common.VolunteerKindApp
 		if ucfg != nil {
 			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {

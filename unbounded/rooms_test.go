@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/clientcore"
+	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -304,6 +305,15 @@ func TestWidgetReportsTheVPNStatus(t *testing.T) {
 	waitForCount(t, count, 1, 2*time.Second)
 	require.NotNil(t, opts(0).VPNStatus)
 	assert.Equal(t, "connected", opts(0).VPNStatus())
+}
+
+func TestWidgetReportsTheAppVolunteerKind(t *testing.T) {
+	count, opts, _ := recordingWidgets(t)
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	assert.Equal(t, common.VolunteerKindApp, opts(0).VolunteerKind, "freddie must count the apps' widgets as app volunteers")
+	assert.False(t, opts(0).VolunteerMapped, "the apps map no port")
 }
 
 func TestWidgetWithoutVPNStatusReportsNone(t *testing.T) {
