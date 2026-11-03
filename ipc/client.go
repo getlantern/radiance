@@ -433,7 +433,7 @@ func (c *Client) EnableSplitTunneling(ctx context.Context, enable bool) error {
 	return err
 }
 
-// SetSplitTunnelPolicy changes policy, clearing selections when the policy changes.
+// SetSplitTunnelPolicy changes policy without changing selections.
 func (c *Client) SetSplitTunnelPolicy(ctx context.Context, policy vpn.SplitTunnelPolicy) error {
 	if !policy.Valid() {
 		return fmt.Errorf("invalid split-tunnel policy: %q", policy)

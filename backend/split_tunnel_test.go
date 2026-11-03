@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
@@ -32,30 +33,43 @@ func TestSplitTunnelSettingsAreProjected(t *testing.T) {
 	require.NoError(t, settings.Patch(settings.Settings{
 		settings.SplitTunnelKey: false, settings.SplitTunnelPolicyKey: "exclude",
 	}))
-	require.NoError(t, r.AddSplitTunnelItems(vpn.SplitTunnelFilter{
-		DomainSuffix: []string{"example.com"}, ProcessPath: []string{"missing.exe"},
-	}))
+	selected := vpn.SplitTunnelFilter{DomainSuffix: []string{"example.com"}, ProcessPath: []string{"missing.exe"}}
+	require.NoError(t, r.AddSplitTunnelItems(selected))
 	require.NoError(t, r.PatchSettings(settings.Settings{
 		settings.SplitTunnelKey: true, settings.SplitTunnelPolicyKey: "include",
 	}))
-	want := vpn.SplitTunnelState{Enabled: true, Policy: vpn.SplitTunnelPolicyInclude}
+	want := vpn.SplitTunnelState{Enabled: true, Policy: vpn.SplitTunnelPolicyInclude, Filters: selected}
 	assert.Equal(t, want, r.SplitTunnelState())
 	assert.Equal(t, true, r.Settings()[settings.SplitTunnelKey])
 	assert.Equal(t, "include", r.Settings()[settings.SplitTunnelPolicyKey])
-	assert.False(t, settings.GetBool(settings.SplitTunnelKey))
-	assert.Equal(t, "exclude", settings.GetString(settings.SplitTunnelPolicyKey))
+	assert.True(t, settings.GetBool(settings.SplitTunnelKey))
+	assert.Equal(t, "include", settings.GetString(settings.SplitTunnelPolicyKey))
 
 	loaded, err := vpn.NewSplitTunnelHandler(dir, log.NoOpLogger())
 	require.NoError(t, err)
 	require.NoError(t, loaded.ImportLegacyPolicy(vpn.SplitTunnelPolicyExclude))
 	assert.Equal(t, want, loaded.State())
 
-	require.NoError(t, r.AddSplitTunnelItems(vpn.SplitTunnelFilter{PackageName: []string{"new.app"}}))
-	require.NoError(t, r.PatchSettings(settings.Settings{settings.SplitTunnelPolicyKey: "include"}))
-	assert.Equal(t, []string{"new.app"}, r.SplitTunnelFilters().PackageName)
+	require.NoError(t, settings.Set(settings.SplitTunnelPolicyKey, "exclude"))
+	assert.Equal(t, "include", r.Settings()[settings.SplitTunnelPolicyKey])
 	require.NoError(t, r.PatchSettings(settings.Settings{settings.SplitTunnelKey: false}))
-	assert.Equal(t, []string{"new.app"}, r.SplitTunnelFilters().PackageName)
+	assert.Equal(t, selected, r.SplitTunnelFilters())
 	assert.Equal(t, vpn.SplitTunnelPolicyInclude, r.SplitTunnelState().Policy)
+	assert.Equal(t, "include", settings.GetString(settings.SplitTunnelPolicyKey))
+}
+
+func TestSplitTunnelNoOpPatchSkipsUpdate(t *testing.T) {
+	r, _ := splitTestBackend(t)
+	r.connectMu.Lock()
+	defer r.connectMu.Unlock()
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.SplitTunnelKey: false, settings.SplitTunnelPolicyKey: "exclude",
+	}))
+	require.ErrorIs(t, r.PatchSettings(settings.Settings{settings.SplitTunnelKey: true}), ErrVPNBusy)
+
+	r.splitTunnelMgr = nil
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.SplitTunnelKey: false}))
+	require.ErrorIs(t, r.PatchSettings(settings.Settings{settings.SplitTunnelKey: true}), ErrSplitTunnelUnavailable)
 }
 
 func TestSplitTunnelSettingsRejectInvalidPatchBeforeMutation(t *testing.T) {
@@ -84,7 +98,7 @@ func TestSplitTunnelSaveFailurePreservesStateAndSettings(t *testing.T) {
 	}))
 	assert.Equal(t, before, r.SplitTunnelState())
 	assert.False(t, settings.GetBool(settings.SplitTunnelKey))
-	assert.Empty(t, settings.GetString(settings.SplitTunnelPolicyKey))
+	assert.Equal(t, "exclude", settings.GetString(settings.SplitTunnelPolicyKey))
 }
 
 func TestSplitTunnelMutationDoesNotOverlapConnect(t *testing.T) {
@@ -92,13 +106,35 @@ func TestSplitTunnelMutationDoesNotOverlapConnect(t *testing.T) {
 	r.connectMu.Lock()
 	err := r.SwitchSplitTunnelPolicy(vpn.SplitTunnelPolicyInclude)
 	r.connectMu.Unlock()
+	require.ErrorIs(t, err, ErrVPNBusy)
 	require.ErrorIs(t, err, ErrConnectInProgress)
 	assert.Equal(t, vpn.SplitTunnelPolicyExclude, r.SplitTunnelState().Policy)
+}
 
-	r.splitTunnelMu.Lock()
-	err = r.ClearSplitTunnelApps()
-	r.splitTunnelMu.Unlock()
-	require.ErrorIs(t, err, errSplitTunnelUpdateInProgress)
+func TestSplitTunnelUpdatesSerialize(t *testing.T) {
+	r, _ := splitTestBackend(t)
+	require.True(t, r.splitTunnelMu.lock(time.Second))
+	done := make(chan error, 1)
+	go func() {
+		done <- r.AddSplitTunnelItems(vpn.SplitTunnelFilter{PackageName: []string{"app"}})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("update finished while another held the lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	r.splitTunnelMu.unlock()
+	require.NoError(t, <-done)
+	assert.Equal(t, []string{"app"}, r.SplitTunnelFilters().PackageName)
+
+	timeout := splitTunnelLockTimeout
+	splitTunnelLockTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { splitTunnelLockTimeout = timeout })
+	require.True(t, r.splitTunnelMu.lock(time.Second))
+	defer r.splitTunnelMu.unlock()
+	require.ErrorIs(t, r.ClearSplitTunnelApps(), ErrVPNBusy)
+	require.ErrorIs(t, r.RestartVPN(), ErrVPNBusy)
+	assert.Equal(t, []string{"app"}, r.SplitTunnelFilters().PackageName)
 }
 
 func TestNativeRestartConnectPreservesSelection(t *testing.T) {

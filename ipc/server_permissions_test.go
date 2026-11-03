@@ -57,6 +57,7 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 	preferences := settings.Settings{
 		settings.LocaleKey: "en-US", settings.TimeZoneKey: "UTC", settings.LogLevelKey: "info",
 		settings.TelemetryKey: false, settings.SmartRoutingKey: true, settings.AdBlockKey: false,
+		settings.SplitTunnelKey: false, settings.SplitTunnelPolicyKey: "exclude",
 		settings.AutoConnectKey: false, settings.PeerShareEnabledKey: false,
 		settings.PeerManualPortKey: float64(0), settings.PeerServePoolKey: true,
 		settings.UnboundedKey: false,
@@ -68,7 +69,7 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 	require.NoError(t, err)
 	response := servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, string(body))
 	require.Equal(t, http.StatusOK, response.Code)
-	for _, body := range []string{`{"split_tunnel":false}`, `{"split_tunnel_policy":"exclude"}`} {
+	for _, body := range []string{`{"split_tunnel":true}`, `{"split_tunnel_policy":"include"}`} {
 		response = servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, body)
 		require.Equal(t, http.StatusInternalServerError, response.Code)
 		require.Contains(t, response.Body.String(), "split tunneling is unavailable")

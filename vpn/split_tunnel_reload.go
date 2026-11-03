@@ -4,7 +4,6 @@ package vpn
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -59,27 +58,39 @@ func (c *VPNClient) reloadSplitTunnel(previous, expected string, options BoxOpti
 		return ErrTunnelNotConnected
 	}
 	t := c.tunnel
-	if t.boxInstance == nil {
-		err := c.failLocked(errors.New("split-tunnel router is unavailable"))
-		c.mu.Unlock()
-		return err
+	var rs adapter.RuleSet
+	ok := false
+	if t.boxInstance != nil {
+		rs, ok = t.boxInstance.Router().RuleSet(splitTunnelTag)
 	}
-	rs, ok := t.boxInstance.Router().RuleSet(splitTunnelTag)
+	c.mu.Unlock()
 	if !ok {
-		err := c.failLocked(errors.New("split-tunnel rule set is unavailable"))
-		c.mu.Unlock()
-		return err
+		c.logger.Warn("Split-tunnel rule set is unavailable, restarting tunnel")
+		return c.Restart(options)
 	}
 	if loaded := rs.String(); loaded != previous && loaded != expected {
+		return c.Restart(options)
+	}
+	ctx, cancel := context.WithTimeout(t.ctx, 2*time.Second)
+	err := awaitSplitTunnelReload(ctx, rs, expected)
+	cancel()
+
+	c.mu.Lock()
+	if c.tunnel != t {
+		// A replacement tunnel loads the saved rule file when it starts.
 		c.mu.Unlock()
+		return nil
+	}
+	if c.Status() != Connected {
+		c.mu.Unlock()
+		return ErrTunnelNotConnected
+	}
+	if err != nil {
+		c.mu.Unlock()
+		c.logger.Warn("Split-tunnel rules did not reload, restarting tunnel", "error", err)
 		return c.Restart(options)
 	}
 	defer c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(t.ctx, 2*time.Second)
-	defer cancel()
-	if err := awaitSplitTunnelReload(ctx, rs, expected); err != nil {
-		return c.failLocked(err)
-	}
 	t.clashServer.dnsRouter.ClearCache()
 	t.clashServer.connTracker.closeAllTracked()
 	return nil

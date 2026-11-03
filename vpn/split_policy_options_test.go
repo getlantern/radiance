@@ -120,9 +120,9 @@ func splitPolicyTestOptions(t *testing.T, state SplitTunnelState) O.Options {
 	t.Helper()
 	dir := t.TempDir()
 	st := newSplitTunnel(dir, rlog.NoOpLogger())
-	require.NoError(t, st.SetPolicy(state.Policy))
+	require.NoError(t, setPolicy(st, state.Policy))
 	require.NoError(t, st.AddItems(state.Filters))
-	require.NoError(t, st.SetEnabled(state.Enabled))
+	require.NoError(t, setEnabled(st, state.Enabled))
 	cfg := testConfig(t)
 	cfg.Options.Route = &O.RouteOptions{
 		DefaultDomainResolver: &O.DomainResolveOptions{Server: "dns_remote"},

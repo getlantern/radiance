@@ -269,7 +269,9 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	}
 	if cs := c.tunnel.clashServer; cs != nil && cs.selectedMode() == ManualSelectTag {
 		if selected, ok := c.tunnel.outboundMgr.Outbound(ManualSelectTag); ok {
-			boxOptions.InitialServer = selected.(adapter.OutboundGroup).Now()
+			if group, ok := selected.(adapter.OutboundGroup); ok {
+				boxOptions.InitialServer = group.Now()
+			}
 		}
 	}
 

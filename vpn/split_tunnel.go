@@ -24,8 +24,6 @@ import (
 	"github.com/getlantern/radiance/internal"
 )
 
-const splitTunnelFile = internal.SplitTunnelFileName
-
 // This impossible regexp keeps empty filters readable by older rule-set loaders.
 const emptySplitTunnelPattern = "a^"
 
@@ -52,7 +50,7 @@ func NewSplitTunnelHandler(dataPath string, logger *slog.Logger) (*SplitTunnel, 
 func newSplitTunnel(path string, logger *slog.Logger) *SplitTunnel {
 	s := &SplitTunnel{
 		state:    SplitTunnelState{Policy: SplitTunnelPolicyExclude},
-		ruleFile: filepath.Join(path, splitTunnelFile),
+		ruleFile: filepath.Join(path, internal.SplitTunnelFileName),
 		logger:   logger,
 	}
 	if _, err := os.Stat(s.ruleFile); errors.Is(err, fs.ErrNotExist) {
@@ -72,14 +70,6 @@ func (s *SplitTunnel) State() SplitTunnelState {
 	return state
 }
 
-// SetEnabled persists the enabled state without changing the policy or selections.
-func (s *SplitTunnel) SetEnabled(enabled bool) error {
-	return s.mutate(func(state *SplitTunnelState) error {
-		state.Enabled = enabled
-		return nil
-	})
-}
-
 // IsEnabled reports whether split tunneling is enabled.
 func (s *SplitTunnel) IsEnabled() bool {
 	s.access.Lock()
@@ -87,34 +77,31 @@ func (s *SplitTunnel) IsEnabled() bool {
 	return s.state.Enabled
 }
 
-// SetPolicy persists the policy without changing selections.
-func (s *SplitTunnel) SetPolicy(policy SplitTunnelPolicy) error {
-	return s.mutate(func(state *SplitTunnelState) error {
-		state.Policy = policy
-		return nil
-	})
-}
-
 // SwitchPolicy changes policy and clears all selections; the current policy is a no-op.
 func (s *SplitTunnel) SwitchPolicy(policy SplitTunnelPolicy) error {
-	return s.Configure(nil, &policy)
-}
-
-// Configure persists enabled and policy together, clearing selections only when policy changes.
-func (s *SplitTunnel) Configure(enabled *bool, policy *SplitTunnelPolicy) error {
 	return s.mutate(func(state *SplitTunnelState) error {
-		if enabled != nil {
-			state.Enabled = *enabled
-		}
-		if policy != nil && state.Policy != *policy {
-			state.Policy = *policy
+		if state.Policy != policy {
+			state.Policy = policy
 			state.Filters = SplitTunnelFilter{}
 		}
 		return nil
 	})
 }
 
-// ImportLegacyPolicy upgrades legacy rules, using policy only when empty rules omitted it.
+// Configure persists the non-nil enabled and policy values together without changing selections.
+func (s *SplitTunnel) Configure(enabled *bool, policy *SplitTunnelPolicy) error {
+	return s.mutate(func(state *SplitTunnelState) error {
+		if enabled != nil {
+			state.Enabled = *enabled
+		}
+		if policy != nil {
+			state.Policy = *policy
+		}
+		return nil
+	})
+}
+
+// ImportLegacyPolicy rewrites a rule file from an older build, using policy only when the file did not record one.
 func (s *SplitTunnel) ImportLegacyPolicy(policy SplitTunnelPolicy) error {
 	s.access.Lock()
 	defer s.access.Unlock()
@@ -131,18 +118,6 @@ func (s *SplitTunnel) ImportLegacyPolicy(policy SplitTunnelPolicy) error {
 	return s.commitLocked(next)
 }
 
-// Policy reports the persisted selection policy.
-func (s *SplitTunnel) Policy() SplitTunnelPolicy {
-	s.access.Lock()
-	defer s.access.Unlock()
-	return s.state.Policy
-}
-
-// Filters returns an independent copy of the selections.
-func (s *SplitTunnel) Filters() SplitTunnelFilter {
-	return s.State().Filters
-}
-
 // ClearApps removes every app selector while preserving website selections.
 func (s *SplitTunnel) ClearApps() error {
 	return s.mutate(func(state *SplitTunnelState) error {
@@ -150,44 +125,6 @@ func (s *SplitTunnel) ClearApps() error {
 		state.Filters.ProcessPath = nil
 		state.Filters.ProcessPathRegex = nil
 		state.Filters.PackageName = nil
-		return nil
-	})
-}
-
-// AddItem adds one selection of the specified type.
-func (s *SplitTunnel) AddItem(filterType, item string) error {
-	return s.updateItem(filterType, item, merge)
-}
-
-// RemoveItem removes one selection of the specified type.
-func (s *SplitTunnel) RemoveItem(filterType, item string) error {
-	return s.updateItem(filterType, item, remove)
-}
-
-func (s *SplitTunnel) updateItem(filterType, item string, fn actionFn) error {
-	return s.mutate(func(state *SplitTunnelState) error {
-		var selected *[]string
-		switch filterType {
-		case TypeDomain:
-			selected = &state.Filters.Domain
-		case TypeDomainSuffix:
-			selected = &state.Filters.DomainSuffix
-		case TypeDomainKeyword:
-			selected = &state.Filters.DomainKeyword
-		case TypeDomainRegex:
-			selected = &state.Filters.DomainRegex
-		case TypeProcessName:
-			selected = &state.Filters.ProcessName
-		case TypeProcessPath:
-			selected = &state.Filters.ProcessPath
-		case TypeProcessPathRegex:
-			selected = &state.Filters.ProcessPathRegex
-		case TypePackageName:
-			selected = &state.Filters.PackageName
-		default:
-			return fmt.Errorf("unsupported filter type: %s", filterType)
-		}
-		*selected = fn(*selected, []string{item})
 		return nil
 	})
 }
@@ -308,42 +245,49 @@ func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 		len(rule.ProcessPath) == 0 && len(rule.ProcessPathRegex) == 0
 }
 
-func validateSplitTunnelRule(rules []O.HeadlessRule) error {
+func parseSplitTunnelRule(rules []O.HeadlessRule) (state SplitTunnelState, err error) {
 	if len(rules) != 1 || rules[0].Type != C.RuleTypeLogical {
-		return errors.New("expected a single logical split tunnel rule")
+		return state, errors.New("expected a single logical split tunnel rule")
 	}
 	root := rules[0].LogicalOptions
 	if root.Invert || (root.Mode != C.LogicalTypeAnd && root.Mode != C.LogicalTypeOr) {
-		return errors.New("invalid split tunnel rule mode")
+		return state, errors.New("invalid split tunnel rule mode")
 	}
 	if len(root.Rules) < 1 || len(root.Rules) > 2 ||
 		!reflect.DeepEqual(root.Rules[0], defaultRule().Rules[0]) {
-		return errors.New("invalid split tunnel disable rule")
+		return state, errors.New("invalid split tunnel disable rule")
 	}
+	state = SplitTunnelState{Enabled: root.Mode == C.LogicalTypeOr, Policy: SplitTunnelPolicyExclude}
 	if len(root.Rules) == 2 {
 		filter := root.Rules[1]
-		switch filter.Type {
-		case C.RuleTypeDefault:
-			if !supportedSplitTunnelRule(filter.DefaultOptions) {
-				return errors.New("unsupported split tunnel filter conditions")
-			}
-		case C.RuleTypeLogical:
+		children := []O.HeadlessRule{filter}
+		if filter.Type == C.RuleTypeLogical {
 			if filter.LogicalOptions.Mode != C.LogicalTypeOr {
-				return errors.New("invalid split tunnel filter mode")
+				return state, errors.New("invalid split tunnel filter mode")
 			}
-			for _, rule := range filter.LogicalOptions.Rules {
-				if rule.Type == C.RuleTypeDefault && !supportedSplitTunnelRule(rule.DefaultOptions) {
-					return errors.New("unsupported split tunnel filter conditions")
-				}
-				if rule.Type != C.RuleTypeDefault {
-					return errors.New("invalid split tunnel filter rule")
-				}
+			children = filter.LogicalOptions.Rules
+			if filter.LogicalOptions.Invert {
+				state.Policy = SplitTunnelPolicyInclude
 			}
-		default:
-			return errors.New("invalid split tunnel filter type")
+		}
+		for _, child := range children {
+			if child.Type != C.RuleTypeDefault {
+				return state, errors.New("invalid split tunnel filter rule")
+			}
+			rule := child.DefaultOptions
+			if !supportedSplitTunnelRule(rule) {
+				return state, errors.New("unsupported split tunnel filter conditions")
+			}
+			state.Filters.update(SplitTunnelFilter{
+				Domain: rule.Domain, DomainSuffix: rule.DomainSuffix,
+				DomainKeyword: rule.DomainKeyword, DomainRegex: rule.DomainRegex,
+				PackageName: rule.PackageName, ProcessName: rule.ProcessName,
+				ProcessPath: rule.ProcessPath, ProcessPathRegex: rule.ProcessPathRegex,
+			}, merge)
 		}
 	}
-	return nil
+	state.Filters.DomainRegex = remove(state.Filters.DomainRegex, []string{emptySplitTunnelPattern})
+	return state, nil
 }
 
 func supportedSplitTunnelRule(rule O.DefaultHeadlessRule) bool {
@@ -365,33 +309,10 @@ func (s *SplitTunnel) loadRule() error {
 		s.quarantineInvalidRuleSet(raw)
 		return fmt.Errorf("unmarshalling rule file %s: %w", s.ruleFile, err)
 	}
-	if err := validateSplitTunnelRule(rs.Options.Rules); err != nil {
+	next, err := parseSplitTunnelRule(rs.Options.Rules)
+	if err != nil {
 		s.quarantineInvalidRuleSet(raw)
 		return fmt.Errorf("validating rule file %s: %w", s.ruleFile, err)
-	}
-	root := rs.Options.Rules[0].LogicalOptions
-	next := SplitTunnelState{Enabled: root.Mode == C.LogicalTypeOr, Policy: SplitTunnelPolicyExclude}
-	legacyPolicy := len(root.Rules) == 1
-	legacyFormat := len(root.Rules) == 2 && root.Rules[1].Type == C.RuleTypeDefault
-	if len(root.Rules) == 2 {
-		filter := root.Rules[1]
-		children := []O.HeadlessRule{filter}
-		if filter.Type == C.RuleTypeLogical {
-			children = filter.LogicalOptions.Rules
-			if filter.LogicalOptions.Invert {
-				next.Policy = SplitTunnelPolicyInclude
-			}
-		}
-		for _, child := range children {
-			rule := child.DefaultOptions
-			rule.DomainRegex = remove(rule.DomainRegex, []string{emptySplitTunnelPattern})
-			next.Filters.update(SplitTunnelFilter{
-				Domain: rule.Domain, DomainSuffix: rule.DomainSuffix,
-				DomainKeyword: rule.DomainKeyword, DomainRegex: rule.DomainRegex,
-				PackageName: rule.PackageName, ProcessName: rule.ProcessName,
-				ProcessPath: rule.ProcessPath, ProcessPathRegex: rule.ProcessPathRegex,
-			}, merge)
-		}
 	}
 	if _, err := R.NewHeadlessRule(context.Background(), O.HeadlessRule{
 		Type: C.RuleTypeLogical, LogicalOptions: splitTunnelRule(next),
@@ -400,9 +321,10 @@ func (s *SplitTunnel) loadRule() error {
 		return fmt.Errorf("compiling split tunnel rule: %w", err)
 	}
 	s.access.Lock()
+	root := rs.Options.Rules[0].LogicalOptions
 	s.state = next
-	s.legacyPolicy = legacyPolicy
-	s.legacyFormat = legacyFormat
+	s.legacyPolicy = len(root.Rules) == 1
+	s.legacyFormat = len(root.Rules) == 2 && root.Rules[1].Type == C.RuleTypeDefault
 	s.access.Unlock()
 	return nil
 }

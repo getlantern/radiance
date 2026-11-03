@@ -67,7 +67,7 @@ type LocalBackend struct {
 	srvManager     *servers.Manager
 	vpnClient      *vpn.VPNClient
 	splitTunnelMgr *vpn.SplitTunnel
-	splitTunnelMu  sync.Mutex
+	splitTunnelMu  waitMutex
 	sessionHistory *vpn.SessionHistory
 
 	peerClient   peerController
@@ -586,9 +586,6 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 		return meta
 	}
-	if r.splitTunnelMgr != nil {
-		meta.splitTunnelEnabled = r.splitTunnelMgr.IsEnabled()
-	}
 	if r.issueReporter != nil {
 		meta.reporter = r.issueReporter
 	} else {
@@ -736,7 +733,8 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
 	}
-	if enabled != nil || policy != nil {
+	current := r.SplitTunnelState()
+	if (enabled != nil && *enabled != current.Enabled) || (policy != nil && *policy != current.Policy) {
 		if err := r.updateSplitTunnel(func() error { return r.splitTunnelMgr.Configure(enabled, policy) }); err != nil {
 			return err
 		}
@@ -800,8 +798,9 @@ func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) error {
 	if (adBlockChanged || smartRoutingChanged) && r.vpnClient != nil && r.vpnClient.Status() == vpn.Connected {
 		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
 		if err := r.RestartVPN(); err != nil {
+			// %v, not %w: the settings are saved, so ErrVPNBusy must not signal a no-op.
 			return fmt.Errorf(
-				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %w",
+				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %v",
 				adBlockChanged, smartRoutingChanged, err,
 			)
 		}
@@ -1493,11 +1492,13 @@ func (r *LocalBackend) DisconnectVPN() error {
 	return r.vpnClient.Disconnect()
 }
 
+// RestartVPN rebuilds a connected tunnel from current settings. It waits for a running
+// split-tunnel change or restart and returns ErrVPNBusy if that does not finish in time.
 func (r *LocalBackend) RestartVPN() error {
-	if !r.splitTunnelMu.TryLock() {
-		return errSplitTunnelUpdateInProgress
+	if !r.splitTunnelMu.lock(splitTunnelLockTimeout) {
+		return ErrVPNBusy
 	}
-	defer r.splitTunnelMu.Unlock()
+	defer r.splitTunnelMu.unlock()
 	bOptions := r.getBoxOptions()
 	return r.vpnClient.Restart(bOptions)
 }

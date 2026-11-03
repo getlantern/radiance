@@ -32,8 +32,8 @@ func splitReloadClient(t *testing.T, watch bool, filters ...SplitTunnelFilter) (
 	dir := t.TempDir()
 	manager, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	require.NoError(t, manager.SetPolicy(SplitTunnelPolicyInclude))
-	require.NoError(t, manager.SetEnabled(true))
+	require.NoError(t, setPolicy(manager, SplitTunnelPolicyInclude))
+	require.NoError(t, setEnabled(manager, true))
 	for _, selected := range filters {
 		require.NoError(t, manager.AddItems(selected))
 	}
@@ -67,7 +67,7 @@ func TestReloadSplitTunnelClosesExistingFlows(t *testing.T) {
 		joinClosable(tracker, outbound, time.Now())
 	}
 	before := manager.State()
-	require.NoError(t, manager.AddItem(TypeProcessName, "selected-app"))
+	require.NoError(t, manager.AddItems(SplitTunnelFilter{ProcessName: []string{"selected-app"}}))
 	require.NoError(t, c.ApplySplitTunnel(before, BoxOptions{SplitTunnel: manager.State()}))
 	count, _ := tracker.activeStats()
 	assert.Zero(t, count)
@@ -78,15 +78,16 @@ func TestReloadSplitTunnelClosesExistingFlows(t *testing.T) {
 	require.NoError(t, c.ApplySplitTunnel(before, BoxOptions{SplitTunnel: manager.State()}))
 }
 
-func TestReloadSplitTunnelFailureClosesTunnel(t *testing.T) {
+func TestReloadSplitTunnelFailureRestarts(t *testing.T) {
 	c, manager, dns := splitReloadClient(t, false)
+	platform := &stubPlatform{restartFn: func() error { c.status.Store(Connected); return nil }}
+	c.platformIfce = platform
 	before := manager.State()
-	require.NoError(t, manager.AddItem(TypeProcessName, "selected-app"))
+	require.NoError(t, manager.AddItems(SplitTunnelFilter{ProcessName: []string{"selected-app"}}))
 	c.tunnel.cancel()
-	err := c.ApplySplitTunnel(before, BoxOptions{SplitTunnel: manager.State()})
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, ErrorStatus, c.Status())
-	assert.Nil(t, c.tunnel)
+	require.NoError(t, c.ApplySplitTunnel(before, BoxOptions{SplitTunnel: manager.State()}))
+	assert.True(t, platform.restartCalled)
+	assert.Equal(t, Connected, c.Status())
 	assert.False(t, dns.cleared)
 	loaded, err := NewSplitTunnelHandler(filepath.Dir(manager.ruleFile), rlog.NoOpLogger())
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestAwaitSplitTunnelReloadDeadline(t *testing.T) {
 	require.ErrorIs(t, awaitSplitTunnelReload(ctx, rs, "not loaded"), context.DeadlineExceeded)
 }
 
-func TestReloadSplitTunnelUnavailable(t *testing.T) {
+func TestReloadSplitTunnelUnavailableRestarts(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 	before := SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyInclude}
 	options := BoxOptions{SplitTunnel: SplitTunnelState{
@@ -111,9 +112,11 @@ func TestReloadSplitTunnelUnavailable(t *testing.T) {
 	require.ErrorIs(t, c.ApplySplitTunnel(before, options), ErrTunnelNotConnected)
 	c.status.Store(Connected)
 	c.tunnel = &tunnel{}
-	require.ErrorContains(t, c.ApplySplitTunnel(before, options), "router is unavailable")
-	assert.Equal(t, ErrorStatus, c.Status())
-	assert.Nil(t, c.tunnel)
+	platform := &stubPlatform{restartFn: func() error { c.status.Store(Connected); return nil }}
+	c.platformIfce = platform
+	require.NoError(t, c.ApplySplitTunnel(before, options))
+	assert.True(t, platform.restartCalled)
+	assert.Equal(t, Connected, c.Status())
 }
 
 func TestApplySplitTunnelRebuildsAmbiguousSummaries(t *testing.T) {

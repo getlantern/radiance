@@ -5,6 +5,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -195,4 +196,9 @@ func (t splitTunnelTransport) RoundTrip(r *http.Request) (*http.Response, error)
 
 func splitTunnelTestClient(handler http.Handler) *Client {
 	return &Client{http: &http.Client{Transport: splitTunnelTransport{handler: handler}}}
+}
+
+func TestBusyStatus(t *testing.T) {
+	require.Equal(t, http.StatusConflict, busyStatus(fmt.Errorf("restart: %w", backend.ErrVPNBusy)))
+	require.Equal(t, http.StatusInternalServerError, busyStatus(backend.ErrSplitTunnelUnavailable))
 }

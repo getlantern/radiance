@@ -435,7 +435,7 @@ func (s *localapi) vpnDisconnectHandler(w http.ResponseWriter, r *http.Request) 
 
 func (s *localapi) vpnRestartHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).RestartVPN(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -491,7 +491,7 @@ func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *localapi) vpnClearTunnelCacheHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).ClearTunnelCache(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -969,7 +969,7 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.backend(r.Context()).PatchSettings(updates); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), busyStatus(err))
 			return
 		}
 		fallthrough
@@ -1104,10 +1104,17 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		err = s.backend(r.Context()).RemoveSplitTunnelItems(items)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func busyStatus(err error) int {
+	if errors.Is(err, backend.ErrVPNBusy) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
 }
 
 type splitTunnelPolicyRequest struct {
@@ -1130,7 +1137,7 @@ func (s *localapi) splitTunnelPolicyHandler(w http.ResponseWriter, r *http.Reque
 	}
 	b := s.backend(r.Context())
 	if err := b.SwitchSplitTunnelPolicy(req.Policy); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, b.SplitTunnelState())
@@ -1139,7 +1146,7 @@ func (s *localapi) splitTunnelPolicyHandler(w http.ResponseWriter, r *http.Reque
 func (s *localapi) splitTunnelAppsHandler(w http.ResponseWriter, r *http.Request) {
 	b := s.backend(r.Context())
 	if err := b.ClearSplitTunnelApps(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, b.SplitTunnelState())

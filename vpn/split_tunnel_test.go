@@ -29,8 +29,7 @@ import (
 func TestNewSplitTunnelHandlerQuarantinesInvalidRuleFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	ruleFile := filepath.Join(tmpDir, internal.SplitTunnelFileName)
-	// A rule file this build's sing-box can't decode — the shape a downgrade
-	// leaves behind. Staged before construction so newSplitTunnel won't replace it.
+	// Downgrades can leave rules that this build cannot decode.
 	require.NoError(t, atomicfile.WriteFile(ruleFile,
 		[]byte(`{"version":3,"rules":[{"unknown_field":true}]}`), 0o600))
 
@@ -38,8 +37,7 @@ func TestNewSplitTunnelHandlerQuarantinesInvalidRuleFile(t *testing.T) {
 	require.Error(t, err, "an unparseable rule file must be reported to the caller")
 	require.NotNil(t, st, "handler must be usable despite the load error")
 
-	// Falls back to the default no-op rule.
-	assert.Empty(t, st.Filters().Domain)
+	assert.Empty(t, st.State().Filters.Domain)
 	assert.False(t, st.IsEnabled())
 
 	invalidPath := filepath.Join(tmpDir, internal.SplitTunnelInvalidFileName)
@@ -64,10 +62,10 @@ func TestInvalidCopySurvivesSave(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 			require.NotNil(t, st)
 
-			require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
-			assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+			require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
+			assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
 			assert.False(t, st.IsEnabled())
-			assert.Empty(t, st.Filters().Domain)
+			assert.Empty(t, st.State().Filters.Domain)
 			current, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.NotEqual(t, tt.content, string(current))
@@ -79,6 +77,10 @@ func TestInvalidCopySurvivesSave(t *testing.T) {
 		})
 	}
 }
+
+func setEnabled(st *SplitTunnel, enabled bool) error { return st.Configure(&enabled, nil) }
+
+func setPolicy(st *SplitTunnel, policy SplitTunnelPolicy) error { return st.Configure(nil, &policy) }
 
 func writeRuleSet(t *testing.T, dir string, rs O.PlainRuleSet) []byte {
 	t.Helper()
@@ -143,15 +145,15 @@ func TestRejectInvalidEnvelope(t *testing.T) {
 			require.ErrorContains(t, err, "validating rule file")
 			require.NotNil(t, st)
 			assert.False(t, st.IsEnabled())
-			assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
-			assert.Empty(t, st.Filters().Domain)
+			assert.Equal(t, SplitTunnelPolicyExclude, st.State().Policy)
+			assert.Empty(t, st.State().Filters.Domain)
 			for _, name := range []string{internal.SplitTunnelFileName, internal.SplitTunnelInvalidFileName} {
 				got, err := os.ReadFile(filepath.Join(dir, name))
 				require.NoError(t, err)
 				assert.Equal(t, content, got)
 			}
-			require.NoError(t, st.AddItem(TypeDomain, "example.org"))
-			assert.Equal(t, []string{"example.org"}, st.Filters().Domain)
+			require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.org"}}))
+			assert.Equal(t, []string{"example.org"}, st.State().Filters.Domain)
 		})
 	}
 }
@@ -170,7 +172,7 @@ func TestLoadEquivalentDisableRule(t *testing.T) {
 	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
 	assert.True(t, st.IsEnabled())
-	assert.Equal(t, []string{"example.com"}, st.Filters().Domain)
+	assert.Equal(t, []string{"example.com"}, st.State().Filters.Domain)
 	assert.NoFileExists(t, filepath.Join(dir, internal.SplitTunnelInvalidFileName))
 }
 
@@ -186,11 +188,11 @@ func TestLoadEmptyEnvelope(t *testing.T) {
 			st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 			require.NoError(t, err)
 			assert.True(t, st.IsEnabled())
-			assert.Empty(t, st.Filters().Domain)
-			require.NoError(t, st.AddItem(TypeDomain, "example.org"))
+			assert.Empty(t, st.State().Filters.Domain)
+			require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.org"}}))
 			reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 			require.NoError(t, err)
-			assert.Equal(t, []string{"example.org"}, reloaded.Filters().Domain)
+			assert.Equal(t, []string{"example.org"}, reloaded.State().Filters.Domain)
 		})
 	}
 }
@@ -198,10 +200,10 @@ func TestLoadEmptyEnvelope(t *testing.T) {
 func TestEnableDisableIsEnabled(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
-	if assert.NoError(t, st.SetEnabled(false)) {
+	if assert.NoError(t, setEnabled(st, false)) {
 		assert.False(t, st.IsEnabled(), "split tunnel should be disabled")
 	}
-	if assert.NoError(t, st.SetEnabled(true)) {
+	if assert.NoError(t, setEnabled(st, true)) {
 		assert.True(t, st.IsEnabled(), "split tunnel should be enabled")
 	}
 }
@@ -214,26 +216,26 @@ func TestAddRemoveItem(t *testing.T) {
 	packageName := "com.example"
 
 	t.Run("adding domain item must update domain filter", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypeDomain, domain))
-		f := st.Filters()
+		require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{domain}}))
+		f := st.State().Filters
 		assert.Equal(t, []string{domain}, f.Domain)
 	})
 
 	t.Run("adding second domain must update the filter and contain both domains", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypeDomain, domain2))
-		f := st.Filters()
+		require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{domain2}}))
+		f := st.State().Filters
 		assert.Equal(t, []string{domain, domain2}, f.Domain)
 	})
 
 	t.Run("adding package domain must update package filter", func(t *testing.T) {
-		require.NoError(t, st.AddItem(TypePackageName, packageName))
-		f := st.Filters()
+		require.NoError(t, st.AddItems(SplitTunnelFilter{PackageName: []string{packageName}}))
+		f := st.State().Filters
 		assert.Equal(t, []string{packageName}, f.PackageName)
 	})
 
 	t.Run("removing domain must update domain filter", func(t *testing.T) {
-		require.NoError(t, st.RemoveItem(TypeDomain, domain))
-		f := st.Filters()
+		require.NoError(t, st.RemoveItems(SplitTunnelFilter{Domain: []string{domain}}))
+		f := st.State().Filters
 		assert.NotContains(t, f.Domain, domain)
 		assert.NotEmpty(t, f.PackageName)
 	})
@@ -243,7 +245,7 @@ func TestRemoveItems(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 
 	require.NoError(t, st.RemoveItems(SplitTunnelFilter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}}))
-	f := st.Filters()
+	f := st.State().Filters
 	assert.Empty(t, f.Domain)
 	assert.Empty(t, f.ProcessName)
 }
@@ -259,7 +261,7 @@ func TestAddRemoveItems(t *testing.T) {
 	}
 	err := st.AddItems(items)
 	require.NoError(t, err)
-	f := st.Filters()
+	f := st.State().Filters
 	assert.ElementsMatch(t, []string{"a.com", "b.com"}, f.Domain)
 	assert.Equal(t, []string{"suffix"}, f.DomainSuffix)
 	assert.Equal(t, []string{"proc"}, f.ProcessName)
@@ -267,7 +269,7 @@ func TestAddRemoveItems(t *testing.T) {
 
 	err = st.RemoveItems(SplitTunnelFilter{Domain: []string{"a.com"}, ProcessName: []string{"proc"}})
 	require.NoError(t, err)
-	f = st.Filters()
+	f = st.State().Filters
 	assert.Equal(t, []string{"b.com"}, f.Domain)
 	assert.Empty(t, f.ProcessName)
 }
@@ -294,7 +296,7 @@ func TestConcurrentMutationPersistsParseableRuleSet(t *testing.T) {
 		wg.Go(func() {
 			domain := fmt.Sprintf("d%d.example.com", i)
 			record(st.AddItems(SplitTunnelFilter{Domain: []string{domain}, ProcessName: []string{fmt.Sprintf("p%d", i)}}))
-			record(st.SetEnabled(i%2 == 0))
+			record(setEnabled(st, i%2 == 0))
 			policy := SplitTunnelPolicyExclude
 			if i%2 == 0 {
 				policy = SplitTunnelPolicyInclude
@@ -315,62 +317,49 @@ func TestFilterPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
 	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	require.NoError(t, st.AddItem("domain", "example.com"))
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
 
-	f := st.Filters()
+	f := st.State().Filters
 	assert.Equal(t, []string{"example.com"}, f.Domain)
 
 	st, err = NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	f = st.Filters()
+	f = st.State().Filters
 	assert.Equal(t, []string{"example.com"}, f.Domain, "expected filters to persist after reloading from file")
 }
 
 func TestFilterPersistenceAfterLoad(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Simulate the daemon path: NewSplitTunnelHandler (newSplitTunnel + loadRule), then AddItems
 	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
 
 	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
-	f := st.Filters()
+	f := st.State().Filters
 	assert.Equal(t, []string{"example.com"}, f.Domain, "filter should be set in memory after AddItems")
 
-	// Reload from disk to verify persistence
 	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	f = st2.Filters()
+	f = st2.State().Filters
 	assert.Equal(t, []string{"example.com"}, f.Domain, "filter should persist to disk after AddItems")
 }
 
-func TestUpdateFilterUnsupportedType(t *testing.T) {
-	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-	err := st.AddItem("unsupported", "foo")
-	assert.Error(t, err)
-}
-
 func TestRemoveEdgeCases(t *testing.T) {
-	// Remove from empty slice
 	out := remove([]string{}, []string{"a"})
 	assert.Empty(t, out)
-	// Remove with empty items
 	out = remove([]string{"a"}, []string{})
 	assert.Equal(t, []string{"a"}, out)
-	// Remove non-existent item
 	out = remove([]string{"a"}, []string{"b"})
 	assert.Equal(t, []string{"a"}, out)
-	// Remove existing item
 	out = remove([]string{"a", "b"}, []string{"a"})
 	assert.Len(t, out, 1)
 	assert.NotContains(t, out, "a")
-	// Remove multiple items
 	out = remove([]string{"a", "b", "c"}, []string{"a", "c"})
 	assert.Equal(t, []string{"b"}, out)
 }
 
 func TestMatch(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-	require.NoError(t, st.AddItem("domain", "example.com"))
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
 
 	ruleOpts := O.Rule{
 		Type: C.RuleTypeDefault,
@@ -417,7 +406,7 @@ func TestMatch(t *testing.T) {
 	metadata := &adapter.InboundContext{Domain: "example.com"}
 
 	rsStr := ruleSet.String()
-	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, setEnabled(st, true))
 	require.Eventually(t, func() bool {
 		return ruleSet.String() != rsStr
 	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
@@ -425,7 +414,7 @@ func TestMatch(t *testing.T) {
 	assert.True(t, rule.Match(metadata), "rule should match when split tunnel is enabled")
 
 	rsStr = ruleSet.String()
-	require.NoError(t, st.SetEnabled(false))
+	require.NoError(t, setEnabled(st, false))
 	require.Eventually(t, func() bool {
 		return ruleSet.String() != rsStr
 	}, time.Second, 50*time.Millisecond, "timed out waiting for rule reload")
@@ -442,9 +431,7 @@ func (r *mockRouter) RuleSet(tag string) (adapter.RuleSet, bool) {
 	return r.ruleSet, true
 }
 
-// splitTunnelMatcher builds a live route rule from st's saved rule file.
-// waitReload blocks until the rule set reflects the latest saved state.
-// A match means the connection is routed direct.
+// splitTunnelMatcher returns the direct-route rule and a wait for its saved state to reload.
 func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitReload func()) {
 	t.Helper()
 	ruleOpts := O.Rule{
@@ -494,19 +481,19 @@ func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitR
 
 func TestPolicyInvertsMatch(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
 
 	rule, waitReload := splitTunnelMatcher(t, st)
 	matched := &adapter.InboundContext{Domain: "example.com"}
 	unmatched := &adapter.InboundContext{Domain: "other.com"}
 
-	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, setEnabled(st, true))
 	waitReload()
 
 	assert.True(t, rule.Match(matched), "exclude: matched should route direct")
 	assert.False(t, rule.Match(unmatched), "exclude: unmatched should stay tunneled")
 
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
 	waitReload()
 
 	assert.False(t, rule.Match(matched), "include: matched should stay tunneled")
@@ -515,8 +502,8 @@ func TestPolicyInvertsMatch(t *testing.T) {
 
 func TestEmptyIncludeRoutesDirect(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-	require.NoError(t, st.SetEnabled(true))
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, setEnabled(st, true))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
 
 	rule, _ := splitTunnelMatcher(t, st)
 
@@ -529,15 +516,15 @@ func TestPolicyPersistence(t *testing.T) {
 	tmpDir := t.TempDir()
 	st, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	require.Equal(t, SplitTunnelPolicyExclude, st.Policy(), "default policy should be exclude")
+	require.Equal(t, SplitTunnelPolicyExclude, st.State().Policy, "default policy should be exclude")
 
-	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
 
 	st2, err := NewSplitTunnelHandler(tmpDir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	assert.Equal(t, SplitTunnelPolicyInclude, st2.Policy(), "policy should persist across reload")
-	assert.ElementsMatch(t, []string{"example.com"}, st2.Filters().Domain)
+	assert.Equal(t, SplitTunnelPolicyInclude, st2.State().Policy, "policy should persist across reload")
+	assert.ElementsMatch(t, []string{"example.com"}, st2.State().Filters.Domain)
 }
 
 func TestEmptyPolicyPersistence(t *testing.T) {
@@ -559,126 +546,42 @@ func TestEmptyPolicyPersistence(t *testing.T) {
 	}
 }
 
-func TestSetPolicyIdempotentAndValidation(t *testing.T) {
+func TestConfigurePolicyIdempotentAndValidation(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-	require.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+	require.Equal(t, SplitTunnelPolicyExclude, st.State().Policy)
 
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude)) // no-op when already in policy
-	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
+	assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
 
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyExclude))
-	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyExclude))
+	assert.Equal(t, SplitTunnelPolicyExclude, st.State().Policy)
+	assert.Equal(t, []string{"example.com"}, st.State().Filters.Domain)
 
-	require.Error(t, st.SetPolicy(SplitTunnelPolicy("bogus")))
-	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
+	require.Error(t, setPolicy(st, SplitTunnelPolicy("bogus")))
+	assert.Equal(t, SplitTunnelPolicyExclude, st.State().Policy)
 }
 
 func TestMigration(t *testing.T) {
-	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
-
-	// Create a legacy format rule file
-	legacyRule := O.LogicalHeadlessRule{
-		Mode: C.LogicalTypeOr,
-		Rules: []O.HeadlessRule{
-			{
-				Type: C.RuleTypeLogical,
-				LogicalOptions: O.LogicalHeadlessRule{
-					Mode: C.LogicalTypeAnd,
-					Rules: []O.HeadlessRule{
-						{
-							Type:           C.RuleTypeDefault,
-							DefaultOptions: O.DefaultHeadlessRule{Domain: []string{"disable.rule"}},
-						},
-						{
-							Type:           C.RuleTypeDefault,
-							DefaultOptions: O.DefaultHeadlessRule{Domain: []string{"disable.rule"}, Invert: true},
-						},
-					},
-				},
-			},
-			{
-				Type: C.RuleTypeDefault,
-				DefaultOptions: O.DefaultHeadlessRule{
-					Domain:           []string{"example.com", "test.com"},
-					DomainSuffix:     []string{".org"},
-					DomainKeyword:    []string{"keyword"},
-					DomainRegex:      []string{".*\\.io$"},
-					PackageName:      []string{"com.example.app"},
-					ProcessName:      []string{"chrome"},
-					ProcessPath:      []string{"/usr/bin/firefox"},
-					ProcessPathRegex: []string{"/opt/.*"},
-				},
-			},
-		},
-	}
-
-	// Write legacy format to file
-	rs := O.PlainRuleSetCompat{
-		Version: 3,
-		Options: O.PlainRuleSet{
-			Rules: []O.HeadlessRule{
-				{
-					Type:           "logical",
-					LogicalOptions: legacyRule,
-				},
-			},
-		},
-	}
-	buf, err := json.Marshal(rs)
+	dir := t.TempDir()
+	root := defaultRule()
+	root.Mode = C.LogicalTypeOr
+	root.Rules[1] = O.HeadlessRule{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultHeadlessRule{
+		Domain: []string{"example.com", "test.com"}, DomainSuffix: []string{".org"},
+		DomainKeyword: []string{"keyword"}, DomainRegex: []string{".*\\.io$"},
+		PackageName: []string{"com.example.app"}, ProcessName: []string{"chrome"},
+		ProcessPath: []string{"/usr/bin/firefox"}, ProcessPathRegex: []string{"/opt/.*"},
+	}}
+	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	err = atomicfile.WriteFile(st.ruleFile, buf, 0644)
-	require.NoError(t, err)
-
-	// Load the legacy format
-	err = st.loadRule()
-	require.NoError(t, err)
-	want := `{
-	"type": "logical",
-	"mode": "or",
-	"rules": [
-		{
-			"type": "logical",
-			"mode": "and",
-			"rules": [
-				{
-					"domain": "disable.rule"
-				},
-				{
-					"domain": "disable.rule",
-					"invert": true
-				}
-			]
-		},
-		{
-			"type": "logical",
-			"mode": "or",
-			"rules": [
-				{
-					"domain": ["example.com", "test.com"],
-					"domain_suffix": ".org",
-					"domain_keyword": "keyword",
-					"domain_regex": ".*\\.io$"
-				},
-				{
-					"package_name": "com.example.app"
-				},
-				{
-					"process_name": "chrome"
-				},
-				{
-					"process_path": "/usr/bin/firefox"
-				},
-				{
-					"process_path_regex": "/opt/.*"
-				}
-			]
-		}
-	]
-}
-`
-	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
-	assert.Equal(t, rule, splitTunnelRule(st.State()))
+	assert.Equal(t, SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyExclude, Filters: SplitTunnelFilter{
+		Domain: []string{"example.com", "test.com"}, DomainSuffix: []string{".org"},
+		DomainKeyword: []string{"keyword"}, DomainRegex: []string{".*\\.io$"},
+		PackageName: []string{"com.example.app"}, ProcessName: []string{"chrome"},
+		ProcessPath: []string{"/usr/bin/firefox"}, ProcessPathRegex: []string{"/opt/.*"},
+	}}, st.State())
 }
 
 func allSplitTunnelFilters() SplitTunnelFilter {
@@ -694,7 +597,7 @@ func TestSwitchPolicyClearsOnce(t *testing.T) {
 	dir := t.TempDir()
 	st := newSplitTunnel(dir, rlog.NoOpLogger())
 	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
-	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, setEnabled(st, true))
 	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyInclude))
 	assert.Equal(t, SplitTunnelState{Enabled: true, Policy: SplitTunnelPolicyInclude}, st.State())
 
@@ -717,11 +620,11 @@ func TestClearAppsPreservesWebsites(t *testing.T) {
 	st := newSplitTunnel(dir, rlog.NoOpLogger())
 	items := allSplitTunnelFilters()
 	require.NoError(t, st.AddItems(items))
-	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	require.NoError(t, setPolicy(st, SplitTunnelPolicyInclude))
 	require.NoError(t, st.ClearApps())
 	items.ProcessName, items.ProcessPath, items.ProcessPathRegex, items.PackageName = nil, nil, nil, nil
-	assert.Equal(t, items, st.Filters())
-	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	assert.Equal(t, items, st.State().Filters)
+	assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
 	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
 	assert.Equal(t, st.State(), reloaded.State())
@@ -737,11 +640,11 @@ func TestSplitTunnelMutationFailuresPreserveState(t *testing.T) {
 	st.ruleFile = t.TempDir()
 
 	for name, mutate := range map[string]func() error{
-		"enable": func() error { return st.SetEnabled(true) },
-		"policy": func() error { return st.SetPolicy(SplitTunnelPolicyInclude) },
+		"enable": func() error { return setEnabled(st, true) },
+		"policy": func() error { return setPolicy(st, SplitTunnelPolicyInclude) },
 		"switch": func() error { return st.SwitchPolicy(SplitTunnelPolicyInclude) },
 		"clear":  st.ClearApps,
-		"add":    func() error { return st.AddItem(TypeDomain, "new.example") },
+		"add":    func() error { return st.AddItems(SplitTunnelFilter{Domain: []string{"new.example"}}) },
 		"remove": func() error { return st.RemoveItems(allSplitTunnelFilters()) },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -775,7 +678,7 @@ func TestSplitTunnelSnapshotIsIndependent(t *testing.T) {
 	items.Domain[0] = "changed.example"
 	snapshot := st.State()
 	snapshot.Filters.PackageName[0] = "changed.package"
-	assert.Equal(t, allSplitTunnelFilters(), st.Filters())
+	assert.Equal(t, allSplitTunnelFilters(), st.State().Filters)
 }
 
 func TestImportLegacyPolicyOnlyOnce(t *testing.T) {
@@ -788,18 +691,18 @@ func TestImportLegacyPolicyOnlyOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
 	assert.True(t, st.IsEnabled())
-	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
-	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
+	require.NoError(t, st.AddItems(SplitTunnelFilter{Domain: []string{"example.com"}}))
 	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyExclude))
-	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
-	assert.Equal(t, []string{"example.com"}, st.Filters().Domain)
+	assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
+	assert.Equal(t, []string{"example.com"}, st.State().Filters.Domain)
 
 	require.NoError(t, st.SwitchPolicy(SplitTunnelPolicyExclude))
 	st, err = NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
 	require.NoError(t, st.ImportLegacyPolicy(SplitTunnelPolicyInclude))
-	assert.Equal(t, SplitTunnelPolicyExclude, st.Policy())
-	assert.Empty(t, st.Filters().Domain)
+	assert.Equal(t, SplitTunnelPolicyExclude, st.State().Policy)
+	assert.Empty(t, st.State().Filters.Domain)
 }
 
 func TestSplitTunnelFileCompatibility(t *testing.T) {
@@ -810,7 +713,9 @@ func TestSplitTunnelFileCompatibility(t *testing.T) {
 				state.Filters = allSplitTunnelFilters()
 			}
 			root := splitTunnelRule(state)
-			require.NoError(t, validateSplitTunnelRule([]O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}))
+			parsed, err := parseSplitTunnelRule([]O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}})
+			require.NoError(t, err)
+			assert.Equal(t, state, parsed)
 			assert.False(t, root.Invert)
 			require.Len(t, root.Rules, 2)
 			assert.Equal(t, defaultRule().Rules[0], root.Rules[0])
@@ -838,8 +743,8 @@ func TestLoadEmptyMatcherAfterLegacyMutation(t *testing.T) {
 	writeRuleSet(t, dir, O.PlainRuleSet{Rules: []O.HeadlessRule{{Type: C.RuleTypeLogical, LogicalOptions: root}}})
 	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
-	assert.Equal(t, SplitTunnelFilter{Domain: []string{"example.com"}}, st.Filters())
-	assert.Equal(t, SplitTunnelPolicyInclude, st.Policy())
+	assert.Equal(t, SplitTunnelFilter{Domain: []string{"example.com"}}, st.State().Filters)
+	assert.Equal(t, SplitTunnelPolicyInclude, st.State().Policy)
 }
 
 func TestSplitTunnelAppOrWebsite(t *testing.T) {
@@ -882,7 +787,7 @@ func TestRemoveLastSplitTunnelItemsRoundTrip(t *testing.T) {
 	st := newSplitTunnel(dir, rlog.NoOpLogger())
 	require.NoError(t, st.AddItems(allSplitTunnelFilters()))
 	require.NoError(t, st.RemoveItems(allSplitTunnelFilters()))
-	assert.Equal(t, SplitTunnelFilter{}, st.Filters())
+	assert.Equal(t, SplitTunnelFilter{}, st.State().Filters)
 	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
 	assert.Equal(t, st.State(), reloaded.State())
@@ -891,10 +796,10 @@ func TestRemoveLastSplitTunnelItemsRoundTrip(t *testing.T) {
 func TestSplitTunnelEmptyMarkerIsNotASelection(t *testing.T) {
 	dir := t.TempDir()
 	st := newSplitTunnel(dir, rlog.NoOpLogger())
-	require.NoError(t, st.AddItem(TypeDomainRegex, emptySplitTunnelPattern))
-	assert.Equal(t, SplitTunnelFilter{}, st.Filters())
+	require.NoError(t, st.AddItems(SplitTunnelFilter{DomainRegex: []string{emptySplitTunnelPattern}}))
+	assert.Equal(t, SplitTunnelFilter{}, st.State().Filters)
 	require.NoError(t, st.AddItems(SplitTunnelFilter{DomainRegex: []string{emptySplitTunnelPattern, "^example"}}))
-	assert.Equal(t, []string{"^example"}, st.Filters().DomainRegex)
+	assert.Equal(t, []string{"^example"}, st.State().Filters.DomainRegex)
 	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
 	require.NoError(t, err)
 	assert.Equal(t, st.State(), reloaded.State())

@@ -3,13 +3,46 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"sync"
+	"time"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/vpn"
 )
 
-var errSplitTunnelUpdateInProgress = errors.New("split-tunnel update already in progress")
+// ErrVPNBusy reports that a split-tunnel change or VPN restart was refused because other VPN
+// work was in progress. The refused operation had no effect and is retryable once that work finishes.
+var ErrVPNBusy = errors.New("VPN is busy with another change")
+
+// ErrSplitTunnelUnavailable reports that the backend has no split-tunnel manager.
+// It is permanent for the backend's lifetime.
+var ErrSplitTunnelUnavailable = errors.New("split tunneling is unavailable")
+
+// splitTunnelLockTimeout bounds how long a change waits behind a split-tunnel apply or
+// restart, which can include a full platform VPN restart.
+var splitTunnelLockTimeout = 30 * time.Second
+
+// waitMutex is a mutex whose lock can time out. The zero value is unlocked.
+type waitMutex struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (m *waitMutex) lock(timeout time.Duration) bool {
+	m.once.Do(func() { m.ch = make(chan struct{}, 1) })
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case m.ch <- struct{}{}:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (m *waitMutex) unlock() { <-m.ch }
 
 // Settings returns preferences with the persisted split-tunnel state projected into its legacy keys.
 func (r *LocalBackend) Settings() settings.Settings {
@@ -57,20 +90,20 @@ func (r *LocalBackend) RemoveSplitTunnelItems(items vpn.SplitTunnelFilter) error
 
 func (r *LocalBackend) updateSplitTunnel(update func() error) error {
 	if r.splitTunnelMgr == nil {
-		return errors.New("split tunneling is unavailable")
+		return ErrSplitTunnelUnavailable
 	}
-	if !r.splitTunnelMu.TryLock() {
-		return errSplitTunnelUpdateInProgress
+	if !r.splitTunnelMu.lock(splitTunnelLockTimeout) {
+		return ErrVPNBusy
 	}
-	defer r.splitTunnelMu.Unlock()
+	defer r.splitTunnelMu.unlock()
 	if !r.connectMu.TryLock() {
-		return ErrConnectInProgress
+		return fmt.Errorf("%w: %w", ErrVPNBusy, ErrConnectInProgress)
 	}
 	if r.vpnClient != nil {
 		switch r.vpnClient.Status() {
 		case vpn.Connecting, vpn.Restarting, vpn.Disconnecting:
 			r.connectMu.Unlock()
-			return errors.New("VPN transition in progress")
+			return ErrVPNBusy
 		}
 	}
 	before := r.splitTunnelMgr.State()
@@ -79,6 +112,13 @@ func (r *LocalBackend) updateSplitTunnel(update func() error) error {
 	r.connectMu.Unlock()
 	if err != nil || reflect.DeepEqual(before, after) {
 		return err
+	}
+	// Older builds read split-tunnel state from settings, not the rule file.
+	if err := settings.Patch(settings.Settings{
+		settings.SplitTunnelKey:       after.Enabled,
+		settings.SplitTunnelPolicyKey: string(after.Policy),
+	}); err != nil {
+		slog.Warn("Failed to mirror split-tunnel state into settings", "error", err)
 	}
 	if r.vpnClient == nil || r.vpnClient.Status() != vpn.Connected {
 		return nil

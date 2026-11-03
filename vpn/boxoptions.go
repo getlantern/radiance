@@ -430,12 +430,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	if includeOnly && bOptions.Options.Route != nil {
-		route := *bOptions.Options.Route
-		route.Rules = slices.DeleteFunc(slices.Clone(route.Rules), func(rule O.Rule) bool {
-			return rule.Type == C.RuleTypeDefault && len(rule.DefaultOptions.RuleSet) > 0 &&
-				rule.DefaultOptions.RouteOptions.Outbound == "direct"
-		})
-		bOptions.Options.Route = &route
+		bOptions.Options.Route = withoutDirectRuleSetRules(bOptions.Options.Route)
 	}
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
 	if bOptions.SplitTunnel.Enabled {
@@ -534,6 +529,15 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 		}
 	}
 	return tags
+}
+
+func withoutDirectRuleSetRules(route *O.RouteOptions) *O.RouteOptions {
+	stripped := *route
+	stripped.Rules = slices.DeleteFunc(slices.Clone(route.Rules), func(rule O.Rule) bool {
+		return rule.Type == C.RuleTypeDefault && len(rule.DefaultOptions.RuleSet) > 0 &&
+			rule.DefaultOptions.RouteOptions.Outbound == "direct"
+	})
+	return &stripped
 }
 
 func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules, includeOnly bool) lcommon.SmartRoutingRules {
