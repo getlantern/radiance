@@ -1061,6 +1061,24 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 	return true
 }
 
+// sendHeartbeat sends one heartbeat carrying the traffic relayed since the
+// last one that succeeded. A heartbeat that fails keeps that traffic for the
+// next, except on a 400 for a heartbeat that carried traffic: a server that
+// predates the usage fields rejects them, so the traffic is dropped and the
+// heartbeat sent again without it.
+func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
+	usage := c.relay.takeUsage()
+	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
+	if err == nil {
+		return resp, nil
+	}
+	if (usage.RelayedBytes > 0 || len(usage.PairedBytes) > 0) && isBadRequest(err) {
+		return c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), RelayUsage{})
+	}
+	c.relay.restoreUsage(usage)
+	return resp, err
+}
+
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
 // tearing down resources. The channel is passed in rather than read off the
 // Client because Stop nils c.runDone before waiting on its local copy.
@@ -1081,7 +1099,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			resp, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			resp, err := c.sendHeartbeat(hbCtx, routeID)
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
@@ -1127,6 +1145,11 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+func isBadRequest(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 400
 }
 
 // credRotationLoop periodically rotates the peer's samizdat credentials
