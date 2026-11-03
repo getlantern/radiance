@@ -16,6 +16,26 @@ import (
 // Redacted replaces an address on a line that names a helper outbound.
 const Redacted = "<redacted>"
 
+// PersonalProxiesTag is the tag of radiance's url-test group over a paired
+// inviter's helper outbounds (vpn.PersonalProxiesTag). It marks a device as
+// having personal proxies wherever outbound tags are recorded, so it is
+// exported only as "helper", like a helper tag.
+const PersonalProxiesTag = "personal-proxies"
+
+// PersonalProxyTag is the tag of radiance's url-test group over one paired
+// friend's outbounds (vpn.PersonalProxyTag). It is exported only as "helper",
+// like PersonalProxiesTag.
+const PersonalProxyTag = "personal-proxy"
+
+var groupTags = strings.NewReplacer(PersonalProxiesTag, "helper", PersonalProxyTag, "helper")
+
+// Tag returns s with every helper tag, PersonalProxiesTag and PersonalProxyTag
+// replaced by "helper". Unlike Helper it leaves addresses alone, for values
+// that are only outbound tags or rules, such as metric attributes.
+func Tag(s string) string {
+	return groupTags.Replace(lbA.RedactHelperTags(s))
+}
+
 var (
 	// helperNamed matches text that may name a helper outbound: a helper tag,
 	// or the word "helper" that lbA.RedactHelperTags leaves in its place.
@@ -43,13 +63,15 @@ func Helper(s string) string {
 			lines[i] = Addresses(line)
 		}
 	}
-	return lbA.RedactHelperTags(strings.Join(lines, ""))
+	return Tag(strings.Join(lines, ""))
 }
 
-// NamesHelper reports whether s may name a helper outbound, by its tag or by
-// the "helper" a redaction left in its place.
+// NamesHelper reports whether s may name a helper outbound: by its tag, by
+// a group over them (PersonalProxiesTag, PersonalProxyTag), or by the
+// "helper" a redaction left in its place.
 func NamesHelper(s string) bool {
-	return strings.Contains(s, "helper") && helperNamed.MatchString(s)
+	return strings.Contains(s, PersonalProxiesTag) || strings.Contains(s, PersonalProxyTag) ||
+		(strings.Contains(s, "helper") && helperNamed.MatchString(s))
 }
 
 // Addresses returns s with every IP address (with any port) replaced by
@@ -62,7 +84,8 @@ func Addresses(s string) string {
 // HelperBytes is Helper for a byte slice. It returns b itself when there is
 // nothing to redact.
 func HelperBytes(b []byte) []byte {
-	if !bytes.Contains(b, []byte("helper")) {
+	if !bytes.Contains(b, []byte("helper")) && !bytes.Contains(b, []byte(PersonalProxiesTag)) &&
+		!bytes.Contains(b, []byte(PersonalProxyTag)) {
 		return b
 	}
 	return []byte(Helper(string(b)))

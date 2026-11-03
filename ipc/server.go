@@ -20,6 +20,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal/hostaccess"
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/peer"
@@ -53,6 +54,7 @@ const (
 	serverAutoSelectedEndpoint       = "/server/auto-selected"
 	serverAutoSelectedEventsEndpoint = "/server/auto-selected/events"
 	serverURLTestEventsEndpoint      = "/server/url-test/events"
+	serverSelectionEventsEndpoint    = "/server/selection/events"
 
 	// Config endpoints
 	configEventsEndpoint = "/config/events"
@@ -89,6 +91,14 @@ const (
 	unboundedConnectionEventsEndpoint = "/unbounded/connection/events"
 	unboundedSnapshotEndpoint         = "/unbounded/snapshot"
 
+	// Helper invites
+	helperRelayEndpoint                 = "/helper/relay"
+	helperActivityEndpoint              = "/helper/activity"
+	helperLiveEndpoint                  = "/helper/live"
+	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
+	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
+
+	// Split tunnel
 	splitTunnelEndpoint       = "/split-tunnel"
 	splitTunnelStateEndpoint  = "/split-tunnel/state"
 	splitTunnelPolicyEndpoint = "/split-tunnel/policy"
@@ -252,6 +262,7 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+serverAutoSelectedEndpoint, traced(s.serverAutoSelectedHandler))
 	mux.HandleFunc("GET "+serverAutoSelectedEventsEndpoint, s.serverAutoSelectedEventsHandler)
 	mux.HandleFunc("GET "+serverURLTestEventsEndpoint, s.serverURLTestEventsHandler)
+	mux.HandleFunc("GET "+serverSelectionEventsEndpoint, s.serverSelectionEventsHandler)
 	mux.HandleFunc("GET "+configEventsEndpoint, s.configEventsHandler)
 	mux.HandleFunc("POST "+configUpdateEndpoint, traced(s.configUpdateHandler))
 
@@ -287,6 +298,20 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+unboundedSnapshotEndpoint, traced(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unbounded.CurrentSnapshot())
 	}))
+
+	// Helper invites. Not traced: a span per relay call would show in
+	// exported telemetry that the device uses helper invites, and how many
+	// operations it ran.
+	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
+	// Not traced either: a traced poll would mark the device as a helper
+	// volunteer in exported telemetry.
+	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
+	// Not traced either, for the same reason.
+	mux.HandleFunc("GET "+helperLiveEndpoint, s.helperLiveHandler)
+	// Not traced either: a traced poll or stream would mark the device as an
+	// inviter in exported telemetry.
+	mux.HandleFunc("GET "+helperPersonalProxiesEndpoint, s.helperPersonalProxiesHandler)
+	mux.HandleFunc("GET "+helperPersonalProxyFallbackEndpoint, s.helperPersonalProxyFallbackHandler)
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
@@ -747,6 +772,40 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 		select {
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *localapi) serverSelectionEventsHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan []byte, 16)
+	sub := events.Subscribe(func(evt vpn.SelectionSavedEvent) {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		select {
+		case ch <- data:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	// Sent once subscribed, so a save the client could not hear, before it
+	// connected or while it reconnected, still prompts a read.
+	if data, err := json.Marshal(vpn.SelectionSavedEvent{}); err == nil {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+	for {
+		select {
+		case data := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
@@ -1598,6 +1657,67 @@ func (s *localapi) logsStreamHandler(w http.ResponseWriter, r *http.Request) {
 		select {
 		case entry := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", entry)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+const maxHelperRelayRequest = 64 << 10
+
+// helperRelayHandler relays one helper-invite request for the app. Its
+// errors are fixed text: they reach logs and must not quote a body.
+func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
+	var req HelperRelayRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxHelperRelayRequest)).Decode(&req); err != nil {
+		http.Error(w, "bad helper relay request", http.StatusBadRequest)
+		return
+	}
+	res, err := s.backend(r.Context()).HelperRelay(r.Context(), req.Op, req.Body)
+	switch {
+	case errors.Is(err, helper.ErrUnknownOp):
+		http.Error(w, "unknown helper operation", http.StatusBadRequest)
+	case err != nil:
+		http.Error(w, "helper relay failed", http.StatusBadGateway)
+	default:
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperActivity())
+}
+
+func (s *localapi) helperLiveHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).HelperLive())
+}
+
+func (s *localapi) helperPersonalProxiesHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).PersonalProxyStatus())
+}
+
+func (s *localapi) helperPersonalProxyFallbackHandler(w http.ResponseWriter, r *http.Request) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	ch := make(chan []byte, 16)
+	sub := events.Subscribe(func(evt vpn.PersonalProxyFallbackEvent) {
+		data, err := json.Marshal(evt)
+		if err != nil {
+			return
+		}
+		select {
+		case ch <- data:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case data := <-ch:
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

@@ -116,11 +116,6 @@ func TestDetectPublicIPStopsAfterAttemptLimit(t *testing.T) {
 	assert.EqualValues(t, publicIPAttempts, calls.Load())
 }
 
-func TestTruncatePublicIP(t *testing.T) {
-	assert.Equal(t, "203.0.113.0", truncatePublicIP(net.ParseIP("203.0.113.7")).String())
-	assert.Equal(t, "2001:db8::", truncatePublicIP(net.ParseIP("2001:db8:1:2:3:4:5:6")).String())
-}
-
 func TestPublicIPDiffers(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -152,15 +147,15 @@ func TestStoredPublicIPRoundTrip(t *testing.T) {
 	assert.Empty(t, recordedPublicIP(t))
 
 	assert.True(t, storePublicIP(net.ParseIP("203.0.113.7"), ""), "first detection must refetch")
-	assert.Equal(t, "203.0.113.0", settings.GetString(settings.PublicIPKey), "only the /24 is stored")
+	assert.Equal(t, "203.0.113.7", settings.GetString(settings.PublicIPKey), "the full IP is stored")
 
 	stored := loadStoredPublicIP()
-	assert.Equal(t, "203.0.113.0", stored)
-	assert.Equal(t, "203.0.113.0", recordedPublicIP(t), "the stored IP is sent before detection completes")
+	assert.Equal(t, "203.0.113.7", stored)
+	assert.Equal(t, "203.0.113.7", recordedPublicIP(t), "the stored IP is sent before detection completes")
 
 	assert.False(t, storePublicIP(net.ParseIP("203.0.200.1"), stored))
 	assert.True(t, storePublicIP(net.ParseIP("198.51.100.9"), stored))
-	assert.Equal(t, "198.51.100.0", settings.GetString(settings.PublicIPKey))
+	assert.Equal(t, "198.51.100.9", settings.GetString(settings.PublicIPKey))
 }
 
 func TestDetectPublicIPReturnsIP(t *testing.T) {

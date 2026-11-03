@@ -22,6 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 const testBaseShortID = "0011223344556677"
@@ -769,4 +771,23 @@ func TestSamizdatInbound_RealBox(t *testing.T) {
 	require.True(t, ok, "the box's samizdat-in inbound must expose UpdateShortIDs")
 	require.NoError(t, u.UpdateShortIDs([]string{testBaseShortID, "4444444444444444"}))
 	require.Error(t, u.UpdateShortIDs(nil), "lantern-box's own validation runs: an empty set is refused")
+}
+
+// With "help others too" off the base ID stays on the box: lantern-cloud's
+// reaper re-verifies live peers with it, and a peer that fails three times is
+// deprecated, paired friends included.
+func TestClient_ServePoolOffKeepsTheBaseShortID(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	srv := newStubServer(t)
+	srv.registerResp.ServerConfig = launchCfgWithShortID()
+	srv.registerResp.PairingShortIDs = []string{"1111111111111111"}
+	srv.registerResp.PairingShortIDsKnown = true
+	b := &fakeBoxService{}
+	c := newTestClient(t, &fakeForwarder{}, b, srv, func(cfg *Config) { cfg.HeartbeatInterval = time.Hour })
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+	c.applyPairingShortIDs([]string{"2222222222222222"}, true, 1<<62)
+	assert.Equal(t, []string{testBaseShortID, "2222222222222222"}, b.lastShortIDs())
 }

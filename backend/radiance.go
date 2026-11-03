@@ -45,6 +45,7 @@ import (
 	"github.com/getlantern/radiance/vpn"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbC "github.com/getlantern/lantern-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 )
@@ -64,15 +65,36 @@ type LocalBackend struct {
 	accountClient *account.Client
 	userMessages  *clientmessage.Service
 
-	srvManager     *servers.Manager
-	vpnClient      *vpn.VPNClient
-	splitTunnelMgr *vpn.SplitTunnel
-	splitTunnelMu  waitMutex
-	sessionHistory *vpn.SessionHistory
+	srvManager *servers.Manager
+	vpnClient  *vpn.VPNClient
+	// live, if set, replaces vpnClient as the liveTunnel, for tests that have
+	// no tunnel.
+	live liveTunnel
+	// beforeManagerRemove, if set, runs in RemoveServers just before the
+	// manager removes the servers, for tests of a concurrent add.
+	beforeManagerRemove func()
+	// beforeRestartSelection, if set, runs in restartBoxOptions, with
+	// r.selectionMu held, between capturing the outbounds and the saved
+	// selection, for tests of a concurrent selection.
+	beforeRestartSelection func()
+	splitTunnelMgr         *vpn.SplitTunnel
+	splitTunnelMu          waitMutex
+	sessionHistory         *vpn.SessionHistory
 
 	peerClient   peerController
 	peerToggleMu sync.Mutex
 	peerWG       sync.WaitGroup
+	// peerWGMu orders peerWG.Add against closePeerClient's Wait: once
+	// peerClosing is set, nothing adds to peerWG.
+	peerWGMu    sync.Mutex
+	peerClosing bool
+	// peerReregCancel cancels the running re-register retry loop, so only the
+	// latest request's loop runs. peerReregAttemptCtx is what attempts run
+	// under; a newer request leaves it alone, and turning sharing off or on,
+	// or Close, cancels it. Guarded by peerWGMu.
+	peerReregCancel        context.CancelFunc
+	peerReregAttemptCtx    context.Context
+	peerReregAttemptCancel context.CancelFunc
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -80,6 +102,14 @@ type LocalBackend struct {
 	// Rejects overlapping ConnectVPN calls (TryLock) so a burst can't each
 	// drive a full tunnel bring-up.
 	connectMu sync.Mutex
+
+	// selectionMu serializes a selection and its persistence with the server
+	// changes that can withdraw it (config updates and removals), so the
+	// tunnel's choice and the persisted one cannot disagree.
+	selectionMu sync.Mutex
+	// selectionClosed is set by Close; a ticket-change reconcile then does
+	// nothing. Guarded by selectionMu.
+	selectionClosed bool
 
 	deviceID string
 
@@ -105,6 +135,10 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
+	// helperRelay sends the app's helper-invite requests to lantern-cloud.
+	helperRelay *helper.Relayer
+	// helperActivity is today's sharing time and bytes, kept on the device.
+	helperActivity *helper.ActivityTracker
 }
 
 type Options struct {
@@ -218,8 +252,17 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
+	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
+	// The widget and the tunnel share r.helperTickets, so invalidating it
+	// reaches both when the app's pairings change.
+	r.helperRelay = helper.NewRelayer(kindling.HTTPClient(), common.GetBaseURL(), func() {
+		if r.helperTickets != nil {
+			r.helperTickets.Invalidate()
+		}
+	})
 	backend = r
+	r.helperActivity = helper.NewActivityTracker(filepath.Join(dataDir, "helper-activity.json"), r.sharingCounters)
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -330,6 +373,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
 	// updates. This single subscription handles all three start/stop
@@ -347,6 +391,11 @@ func (r *LocalBackend) Start() {
 	// interface, so partial backends in tests skip it.
 	if r.helperTickets != nil {
 		unbounded.SetTicketSource(r.helperTickets)
+	}
+	// The widget reports the tunnel's state with its STUN preflights, so
+	// freddie can tell whether STUN failures follow the VPN.
+	if r.vpnClient != nil {
+		unbounded.SetVPNStatus(func() string { return string(r.vpnClient.Status()) })
 	}
 	unbounded.InitSubscription(cachedCfg)
 
@@ -485,6 +534,18 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 func (r *LocalBackend) Close() {
 	r.closeOnce.Do(func() {
 		slog.Debug("Closing Radiance")
+		// Waits out a ticket-change reconcile in flight, and turns away later
+		// ones, so none saves a selection a replacement backend may own.
+		r.selectionMu.Lock()
+		r.selectionClosed = true
+		r.selectionMu.Unlock()
+		// Stop the activity ticker and wait for it, then count the last
+		// partial interval while sharing still runs, so nothing saves
+		// after Close returns.
+		if r.helperActivity != nil {
+			r.helperActivity.Stop()
+			r.helperActivity.Flush()
+		}
 		r.closePeerClient()
 		// unbounded.start spawns its worker on a context.Background-
 		// derived ctx (it has to outlive any single NewConfigEvent),
@@ -516,6 +577,7 @@ func (r *LocalBackend) Close() {
 }
 
 func (r *LocalBackend) startVPNStatusListeners() {
+	r.startHelperReconcileListener()
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		r.updateConnMetrics(evt.Status)
 	})
@@ -723,7 +785,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn bool
+	var peerOn, peerStarted bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -747,15 +809,21 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		if err := r.applyPeerShare(peerOn); err != nil {
+		started, err := r.applyPeerShareStarted(peerOn)
+		if err != nil {
 			errs = errors.Join(errs, err)
 		}
+		peerStarted = started
 	}
 	if len(diff) == 0 {
 		return errs
 	}
 	if patchErr != nil {
 		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
+	}
+	_, autoChanged := diff[settings.AutoConnectKey]
+	if _, selectedChanged := diff[settings.SelectedServerKey]; autoChanged || selectedChanged {
+		emitSelectionSaved()
 	}
 	if _, ok := diff[settings.LocaleKey]; ok {
 		r.RefreshUserMessages()
@@ -785,6 +853,15 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		if err := unbounded.Apply(); err != nil {
 			slog.Warn("unbounded apply failed", "error", err)
 		}
+	}
+	// "Help others too" is sent when the peer registers, so a running peer
+	// re-registers now. Not when this patch started the peer, whose Start
+	// registered with the new value already, or turned sharing off. A patch
+	// that turned sharing on for a peer already running started nothing, so
+	// it re-registers.
+	turnedOff := peerRequested && !peerOn
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
+		r.reregisterPeer()
 	}
 	return errs
 }
@@ -905,25 +982,57 @@ func (r *LocalBackend) AllServers() []*servers.Server {
 }
 
 func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
+	return r.serverByTag(tag)
+}
+
+// serverByTag is the manager's lookup plus the personal proxy groups, which
+// are selectable by tag but never managed servers, so never listed.
+func (r *LocalBackend) serverByTag(tag string) (*servers.Server, bool) {
+	if tag == vpn.PersonalProxiesTag {
+		return r.personalProxiesServer()
+	}
+	if friend, ok := vpn.ParsePersonalProxySelection(tag); ok {
+		return r.personalProxyServer(friend)
+	}
 	return r.srvManager.GetServerByTag(tag)
 }
 
-func (r *LocalBackend) RemoveServers(tags []string) error {
-	removed, err := r.srvManager.RemoveServers(tags)
-	if err != nil {
-		return fmt.Errorf("failed to remove servers from ServerManager: %w", err)
-	}
-	removedTags := make([]string, 0, len(removed))
-	for _, srv := range removed {
-		removedTags = append(removedTags, srv.Tag)
-	}
-	if len(removedTags) > 0 {
-		r.clearSelectedIfMissing()
-		if err := r.vpnClient.RemoveOutbounds(removedTags); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-			return fmt.Errorf("failed to remove outbounds: %w", err)
+// personalProxiesServer stands in for the tunnel's group over helper
+// outbounds. Like the group, it exists while a helper outbound does.
+func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
+	for _, srv := range r.srvManager.AllServers() {
+		if lbA.IsHelperTag(srv.Tag) {
+			return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
 		}
 	}
-	return nil
+	return nil, false
+}
+
+func (r *LocalBackend) RemoveServers(tags []string) error {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	if r.beforeManagerRemove != nil {
+		r.beforeManagerRemove()
+	}
+	// The manager reports what it removed even when the save fails, since the
+	// servers left it in memory first: those are gone either way, so the
+	// selection falls back first, then the tunnel follows.
+	removed, err := r.srvManager.RemoveServers(tags)
+	if err != nil {
+		err = fmt.Errorf("failed to remove servers from ServerManager: %w", err)
+	}
+	gone := make([]string, 0, len(removed))
+	for _, srv := range removed {
+		gone = append(gone, srv.Tag)
+	}
+	if len(gone) == 0 {
+		return err
+	}
+	r.clearSelectedIfMissingLocked()
+	if rmErr := r.liveTunnel().RemoveOutbounds(gone); rmErr != nil && !errors.Is(rmErr, vpn.ErrTunnelNotConnected) {
+		err = errors.Join(err, fmt.Errorf("failed to remove outbounds: %w", rmErr))
+	}
+	return errors.Join(err, r.reconcileLiveHelpersLocked())
 }
 
 // AddServers adds user-supplied servers, clearing IsLantern on each.
@@ -974,29 +1083,86 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 	return r.srvManager.RevokePrivateServerInvite(ip, port, accessToken, inviteName)
 }
 
+// liveTunnel is the part of vpn.VPNClient the backend drives the running
+// tunnel through.
+type liveTunnel interface {
+	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
+	SelectedPersonalProxy() string
+	UpdateOutbounds(list servers.ServerList) error
+	SelectServer(tag string) error
+	RemoveOutbounds(tags []string) error
+	ReconcileHelpers(helpers servers.ServerList) error
+	Restart(boxOptions vpn.BoxOptions) error
+}
+
+func (r *LocalBackend) liveTunnel() liveTunnel {
+	if r.live != nil {
+		return r.live
+	}
+	return r.vpnClient
+}
+
 // maxRetainedLanternServers caps the number of working Lantern servers retained
 // across config updates.
 const maxRetainedLanternServers = 60
 
 // updateServers adds the servers in list that are not already present and
-// pass [servers.Server.CheckHostAccess]. When evict is set it first evicts
-// retained Lantern servers (see lanternServersToEvict). Only a newly received
-// config may evict: a config that was already applied, such as the cached one
-// at startup, would judge its own offers a second time.
-func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error {
+// pass [servers.Server.CheckHostAccess], and refreshes the helper servers in
+// list whose options changed. When evict is set it first evicts retained
+// Lantern servers (see lanternServersToEvict). Only a newly received config
+// may evict: a config that was already applied, such as the cached one at
+// startup, would judge its own offers a second time.
+func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err error) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	// Whatever else fails, fall back from a selection the manager no longer
+	// holds and bring the tunnel's helpers in line with the manager, in that
+	// order, so traffic is on auto-select before a selected helper goes.
+	defer func() {
+		r.clearSelectedIfMissingLocked()
+		err = errors.Join(err, r.reconcileLiveHelpersLocked())
+	}()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
+	incomingHelpers := make(map[string]struct{})
+	for _, srv := range list.Servers {
+		if lbA.IsHelperTag(srv.Tag) {
+			incomingHelpers[srv.Tag] = struct{}{}
+		}
+	}
+	// A helper's tag is stable per pairing and route while the credentials in
+	// its options rotate, so a known helper tag with new options replaces the
+	// stored server. Other known tags keep the server first offered.
+	var refreshed []*servers.Server
+	offeredTags := make(map[string]struct{}, len(list.Servers))
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		if _, exists := existingTags[srv.Tag]; exists {
+			offeredTags[srv.Tag] = struct{}{}
+			if stored, found := r.srvManager.GetServerByTag(srv.Tag); found &&
+				stored.IsLantern && lbA.IsHelperTag(srv.Tag) && !r.srvManager.HasOptions(srv) {
+				if err := srv.CheckHostAccess(); err != nil {
+					slog.Warn("Not refreshing helper server whose options grant host access", "tag", srv.Tag, "error", err)
+					return true
+				}
+				refresh := srv.Clone()
+				refresh.SelectionHistory = stored.SelectionHistory
+				refreshed = append(refreshed, refresh)
+			}
 			return true
 		}
 		if err := srv.CheckHostAccess(); err != nil {
 			slog.Warn("Dropping config server whose options grant host access", "tag", srv.Tag, "error", err)
 			return true
 		}
+		offeredTags[srv.Tag] = struct{}{}
 		return false
 	})
 
+	// A helper the config no longer carries ended its pairing. This holds for
+	// the cached config applied at startup too: the process can stop after a
+	// new config is saved but before it is applied, and later fetches of the
+	// same config bring no update.
+	toRemove := endedHelpers(existing, incomingHelpers)
 	if evict {
 		var selectedTag string
 		var selected servers.Server
@@ -1004,17 +1170,19 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 			selectedTag = selected.Tag
 		}
 
-		tagsToEvict := lanternServersToEvict(existing, len(list.Servers), maxRetainedLanternServers, selectedTag)
-
+		tagsToEvict := lanternServersToEvict(existing, offeredTags, maxRetainedLanternServers, selectedTag)
 		if len(tagsToEvict) > 0 {
 			slog.Debug(
 				"Evicting retained Lantern servers to make room for new config batch",
 				"count", len(tagsToEvict),
 				"tags", tagsToEvict,
 			)
-			if _, err := r.srvManager.RemoveServers(tagsToEvict); err != nil {
-				return fmt.Errorf("remove retained Lantern servers: %w", err)
-			}
+		}
+		toRemove = append(toRemove, tagsToEvict...)
+	}
+	if len(toRemove) > 0 {
+		if _, err := r.srvManager.RemoveServers(toRemove); err != nil {
+			return fmt.Errorf("remove retained Lantern servers: %w", err)
 		}
 	}
 
@@ -1026,16 +1194,61 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) error 
 	if err := r.srvManager.AddServers(list, false); err != nil {
 		return fmt.Errorf("add Lantern servers: %w", err)
 	}
+	if len(refreshed) > 0 {
+		slog.Debug("Refreshing helper servers whose options changed", "count", len(refreshed))
+		if err := r.srvManager.AddServers(servers.ServerList{Servers: refreshed}, true); err != nil {
+			return fmt.Errorf("refresh helper servers: %w", err)
+		}
+	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
 	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
-	outboundErr := r.vpnClient.UpdateOutbounds(allList)
-	// This update preserves the selected server unless hard-demoted, so clearing
-	// an evicted selection is safe even while connected. Run it even when the
-	// outbound update failed, since an evicted pin is already gone from the manager.
-	r.clearSelectedIfMissing()
+	// An evicted selection falls back to auto-select before the update removes
+	// it from the tunnel: the manual selector would otherwise pick an
+	// arbitrary member meanwhile.
+	r.clearSelectedIfMissingLocked()
+	outboundErr := r.liveTunnel().UpdateOutbounds(allList)
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
+	}
+	return nil
+}
+
+// startHelperReconcileListener reconciles each tunnel that comes up with the
+// helpers the server manager holds. A connect or restart builds its tunnel
+// from options captured before it took the VPN lock, so a config update in
+// between, which found no tunnel or the previous one, may have ended, added
+// or rotated a helper the new tunnel does not reflect.
+func (r *LocalBackend) startHelperReconcileListener() {
+	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
+		if evt.Status != vpn.Connected {
+			return
+		}
+		r.selectionMu.Lock()
+		defer r.selectionMu.Unlock()
+		if err := r.reconcileLiveHelpersLocked(); err != nil {
+			slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
+		}
+	})
+}
+
+// reconcileLiveHelpersLocked makes the tunnel's helpers the ones the server
+// manager holds, which is the record of the pairings that remain: helpers
+// that ended are removed (the last also withdraws the personal proxies
+// group), new ones added and rotated credentials swapped in. updateOutbounds
+// alone can keep an ended helper dialable: it skips an empty list and keeps
+// old outbounds when every new one fails to load. With no tunnel up there is
+// nothing to do; the next one is reconciled when it connects. The caller must
+// hold r.selectionMu.
+func (r *LocalBackend) reconcileLiveHelpersLocked() error {
+	var helpers servers.ServerList
+	for _, srv := range r.srvManager.AllServers() {
+		if lbA.IsHelperTag(srv.Tag) {
+			helpers.Servers = append(helpers.Servers, srv)
+		}
+	}
+	if err := r.liveTunnel().ReconcileHelpers(helpers); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("reconcile helpers: %w", err)
 	}
 	return nil
 }
@@ -1048,46 +1261,75 @@ func serverTagSet(list []*servers.Server) map[string]struct{} {
 	return tags
 }
 
-// lanternServersToEvict returns Lantern server tags to evict, always including
-// hard-demoted servers and otherwise excluding selectedTag. Remaining candidates
-// are evicted oldest-first by SelectionHistory.UpdatedAt; missing history sorts oldest.
+// endedHelpers returns the Lantern helper servers in existing that the config
+// no longer carries (incomingHelpers): their pairings ended. When the last one
+// goes, so does the personal proxies group, and a selection of it falls back
+// to auto-select.
+func endedHelpers(existing []*servers.Server, incomingHelpers map[string]struct{}) []string {
+	var ended []string
+	for _, srv := range existing {
+		if !srv.IsLantern || !lbA.IsHelperTag(srv.Tag) {
+			continue
+		}
+		if _, carried := incomingHelpers[srv.Tag]; !carried {
+			ended = append(ended, srv.Tag)
+		}
+	}
+	return ended
+}
+
+// lanternServersToEvict returns the Lantern server tags to evict for a config
+// offering the tags in offered. Hard-demoted servers are always evicted, even
+// when offered or selected. Otherwise, servers that are neither offered nor
+// selectedTag are evicted, least recently updated SelectionHistory first
+// (missing sorts oldest), until the retained and newly offered servers fit in
+// limit. Offered and selected servers are never evicted to make room, so the
+// total can exceed limit.
+// Helper servers are the user's pairings, not offers to rotate: they are
+// never evicted and take no retention slot (see endedHelpers for those whose
+// pairing ended).
 func lanternServersToEvict(
 	existing []*servers.Server,
-	incomingCount, limit int,
+	offered map[string]struct{},
+	limit int,
 	selectedTag string,
 ) []string {
-	tagsToEvict := make([]string, 0)
-	retentionCandidates := make([]*servers.Server, 0, len(existing))
+	existingTags := serverTagSet(existing)
+	retained := 0
+	for tag := range offered {
+		if _, ok := existingTags[tag]; !ok && !lbA.IsHelperTag(tag) {
+			retained++
+		}
+	}
 
+	tagsToEvict := make([]string, 0)
+	candidates := make([]*servers.Server, 0, len(existing))
 	for _, srv := range existing {
 		if !srv.IsLantern {
 			continue
 		}
-		// Always evict hard-demoted servers.
+		if lbA.IsHelperTag(srv.Tag) {
+			continue
+		}
 		if isHardDemoted(srv) {
 			tagsToEvict = append(tagsToEvict, srv.Tag)
 			continue
 		}
-		if srv.Tag == selectedTag {
-			// The retained selection occupies one retention slot.
-			limit--
+		retained++
+		if _, isOffered := offered[srv.Tag]; isOffered || srv.Tag == selectedTag {
 			continue
 		}
-		retentionCandidates = append(retentionCandidates, srv)
+		candidates = append(candidates, srv)
 	}
 
-	retentionBudget := max(limit-incomingCount, 0)
-	if len(retentionCandidates) <= retentionBudget {
+	overflow := min(max(retained-limit, 0), len(candidates))
+	if overflow == 0 {
 		return tagsToEvict
 	}
-
-	slices.SortFunc(retentionCandidates, compareSelectionAge)
-
-	overflow := len(retentionCandidates) - retentionBudget
-	for _, srv := range retentionCandidates[:overflow] {
+	slices.SortFunc(candidates, compareSelectionAge)
+	for _, srv := range candidates[:overflow] {
 		tagsToEvict = append(tagsToEvict, srv.Tag)
 	}
-
 	return tagsToEvict
 }
 
@@ -1106,22 +1348,30 @@ func selectionUpdatedAt(srv *servers.Server) time.Time {
 	return srv.SelectionHistory.UpdatedAt
 }
 
-// clearSelectedIfMissing reverts the persisted selection to auto-select when
-// the selected server is no longer present in the manager.
+// clearSelectedIfMissing reverts the persisted selection to its fallback (see
+// fallbackFor) when the selected server is no longer present in the manager.
 func (r *LocalBackend) clearSelectedIfMissing() {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	r.clearSelectedIfMissingLocked()
+}
+
+// clearSelectedIfMissingLocked is clearSelectedIfMissing for a caller holding
+// r.selectionMu.
+func (r *LocalBackend) clearSelectedIfMissingLocked() {
+	// Auto-select has no server to go missing, and saving it again would
+	// announce a selection that did not change.
+	if settings.GetBool(settings.AutoConnectKey) {
+		return
+	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return
 	}
-	if _, found := r.srvManager.GetServerByTag(selected.Tag); found {
+	if _, found := r.serverByTag(selected.Tag); found {
 		return
 	}
-	// Persist before notifying the VPN client so the auto-select choice
-	// survives even if the tunnel isn't running to accept the switch.
-	r.persistSelection(vpn.AutoSelectTag)
-	if err := r.vpnClient.SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		slog.Warn("Failed to switch to auto-select after selected server was removed", "error", err)
-	}
+	r.fallBackLocked(selected.Tag)
 }
 
 const selectionHistoryFlushInterval = 5 * time.Second
@@ -1301,16 +1551,19 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 		return err
 	}
 	if tag != vpn.AutoSelectTag {
-		if _, found := r.srvManager.GetServerByTag(tag); !found {
+		if _, found := r.serverByTag(tag); !found {
 			return fmt.Errorf("no server found with tag %s", tag)
 		}
 	}
+	if err := r.checkConnectSelection(tag); err != nil {
+		return err
+	}
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = tag
-	if err := r.vpnClient.Connect(ctx, bOptions); err != nil {
+	if err := r.liveTunnel().Connect(ctx, bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
-	r.persistSelection(tag)
+	r.persistConnectedSelection(tag)
 	return nil
 }
 
@@ -1318,15 +1571,55 @@ func (r *LocalBackend) connectSelection(tag string, status vpn.VPNStatus) string
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
-	if status == vpn.Restarting && tag == vpn.AutoSelectTag && !settings.GetBool(settings.AutoConnectKey) {
-		var selected servers.Server
-		if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil && selected.Tag != "" {
-			if _, found := r.srvManager.GetServerByTag(selected.Tag); found {
-				return selected.Tag
-			}
-		}
+	// A platform restart reconnects on auto; keep the saved selection.
+	if status == vpn.Restarting && tag == vpn.AutoSelectTag {
+		return r.savedSelectionTag()
 	}
 	return tag
+}
+
+// persistConnectedSelection persists the tag a connect selected. A config
+// update during the connect may have withdrawn it from the manager after the
+// tunnel was built with it; that update's own fallback then saw the old
+// setting, so the selection falls back here instead.
+func (r *LocalBackend) persistConnectedSelection(tag string) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	if tag != vpn.AutoSelectTag {
+		if _, found := r.serverByTag(tag); !found {
+			slog.Info("Connected server was withdrawn during the connect, falling back", "tag", tag)
+			r.fallBackLocked(tag)
+			return
+		}
+	}
+	if !r.settleFriendLocked(tag) {
+		return
+	}
+	r.persistSelection(tag)
+}
+
+// settleFriendLocked moves a running tunnel that is not on tag's friend, as
+// one built while the friend had no member is not, onto it. It returns false
+// only if the tunnel refused and tag's fallback was committed instead.
+// The caller must hold r.selectionMu.
+func (r *LocalBackend) settleFriendLocked(tag string) bool {
+	friend, ok := vpn.ParsePersonalProxySelection(tag)
+	if !ok || r.liveTunnel().SelectedPersonalProxy() == friend {
+		return true
+	}
+	// The tunnel may have been built from options captured before the friend
+	// was added, and the Connected listener's reconcile may not have run yet.
+	if err := r.reconcileLiveHelpersLocked(); err != nil {
+		slog.Warn("Failed to reconcile helpers before taking up the selected personal proxy", "error", err)
+	}
+	err := r.liveTunnel().SelectServer(tag)
+	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return true
+	}
+	slog.Info("Tunnel could not take up the selected personal proxy, falling back",
+		"unavailable", errors.Is(err, vpn.ErrPersonalProxyUnavailable))
+	r.fallBackLocked(tag)
+	return false
 }
 
 // awaitConnectable blocks until the connect has something to dial, or ctx is
@@ -1370,7 +1663,7 @@ func (r *LocalBackend) connectable(tag string) bool {
 		return true
 	}
 	if tag != vpn.AutoSelectTag {
-		_, found := r.srvManager.GetServerByTag(tag)
+		_, found := r.serverByTag(tag)
 		return found
 	}
 	return len(r.srvManager.AllServers()) > 0
@@ -1492,15 +1785,60 @@ func (r *LocalBackend) DisconnectVPN() error {
 	return r.vpnClient.Disconnect()
 }
 
-// RestartVPN rebuilds a connected tunnel from current settings. It waits for a running
-// split-tunnel change or restart and returns ErrVPNBusy if that does not finish in time.
+// RestartVPN rebuilds the tunnel on the saved selection, including one saved
+// during the restart. It waits for a running split-tunnel change or restart
+// and returns ErrVPNBusy if that does not finish in time.
 func (r *LocalBackend) RestartVPN() error {
 	if !r.splitTunnelMu.lock(splitTunnelLockTimeout) {
 		return ErrVPNBusy
 	}
 	defer r.splitTunnelMu.unlock()
+	bOptions := r.restartBoxOptions()
+	// selectionMu is not held across the restart: a platform restart may
+	// reconnect through this backend, which takes it.
+	if err := r.liveTunnel().Restart(bOptions); err != nil {
+		return err
+	}
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	tag := r.savedSelectionTag()
+	if _, ok := vpn.ParsePersonalProxySelection(tag); ok {
+		r.settleFriendLocked(tag)
+		return nil
+	}
+	if tag != bOptions.InitialServer {
+		if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			return fmt.Errorf("apply the selection saved during the restart: %w", err)
+		}
+	}
+	return nil
+}
+
+// restartBoxOptions captures the outbounds and the saved selection under
+// r.selectionMu, so a config update cannot pair a selection with outbounds
+// that lack it.
+func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
 	bOptions := r.getBoxOptions()
-	return r.vpnClient.Restart(bOptions)
+	if r.beforeRestartSelection != nil {
+		r.beforeRestartSelection()
+	}
+	bOptions.InitialServer = r.savedSelectionTag()
+	return bOptions
+}
+
+// savedSelectionTag returns the saved selection's tag, or AutoSelectTag when
+// none is saved or serverByTag no longer finds it.
+func (r *LocalBackend) savedSelectionTag() string {
+	var saved servers.Server
+	if !settings.GetBool(settings.AutoConnectKey) &&
+		settings.GetStruct(settings.SelectedServerKey, &saved) == nil && saved.Tag != "" {
+		if _, found := r.serverByTag(saved.Tag); found {
+			return saved.Tag
+		}
+	}
+	return vpn.AutoSelectTag
 }
 
 // ResetNetwork drops the VPN's connections and re-seeds its interface state.
@@ -1522,10 +1860,38 @@ func (r *LocalBackend) SelectServer(tag string) error {
 	if tag == "" {
 		tag = vpn.AutoSelectTag
 	}
-	if err := r.vpnClient.SelectServer(tag); err != nil {
+	r.selectionMu.Lock()
+	// Resolved before the tunnel changes: a server a config update just
+	// withdrew could still be live there, but its selection could not be
+	// persisted.
+	if friend, ok := vpn.ParsePersonalProxySelection(tag); ok && !r.friendReach(friend).selectable() {
+		r.selectionMu.Unlock()
+		return fmt.Errorf("failed to select server: %w", vpn.ErrPersonalProxyUnavailable)
+	}
+	// Saved as resolved here: a friend's ticket can lapse while the tunnel
+	// switches, and the switch still has to be saved.
+	var server *servers.Server
+	if tag != vpn.AutoSelectTag {
+		srv, found := r.serverByTag(tag)
+		if !found {
+			r.selectionMu.Unlock()
+			if tag == vpn.PersonalProxiesTag {
+				return fmt.Errorf("failed to select server: %w", vpn.ErrPersonalProxiesUnavailable)
+			}
+			return fmt.Errorf("failed to select server: no server found with tag %s", tag)
+		}
+		server = srv
+	}
+	if err := r.liveTunnel().SelectServer(tag); err != nil {
+		r.selectionMu.Unlock()
 		return fmt.Errorf("failed to select server: %w", err)
 	}
-	r.persistSelection(tag)
+	if server == nil {
+		r.persistSelection(vpn.AutoSelectTag)
+	} else {
+		r.persistServer(server)
+	}
+	r.selectionMu.Unlock()
 	if r.vpnClient.Status() == vpn.Connected {
 		if sel, _, err := r.SelectedServer(); err == nil && sel != nil {
 			r.sessionHistory.HandleServerChange(sel.Tag, sel.Location.City, sel.Location.Country)
@@ -1543,14 +1909,22 @@ func (r *LocalBackend) persistSelection(tag string) {
 			settings.SelectedServerKey: nil,
 		}); err != nil {
 			slog.Warn("failed to update settings", "error", err)
+			return
 		}
+		emitSelectionSaved()
 		return
 	}
-	server, found := r.srvManager.GetServerByTag(tag)
+	server, found := r.serverByTag(tag)
 	if !found {
 		slog.Warn("no server found for tag, skipping settings persistence", "tag", tag)
 		return
 	}
+	r.persistServer(server)
+}
+
+// persistServer saves server as the user's server choice without looking it up
+// again. It clears server.Options.
+func (r *LocalBackend) persistServer(server *servers.Server) {
 	server.Options = nil
 	if err := settings.Patch(settings.Settings{
 		settings.AutoConnectKey:    false,
@@ -1559,7 +1933,13 @@ func (r *LocalBackend) persistSelection(tag string) {
 		slog.Warn("Failed to save selected server in settings", "error", err)
 		return
 	}
-	slog.Info("Selected server", "tag", tag, "type", server.Type)
+	emitSelectionSaved()
+	slog.Info("Selected server", "tag", server.Tag, "type", server.Type)
+}
+
+// emitSelectionSaved announces a save of the selection that just completed.
+func emitSelectionSaved() {
+	events.Emit(vpn.SelectionSavedEvent{})
 }
 
 // VPNConnections returns a list of the active connections. If there are no connections and the
@@ -1580,7 +1960,7 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
 		}
-		server, found := r.srvManager.GetServerByTag(tag)
+		server, found := r.serverByTag(tag)
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
@@ -1591,14 +1971,14 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 		if tag == "" {
 			return nil, false, fmt.Errorf("no selected server")
 		}
-		server, found := r.srvManager.GetServerByTag(tag)
+		server, found := r.serverByTag(tag)
 		return server, found, nil
 	}
 	var selected servers.Server
 	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err != nil {
 		return nil, false, fmt.Errorf("failed to get selected server from settings: %w", err)
 	}
-	server, found := r.srvManager.GetServerByTag(selected.Tag)
+	server, found := r.serverByTag(selected.Tag)
 	stillExists := found &&
 		server.IsLantern == selected.IsLantern &&
 		server.Type == selected.Type &&
@@ -1739,6 +2119,54 @@ func (r *LocalBackend) refetchOnExhaustion() {
 	if err := r.confHandler.Fetch(); err != nil {
 		slog.Warn("MutableAutoSelect exhaustion refetch failed", "error", err)
 	}
+}
+
+////////////////////
+// Helper invites //
+////////////////////
+
+var errHelperRelayUnavailable = errors.New("helper relay unavailable")
+
+// HelperRelay sends one helper-invite request for the app (see
+// helper.Relayer). The op is checked first, so an unknown op is refused even
+// on a backend whose relayer failed to build.
+func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) (helper.RelayResult, error) {
+	if op != helper.OpRefreshTickets && !helper.IsRelayOp(op) {
+		return helper.RelayResult{}, helper.ErrUnknownOp
+	}
+	if r.helperRelay == nil {
+		return helper.RelayResult{}, errHelperRelayUnavailable
+	}
+	return r.helperRelay.Relay(ctx, op, body)
+}
+
+// sharingCounters reads both sharing modes' snapshots for the activity
+// tracker.
+func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
+	ps := r.PeerRelaySnapshot()
+	us := unbounded.CurrentSnapshot()
+	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
+}
+
+// HelperActivity is today's sharing totals for the app's "You're helping"
+// section.
+func (r *LocalBackend) HelperActivity() helper.Activity {
+	if r.helperActivity == nil {
+		return helper.Activity{Day: time.Now().In(helper.LocalZone()).Format("2006-01-02")}
+	}
+	return r.helperActivity.Today()
+}
+
+// HelperLive is whether each helper pairing's friend is connected to this
+// volunteer now.
+func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
+	return helper.DefaultLive.Snapshot()
+}
+
+// SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
+// IPC route, which cannot build a full backend.
+func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {
+	r.helperRelay = rl
 }
 
 /////////////
@@ -2017,20 +2445,13 @@ func loadStoredPublicIP() string {
 	return stored
 }
 
-// storePublicIP persists ip, truncated, for future sessions and reports whether it is
+// storePublicIP persists ip for future sessions and reports whether it is
 // significantly different from stored, the value requests have carried so far.
 func storePublicIP(ip net.IP, stored string) bool {
-	if err := settings.Set(settings.PublicIPKey, truncatePublicIP(ip).String()); err != nil {
+	if err := settings.Set(settings.PublicIPKey, ip.String()); err != nil {
 		slog.Warn("Failed to store public IP", "error", err)
 	}
 	return publicIPDiffers(net.ParseIP(stored), ip)
-}
-
-func truncatePublicIP(ip net.IP) net.IP {
-	if ip4 := ip.To4(); ip4 != nil {
-		return ip4.Mask(net.CIDRMask(24, 32))
-	}
-	return ip.Mask(net.CIDRMask(32, 128))
 }
 
 // publicIPDiffers reports whether ip falls outside prev's /16 (IPv4) or /32 (IPv6), roughly the

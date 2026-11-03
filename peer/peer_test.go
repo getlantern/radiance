@@ -22,26 +22,29 @@ import (
 	box "github.com/getlantern/lantern-box"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/portforward"
 )
 
 type fakeForwarder struct {
-	mu          sync.Mutex
-	mapErr      error
-	extIPErr    error
-	unmapErr    error
-	mapped      bool
-	unmapped    bool
-	renewals    int
-	externalIP  string
-	mapping     *portforward.Mapping
-	cancelRenew context.CancelFunc
+	mu       sync.Mutex
+	mapErr   error
+	extIPErr error
+	unmapErr error
+	mapped   bool
+	unmapped bool
+	renewals int
+	// renewStopped is set when UnmapPort stops renewal, as the real
+	// Forwarder's does.
+	renewStopped bool
+	externalIP   string
+	mapping      *portforward.Mapping
+	cancelRenew  context.CancelFunc
 }
 
-func (f *fakeForwarder) MapPort(_ context.Context, internalPort uint16, _ string) (*portforward.Mapping, error) {
+func (f *fakeForwarder) MapPort(_ context.Context, _ string, internalPort uint16, _ string) (*portforward.Mapping, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mapErr != nil {
@@ -63,6 +66,11 @@ func (f *fakeForwarder) UnmapPort(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unmapped = true
+	if f.cancelRenew != nil {
+		f.cancelRenew()
+		f.cancelRenew = nil
+		f.renewStopped = true
+	}
 	return f.unmapErr
 }
 
@@ -105,7 +113,7 @@ type slowMapForwarder struct {
 	entered chan struct{}
 }
 
-func (f *slowMapForwarder) MapPort(_ context.Context, internalPort uint16, _ string) (*portforward.Mapping, error) {
+func (f *slowMapForwarder) MapPort(_ context.Context, _ string, internalPort uint16, _ string) (*portforward.Mapping, error) {
 	select {
 	case f.entered <- struct{}{}:
 	default:
@@ -136,6 +144,9 @@ type fakeBoxService struct {
 	// idsAtStart is the set the inbound held when Start was called, nil for
 	// its base ID only.
 	idsAtStart []string
+	// afterUpdate, if set, runs after a set is applied, as connections on
+	// its IDs could arrive then. Set before the box is in use.
+	afterUpdate func()
 }
 
 func (b *fakeBoxService) Start() error {
@@ -172,6 +183,11 @@ func (b *fakeBoxService) UpdateShortIDs(ids []string) error {
 		return b.updateErr
 	}
 	b.shortIDs = append(b.shortIDs, append([]string(nil), ids...))
+	if b.afterUpdate != nil {
+		b.idsMu.Unlock()
+		b.afterUpdate()
+		b.idsMu.Lock()
+	}
 	return nil
 }
 
@@ -238,6 +254,10 @@ type stubServer struct {
 	deregisterDeviceID atomic.Value // string
 	lastRegisterReq    atomic.Value // RegisterRequest
 	lastVerifyReq      atomic.Value // LifecycleRequest
+
+	// heartbeatShortIDSets, when set, is sent as pairing_short_id_sets with
+	// heartbeatShortIDs.
+	heartbeatShortIDSets atomic.Pointer[[]PairingShortIDSet]
 }
 
 func newStubServer(t *testing.T) *stubServer {
@@ -313,7 +333,11 @@ func newStubServer(t *testing.T) *stubServer {
 			return
 		}
 		if ids != nil {
-			_ = json.NewEncoder(w).Encode(HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)})
+			resp := HeartbeatResponse{PairingShortIDs: *ids, PairingShortIDsKnown: true, PairingShortIDsRevision: Revision(rev)}
+			if sets := s.heartbeatShortIDSets.Load(); sets != nil {
+				resp.PairingShortIDSets = *sets
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -578,6 +602,23 @@ func TestClient_Start_RegisterFailureUnwinds(t *testing.T) {
 	assert.False(t, box.started.Load())
 }
 
+// Renewal starts as soon as the port is mapped, before registering: a PCP or
+// NAT-PMP gateway can grant a lease shorter than the rest of Start takes. A
+// failed Start stops it when it unmaps.
+func TestClient_Start_RenewsFromMappingAndStopsOnRollback(t *testing.T) {
+	fwd := &fakeForwarder{}
+	box := &fakeBoxService{}
+	srv := newStubServer(t)
+	srv.registerStatus = http.StatusUnprocessableEntity
+	c := newTestClient(t, fwd, box, srv)
+
+	require.Error(t, c.Start(context.Background()))
+	fwd.mu.Lock()
+	defer fwd.mu.Unlock()
+	assert.Equal(t, 1, fwd.renewals, "renewal must already run when registering")
+	assert.True(t, fwd.renewStopped, "rollback must stop renewal")
+}
+
 func TestClient_Start_BoxStartFailureUnwinds(t *testing.T) {
 	fwd := &fakeForwarder{}
 	box := &fakeBoxService{startErr: errors.New("boom")}
@@ -814,7 +855,7 @@ func TestPickManualForwarder(t *testing.T) {
 			require.NotNil(t, fwd, "expected manual forwarder, got nil")
 			// Verify the chosen port via the public MapPort surface —
 			// ManualForwarder.port is unexported, MapPort echoes it.
-			mapping, err := fwd.MapPort(context.Background(), 0, "")
+			mapping, err := fwd.MapPort(context.Background(), portforward.TCP, 0, "")
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantPort, mapping.ExternalPort)
 			assert.Equal(t, tc.wantPort, mapping.InternalPort)

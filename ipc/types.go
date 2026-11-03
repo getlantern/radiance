@@ -1,6 +1,8 @@
 package ipc
 
 import (
+	"encoding/json"
+
 	"github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/account"
@@ -167,4 +169,11 @@ type CurrentUserMessageResponse struct {
 
 type ResultResponse struct {
 	Result string `json:"result"`
+}
+
+// HelperRelayRequest is one helper-invite request the app relays to
+// lantern-cloud: a HelperService operation and its JSON body.
+type HelperRelayRequest struct {
+	Op   string          `json:"op"`
+	Body json.RawMessage `json:"body,omitempty"`
 }

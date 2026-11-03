@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,9 +18,13 @@ import (
 	"github.com/getlantern/broflake/common/helperticket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/traces"
 )
 
 func TestMain(m *testing.M) {
@@ -209,6 +214,22 @@ func newTestSource(f *fakeFetch) (*Source, *fakeClock) {
 func settle(t *testing.T, src *Source) {
 	t.Helper()
 	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, time.Millisecond)
+}
+
+// awaitChanges waits until count reaches want: a fetch ends before its change
+// callback runs, so settle alone does not wait for the callback.
+func awaitChanges(t *testing.T, count func() int, want int, msg ...any) {
+	t.Helper()
+	require.Eventually(t, func() bool { return count() >= want }, time.Second, time.Millisecond, msg...)
+	assert.Equal(t, want, count(), msg...)
+}
+
+// assertNoChange gives a callback the fetch that just settled might run time
+// to arrive, then asserts count is still want.
+func assertNoChange(t *testing.T, count func() int, want int, msg ...any) {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, want, count(), msg...)
 }
 
 func (s *Source) dueIn() time.Duration {
@@ -419,4 +440,300 @@ func TestSourceAnsweredVolunteerOutlivesExpiry(t *testing.T) {
 	src.AnsweredVolunteer()
 	settle(t, src)
 	assert.Empty(t, src.AnsweredVolunteer(), "a 404 does")
+}
+
+func TestSourceInvalidate(t *testing.T) {
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		fetches.Add(1)
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return !src.isFetching() && fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	assert.Never(t, func() bool { return fetches.Load() > 1 }, 30*time.Millisecond, time.Millisecond, "a fresh source does not refetch")
+	src.Invalidate()
+	src.Volunteer()
+	require.Eventually(t, func() bool { return !src.isFetching() && fetches.Load() == 2 }, time.Second, 5*time.Millisecond)
+}
+
+// TestSourceInvalidateDuringAFetchIsNotLost covers the race: a pairing that
+// changes while a fetch is in flight must not be hidden by that fetch's
+// success, whose tickets may predate the change.
+func TestSourceInvalidateDuringAFetchIsNotLost(t *testing.T) {
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		if fetches.Add(1) == 1 {
+			<-release
+		}
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Invalidate()
+	close(release)
+	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, 5*time.Millisecond,
+		"the fetch that began before the change does not count as fresh")
+}
+
+// TestSourceInvalidateDuringADisabledFetchIsNotLost: a flag-off volunteer's
+// fetch answers 404 (ErrDisabled) until its pairing exists. An approval that
+// lands during that fetch must not wait out DisabledInterval.
+func TestSourceInvalidateDuringADisabledFetchIsNotLost(t *testing.T) {
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		if fetches.Add(1) == 1 {
+			<-release
+			return Tickets{}, ErrDisabled
+		}
+		return Tickets{Lifetime: 15 * time.Minute}, nil
+	})
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, 5*time.Millisecond)
+	src.Invalidate()
+	close(release)
+	require.Eventually(t, func() bool { return !src.isFetching() }, time.Second, 5*time.Millisecond)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, 5*time.Millisecond,
+		"the 404 that raced the approval does not hold the next fetch for an hour")
+}
+
+// A 404 that already settled holds the next fetch for DisabledInterval; a
+// claim that succeeds after it makes that 404 stale, so Invalidate ends the
+// wait, and the tickets it then gets replace the cleared AnsweredVolunteer.
+func TestSourceInvalidateEndsTheDisabledWait(t *testing.T) {
+	_, vol := testTickets(t)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, _ := newTestSource(f)
+	f.results <- fetchResult{err: ErrDisabled}
+	src.Volunteer()
+	settle(t, src)
+	require.Equal(t, DisabledInterval, src.dueIn())
+	src.Volunteer()
+	assert.Never(t, func() bool { return f.calls.Load() > 1 }, 30*time.Millisecond, time.Millisecond)
+
+	src.Invalidate()
+	f.results <- fetchResult{t: Tickets{Volunteer: []string{vol}, Lifetime: 15 * time.Minute}}
+	src.Volunteer()
+	settle(t, src)
+	assert.Equal(t, int32(2), f.calls.Load())
+	assert.Equal(t, []string{vol}, src.AnsweredVolunteer())
+}
+
+// lantern-cloud's 429 or 503 asked this device to back off; a pairing change
+// does not override that, so Invalidate leaves the backoff, in flight or
+// settled, as it is.
+func TestSourceInvalidateKeepsABusyBackoff(t *testing.T) {
+	busy := fetchResult{err: fmt.Errorf("ticket request: status 503: %w", ErrUnavailable)}
+	f := &fakeFetch{results: make(chan fetchResult)}
+	src, _ := newTestSource(f)
+	src.Volunteer()
+	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, time.Millisecond)
+	src.Invalidate()
+	f.results <- busy
+	settle(t, src)
+	assert.Equal(t, 2*time.Minute, src.dueIn(), "an invalidation during a busy fetch keeps its backoff")
+
+	src.Invalidate()
+	assert.Equal(t, 2*time.Minute, src.dueIn(), "and one after it")
+	src.Volunteer()
+	assert.Never(t, func() bool { return f.calls.Load() > 1 }, 30*time.Millisecond, time.Millisecond)
+}
+
+// A ticket fetch redirected off /helper/ must not be traced either, since the
+// redirect carries the device ID header.
+func TestFetcherRedirectIsNotTraced(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/helper/") {
+			http.Redirect(w, r, "/v1/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tickets":[],"lifetime_seconds":600}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := &http.Client{Transport: traces.NewRoundTripper(traces.NewHeaderAnnotatingRoundTripper(http.DefaultTransport))}
+
+	_, err := NewFetcher(client, srv.URL+"/v1").Fetch(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, mem.GetSpans())
+}
+
+const (
+	pairingA = "6f1c2b0e-8a7d-4c1e-9f00-0123456789aa"
+	pairingB = "6f1c2b0e-8a7d-4c1e-9f00-0123456789bb"
+	tagA     = "helper-aaaaaaaaaaaa"
+	tagB     = "helper-bbbbbbbbbbbb"
+)
+
+// pairingTicket returns a ticket for pairing in role.
+func pairingTicket(t *testing.T, pairing string, role helperticket.Role) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	tk, err := helperticket.Sign(priv, helperticket.Ticket{PairingID: pairing, Role: role, Expires: time.Now().Add(15 * time.Minute)})
+	require.NoError(t, err)
+	return tk
+}
+
+func TestFetcherMapsInviterTagsToPairings(t *testing.T) {
+	invA := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	invB := pairingTicket(t, pairingB, helperticket.RoleInviter)
+	vol := pairingTicket(t, pairingB, helperticket.RoleVolunteer)
+	for _, tc := range []struct {
+		name string
+		tags []string
+		want map[string]string
+	}{
+		{"aligned", []string{tagA, "", tagB}, map[string]string{tagA: pairingA, tagB: pairingB}},
+		{"length mismatch is ignored", []string{tagA, ""}, nil},
+		{"absent", nil, nil},
+		{"a tag on a volunteer ticket is ignored", []string{tagA, tagB, ""}, map[string]string{tagA: pairingA}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := map[string]any{"tickets": []string{invA, vol, invB}}
+				if tc.tags != nil {
+					body["inviter_tags"] = tc.tags
+				}
+				_ = json.NewEncoder(w).Encode(body)
+			}))
+			defer srv.Close()
+			got, err := NewFetcher(srv.Client(), srv.URL+"/v1").Fetch(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.InviterPairings)
+			assert.ElementsMatch(t, []string{invA, invB}, got.Inviter)
+		})
+	}
+}
+
+func TestSourceInviterFor(t *testing.T) {
+	invA := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	invB := pairingTicket(t, pairingB, helperticket.RoleInviter)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, _ := newTestSource(f)
+	changes := make(chan struct{}, 4)
+	src.SetOnInviterChange(func() { changes <- struct{}{} })
+	count := func() int { return len(changes) }
+
+	tickets, answered := src.InviterFor(tagA)
+	assert.Empty(t, tickets)
+	assert.False(t, answered, "nothing is known before the first answer")
+
+	f.results <- fetchResult{t: Tickets{Inviter: []string{invA, invB}, InviterPairings: map[string]string{tagA: pairingA, tagB: pairingB}, Lifetime: 15 * time.Minute}}
+	settle(t, src)
+	tickets, answered = src.InviterFor(tagA)
+	assert.Equal(t, []string{invA}, tickets, "only the pairing's tickets")
+	assert.True(t, answered)
+	tickets, _ = src.InviterFor("helper-cccccccccccc")
+	assert.Empty(t, tickets)
+	assert.ElementsMatch(t, []string{tagA, tagB}, src.InviterTags())
+	awaitChanges(t, count, 1, "the first answer is a change")
+
+	// The same pairings again are no change; losing one is.
+	src.Invalidate()
+	src.Inviter()
+	f.results <- fetchResult{t: Tickets{Inviter: []string{invA, invB}, InviterPairings: map[string]string{tagA: pairingA, tagB: pairingB}, Lifetime: 15 * time.Minute}}
+	settle(t, src)
+	assertNoChange(t, count, 1)
+	src.Invalidate()
+	src.Inviter()
+	f.results <- fetchResult{t: Tickets{Inviter: []string{invB}, InviterPairings: map[string]string{tagB: pairingB}, Lifetime: 15 * time.Minute}}
+	settle(t, src)
+	awaitChanges(t, count, 2)
+	tickets, _ = src.InviterFor(tagA)
+	assert.Empty(t, tickets)
+	assert.Equal(t, []string{tagB}, src.InviterTags())
+
+	// helper invites turned off clears them.
+	src.Invalidate()
+	src.Inviter()
+	f.results <- fetchResult{err: ErrDisabled}
+	settle(t, src)
+	awaitChanges(t, count, 3)
+	tickets, answered = src.InviterFor(tagB)
+	assert.Empty(t, tickets)
+	assert.True(t, answered)
+}
+
+// InviterFor must read the tickets and the pairings they came with together:
+// a fetch landing between separate reads pairs the tickets from before it
+// with the answer it brings, which looks like a pairing with no ticket.
+func TestSourceInviterForReadsOneSnapshot(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	release := make(chan struct{})
+	src := NewSource(context.Background(), func(context.Context) (Tickets, error) {
+		<-release
+		return Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: 15 * time.Minute}, nil
+	})
+	src.Inviter()
+	src.afterRead = func() {
+		// Fires only if InviterFor reads through read: the fetch in flight
+		// then lands between its reads.
+		src.afterRead = nil
+		close(release)
+		settle(t, src)
+	}
+	tickets, answered := src.InviterFor(tagA)
+	assert.False(t, answered && len(tickets) == 0, "answered, with the pairing known, but no ticket")
+	if src.afterRead != nil {
+		close(release)
+	}
+	settle(t, src)
+}
+
+// InviterTags is how a status poll learns of rooms-only friends, so it must
+// start a fetch even before any pairing is known.
+func TestSourceInviterTagsFetches(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, _ := newTestSource(f)
+	f.results <- fetchResult{t: Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: 15 * time.Minute}}
+	assert.Empty(t, src.InviterTags())
+	require.Eventually(t, func() bool { return len(src.InviterTags()) == 1 }, time.Second, time.Millisecond)
+	assert.Equal(t, int32(1), f.calls.Load())
+}
+
+// A pairing whose tickets expired and are then renewed changes no pairing,
+// but it becomes usable again, which a holder of InviterFor must hear about;
+// a renewal of tickets that were still usable must not fire.
+func TestSourceOnInviterChangeFiresWhenTicketsBecomeUsable(t *testing.T) {
+	inv := pairingTicket(t, pairingA, helperticket.RoleInviter)
+	answer := Tickets{Inviter: []string{inv}, InviterPairings: map[string]string{tagA: pairingA}, Lifetime: time.Minute}
+	f := &fakeFetch{results: make(chan fetchResult, 1)}
+	src, clock := newTestSource(f)
+	var changes atomic.Int32
+	src.SetOnInviterChange(func() { changes.Add(1) })
+	count := func() int { return int(changes.Load()) }
+	fetch := func() {
+		src.Invalidate()
+		f.results <- fetchResult{t: answer}
+		src.Inviter()
+		settle(t, src)
+	}
+	fetch()
+	awaitChanges(t, count, 1, "the first answer")
+
+	fetch()
+	assertNoChange(t, count, 1, "a renewal of usable tickets")
+
+	clock.add(2 * time.Minute)
+	f.results <- fetchResult{t: answer}
+	tickets, _ := src.InviterFor(tagA)
+	require.Empty(t, tickets, "expired, and due for renewal")
+	settle(t, src)
+	tickets, _ = src.InviterFor(tagA)
+	require.NotEmpty(t, tickets, "renewed")
+	awaitChanges(t, count, 2, "expired tickets renewed")
 }

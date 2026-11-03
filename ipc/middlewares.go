@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	semconv "github.com/getlantern/semconv"
 	"go.opentelemetry.io/otel"
@@ -20,10 +21,15 @@ func logger(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		r = r.WithContext(ctx)
-		span := trace.SpanFromContext(r.Context())
-		span.SetAttributes(semconv.HTTPRouteKey.String(r.URL.Path))
-
-		slog.Log(r.Context(), rlog.LevelTrace, "IPC request", "method", r.Method, "path", r.URL.Path)
+		// Helper-invite routes are neither annotated nor logged: an
+		// in-process call carries the caller's span here, and a /helper/
+		// route on it, or a log line, would show the device uses helper
+		// invites, and how often.
+		if !strings.HasPrefix(r.URL.Path, "/helper/") {
+			span := trace.SpanFromContext(r.Context())
+			span.SetAttributes(semconv.HTTPRouteKey.String(r.URL.Path))
+			slog.Log(r.Context(), rlog.LevelTrace, "IPC request", "method", r.Method, "path", r.URL.Path)
+		}
 		h.ServeHTTP(w, r)
 	})
 }

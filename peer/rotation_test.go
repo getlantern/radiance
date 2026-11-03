@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/settings"
 )
 
 // portBoxes models how production boxes share the peer's one listening port:
@@ -505,4 +507,80 @@ func TestClient_RotationVerifyFailureKeepsClientRunning(t *testing.T) {
 	port.mu.Lock()
 	defer port.mu.Unlock()
 	assert.False(t, port.boxes[len(port.boxes)-1].closed.Load(), "the serving box must stay open")
+}
+
+// TestClient_ReregisterSendsTheCurrentServePool checks that turning "help
+// others too" off reaches lantern-cloud at once, not at the next hourly
+// rotation.
+func TestClient_ReregisterSendsTheCurrentServePool(t *testing.T) {
+	srv := newStubServer(t)
+	port := &portBoxes{}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.CredRotationInterval = time.Hour
+		cfg.HeartbeatInterval = time.Hour
+		cfg.BuildBoxService = port.build
+	})
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, c.Start(context.Background()))
+	t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool, "Start sent the default")
+	require.NoError(t, c.Reregister(context.Background()))
+	assert.Equal(t, int64(2), srv.registerCount.Load())
+	req := srv.lastRegisterReq.Load().(RegisterRequest)
+	require.NotNil(t, req.ServePool)
+	assert.False(t, *req.ServePool)
+	assert.True(t, c.IsActive(), "re-registering keeps the peer serving")
+}
+
+func TestClient_ReregisterWithoutASession(t *testing.T) {
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
+	assert.ErrorIs(t, c.Reregister(context.Background()), ErrNotActive)
+}
+
+// A session that ended between Reregister's check and the rotation still
+// reports ErrNotActive, so callers can tell it from a failed re-register.
+func TestClient_RotateCredsWithoutASessionIsErrNotActive(t *testing.T) {
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, newStubServer(t))
+	assert.ErrorIs(t, c.rotateCreds(context.Background()), ErrNotActive)
+}
+
+// The Reregister twin of TestClient_StopDuringHungRotationRegisterReturnsPromptly:
+// Stop cancels the session, which must end a re-register hung in Register
+// even though the caller's ctx never ends.
+func TestClient_StopDuringHungReregisterReturnsPromptly(t *testing.T) {
+	srv := newStubServer(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	var registers atomic.Int64
+	inRegister := make(chan struct{}, 1)
+	srv.registerRespFn = func() RegisterResponse {
+		if registers.Add(1) > 1 {
+			inRegister <- struct{}{}
+			<-hang
+		}
+		return srv.registerResp
+	}
+	c := newTestClient(t, &fakeForwarder{externalIP: "203.0.113.42"}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.CredRotationInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	reregistered := make(chan error, 1)
+	go func() { reregistered <- c.Reregister(context.Background()) }()
+	<-inRegister
+
+	start := time.Now()
+	require.NoError(t, c.Stop(ctx))
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.False(t, c.IsActive())
+	select {
+	case err := <-reregistered:
+		assert.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reregister did not end with the session")
+	}
 }

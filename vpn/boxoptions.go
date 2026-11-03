@@ -23,18 +23,25 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/internal/hostaccess"
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 )
 
 const (
 	AutoSelectTag   = "auto"
 	ManualSelectTag = "manual"
+	// PersonalProxiesTag is the url-test group over every helper outbound
+	// (lbA.IsHelperTag). The tunnel creates it with its first member and
+	// removes it with its last, and the manual selector offers it while it
+	// exists. It is never a managed server, so it is never listed.
+	PersonalProxiesTag = redact.PersonalProxiesTag
 
 	urlTestInterval    = 3 * time.Minute
 	urlTestIdleTimeout = 15 * time.Minute
@@ -44,7 +51,15 @@ const (
 	cacheClearMarkerName = "lantern.cache.clear"
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, "direct", "block"}
+// personalProxiesProbeURL and personalProxiesProbeInterval configure the
+// personal proxies group's URL tests. Variables so tests can probe a local
+// server, often.
+var (
+	personalProxiesProbeURL      = "https://google.com/generate_204"
+	personalProxiesProbeInterval = urlTestInterval
+)
+
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block"}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -67,7 +82,9 @@ type BoxOptions struct {
 	NonSelectableOutbounds []string `json:"non_selectable_outbounds,omitempty"`
 	// InitialServer chooses the outbound selected when the tunnel starts.
 	// Empty or AutoSelectTag puts the tunnel in auto mode; any other tag
-	// must match an outbound or endpoint and forces manual selection.
+	// must match an outbound or endpoint, or be a PersonalProxySelection, and
+	// forces manual selection. A friend with no member at the start selects
+	// PersonalProxiesTag instead, or auto mode without helpers.
 	InitialServer string `json:"initial_server,omitempty"`
 	// BanditURLOverrides maps outbound tags to per-proxy callback URLs for
 	// the bandit Thompson sampling system. When set, these override the
@@ -83,6 +100,10 @@ type BoxOptions struct {
 	// outbounds baked into the initial config get no data-usage attribution.
 	// The Injector covers outbounds only, so endpoint tags have no effect.
 	LanternServerTags []string `json:"lantern_server_tags,omitempty"`
+
+	// personalProxyRooms reports whether a rooms consumer may reach the
+	// friend InitialServer selects; the VPN client sets it.
+	personalProxyRooms bool
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
@@ -436,17 +457,38 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	if bOptions.SplitTunnel.Enabled {
 		configureSplitTunnelDNS(&opts)
 	}
+	helpers := helperTags(tags)
+	// The manual selector also offers the personal proxies group, which
+	// exists only while a helper outbound does: a url-test group must never
+	// start empty.
+	selectable := tags
+	if len(helpers) > 0 {
+		selectable = append(slices.Clone(tags), PersonalProxiesTag)
+	}
 
 	initial := bOptions.InitialServer
+	var friendMembers []string
+	if friend, ok := ParsePersonalProxySelection(initial); ok {
+		friendMembers = personalProxyStartMembers(friend, helpers, bOptions.Options.Outbounds, bOptions.personalProxyRooms)
+		switch {
+		case len(friendMembers) > 0:
+			selectable = append(slices.Clone(selectable), PersonalProxyTag)
+			initial = PersonalProxyTag
+		case len(helpers) > 0:
+			initial = PersonalProxiesTag
+		default:
+			initial = AutoSelectTag
+		}
+	}
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
 	} else {
 		// The manual selector defaults to its first tag, so place initial at index 0.
-		i := slices.Index(tags, initial)
+		i := slices.Index(selectable, initial)
 		if i == -1 {
 			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
 		}
-		tags[0], tags[i] = tags[i], tags[0]
+		selectable[0], selectable[i] = selectable[i], selectable[0]
 		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
@@ -456,7 +498,13 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	// add mode selector outbounds and rules
 	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
-	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, tags))
+	if len(helpers) > 0 {
+		opts.Outbounds = append(opts.Outbounds, personalProxiesOutbound(helpers))
+	}
+	if len(friendMembers) > 0 {
+		opts.Outbounds = append(opts.Outbounds, personalProxyOutbound(friendMembers))
+	}
+	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
@@ -598,6 +646,32 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 		Tag:  tag,
 		Options: &lbO.MutableSelectorOutboundOptions{
 			Outbounds: outbounds,
+		},
+	}
+}
+
+// helperTags returns the tags in tags that are helper outbounds.
+func helperTags(tags []string) []string {
+	var out []string
+	for _, tag := range tags {
+		if lbA.IsHelperTag(tag) {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+// personalProxiesOutbound is the url-test group over helpers, which must not
+// be empty (see PersonalProxiesTag).
+func personalProxiesOutbound(helpers []string) O.Outbound {
+	return O.Outbound{
+		Type: lbC.TypeMutableURLTest,
+		Tag:  PersonalProxiesTag,
+		Options: &lbO.MutableURLTestOutboundOptions{
+			Outbounds:   helpers,
+			URL:         personalProxiesProbeURL,
+			Interval:    badoption.Duration(personalProxiesProbeInterval),
+			IdleTimeout: badoption.Duration(urlTestIdleTimeout),
 		},
 	}
 }

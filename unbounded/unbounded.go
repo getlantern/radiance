@@ -25,21 +25,26 @@ package unbounded
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand"
 	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
 	C "github.com/getlantern/common"
 
 	"github.com/getlantern/broflake/clientcore"
+	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/helper"
 )
 
 // ConnectionEvent fires every time a consumer (i.e. a censored client
@@ -176,6 +181,10 @@ type unboundedManager struct {
 	// pairings. nil: the widget joins no rooms.
 	tickets roomTickets
 
+	// vpnStatus reports the VPN tunnel's state, which the widget sends
+	// freddie with its STUN preflights. nil: it reports none.
+	vpnStatus func() string
+
 	// runningCfg is the snapshot of UnboundedConfig the live worker
 	// was started with. broflake consumes its discovery/egress
 	// options once in clientcore.NewBroflake, so a server-side config
@@ -203,6 +212,9 @@ type unboundedManager struct {
 	retired []retiredRun
 	// now overrides time.Now for peer retention tests.
 	now func() time.Time
+	// live receives slots serving helper pairings. Nil means
+	// helper.DefaultLive.
+	live *helper.LiveTracker
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -232,6 +244,37 @@ func cfgUsable(cfg *C.UnboundedConfig) bool {
 		cfg.EgressAddr != "" && cfg.EgressEndpoint != ""
 }
 
+// natFailTimeoutKey sets how long the widget waits, once signaling completes,
+// for a consumer's data channel to open. broflake also checks ICE pairs for
+// that whole window, so raising it lengthens both.
+const natFailTimeoutKey = "nat_fail_timeout_ms"
+
+const (
+	minNATFailTimeout = time.Second
+	maxNATFailTimeout = 30 * time.Second
+)
+
+// widgetTuning splits the server's widget tuning map into the NAT fail timeout,
+// which isn't WebRTC tuning, and everything clientcore.ParseWebRTCTuning reads.
+// A zero timeout means the key was absent or invalid; keep broflake's default.
+func widgetTuning(opts map[string]string) (natFail time.Duration, tuning clientcore.WebRTCTuning, ignored []string) {
+	raw, ok := opts[natFailTimeoutKey]
+	if ok {
+		opts = maps.Clone(opts)
+		delete(opts, natFailTimeoutKey)
+	}
+	tuning, ignored = clientcore.ParseWebRTCTuning(opts)
+	if !ok {
+		return 0, tuning, ignored
+	}
+	ms, err := strconv.ParseUint(raw, 10, 32)
+	natFail = time.Duration(ms) * time.Millisecond
+	if err != nil || natFail < minNATFailTimeout || natFail > maxNATFailTimeout {
+		return 0, tuning, append(ignored, fmt.Sprintf("%s=%q", natFailTimeoutKey, raw))
+	}
+	return natFail, tuning, ignored
+}
+
 func donorSTUNBatch(servers []string) func(uint32) ([]string, error) {
 	pool := C.NormalizeDonorSTUNServers(servers)
 	return func(size uint32) ([]string, error) {
@@ -257,6 +300,16 @@ func SetTicketSource(src roomTickets) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.tickets = src
+}
+
+// SetVPNStatus sets where the widget reads the VPN tunnel's state, which it
+// reports to freddie with its STUN preflights, so freddie can tell whether
+// STUN failures follow the tunnel. A widget already running keeps its source
+// until it restarts.
+func SetVPNStatus(status func() string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.vpnStatus = status
 }
 
 // roomSyncInterval is how often a running widget re-reads its tickets and the
@@ -519,6 +572,7 @@ func applyConfig(cfg config.Config) {
 	if cfg.Unbounded != nil {
 		copied := *cfg.Unbounded
 		copied.STUNServers = slices.Clone(cfg.Unbounded.STUNServers)
+		copied.Tuning = maps.Clone(cfg.Unbounded.Tuning)
 		manager.lastCfg = &copied
 	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
@@ -685,6 +739,7 @@ func (m *unboundedManager) startLocked() {
 	}
 	ucfg := m.lastCfg
 	tickets := m.tickets
+	vpnStatus := m.vpnStatus
 	syncInterval := roomSyncInterval
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -747,6 +802,13 @@ func (m *unboundedManager) startLocked() {
 			})
 		}
 
+		// broflake calls this just after OnConnectionChangeFunc, with the
+		// helper pairing the consumer came through, which the producer has
+		// checked against its own tickets. The pairing is never logged.
+		bfOpt.OnConnectionChangeInfoFunc = func(state int, workerIdx int, info common.ConsumerInfo) {
+			m.recordPairing(ctx, slots, state, workerIdx, info.Pairing)
+		}
+
 		// Downstream chunks fire per chunk on broflake's data path, so the
 		// counters stay lock-free and attribution to an IP happens later
 		// under m.mu. Chunks arriving after stop land in the retired run,
@@ -759,6 +821,7 @@ func (m *unboundedManager) startLocked() {
 		// redirect replay it to another origin.
 		rtcOpt.HTTPClient = sameOriginRedirects(rtcOpt.HTTPClient)
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
+		rtcOpt.VPNStatus = vpnStatus
 		if ucfg != nil {
 			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {
@@ -766,6 +829,14 @@ func (m *unboundedManager) startLocked() {
 			}
 			if ucfg.DiscoveryEndpoint != "" {
 				rtcOpt.Endpoint = ucfg.DiscoveryEndpoint
+			}
+			natFail, tuning, ignored := widgetTuning(ucfg.Tuning)
+			rtcOpt.Tuning = tuning
+			if natFail > 0 {
+				rtcOpt.NATFailTimeout = natFail
+			}
+			if len(ignored) > 0 {
+				slog.Warn("Unbounded: ignoring widget tuning", "ignored", ignored)
 			}
 		}
 		// Helper pairing rooms: freddie offers this widget's genesis messages
