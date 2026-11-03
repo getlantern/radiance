@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 )
@@ -67,8 +68,10 @@ type Relayer struct {
 // common.GetBaseURL() returns it.
 // onChange, which may be nil, runs after an operation that changes this
 // device's pairings succeeds.
+// The Relayer uses a copy of httpClient that follows redirects only within
+// the request's origin.
 func NewRelayer(httpClient *http.Client, baseURL string, onChange func()) *Relayer {
-	return &Relayer{httpClient: httpClient, baseURL: baseURL, onChange: onChange}
+	return &Relayer{httpClient: sameorigin.Client(httpClient, "helper: relay"), baseURL: baseURL, onChange: onChange}
 }
 
 func (r *Relayer) changed() {

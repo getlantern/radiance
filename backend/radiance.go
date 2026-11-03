@@ -134,6 +134,9 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
+	// helperUsage is the rooms-mode bytes relayed per helper pairing, shared
+	// by the widget and the ticket fetcher.
+	helperUsage *helper.Usage
 	// helperRelay sends the app's helper-invite requests to lantern-cloud.
 	helperRelay *helper.Relayer
 	// helperActivity is today's sharing time and bytes, kept on the device.
@@ -252,7 +255,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
-	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
+	r.helperUsage = &helper.Usage{}
+	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
 	// The widget and the tunnel share r.helperTickets, so invalidating it
@@ -392,6 +396,7 @@ func (r *LocalBackend) Start() {
 	// interface, so partial backends in tests skip it.
 	if r.helperTickets != nil {
 		unbounded.SetTicketSource(r.helperTickets)
+		unbounded.SetPairedUsage(r.helperUsage)
 	}
 	// The widget reports the tunnel's state with its STUN preflights, so
 	// freddie can tell whether STUN failures follow the VPN.
