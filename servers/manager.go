@@ -326,6 +326,33 @@ func (m *Manager) UpdateSelectionHistory(results map[string]SelectionHistory) er
 
 // GetServerByTag returns the server configuration for a given tag and a boolean indicating whether
 // the server was found.
+// HasOptions reports whether the manager holds a server tagged srv.Tag with
+// the options AddServers would store for srv.
+func (m *Manager) HasOptions(srv *Server) bool {
+	stored, exists := m.GetServerByTag(srv.Tag)
+	if !exists {
+		return false
+	}
+	have, err := m.marshalOptions(stored.Options)
+	if err != nil {
+		return false
+	}
+	want, err := m.marshalOptions(srv.WithTLSVerification().Options)
+	return err == nil && bytes.Equal(have, want)
+}
+
+// marshalOptions encodes server options. The sing-box encoder writes an
+// outbound's or endpoint's typed options only through a pointer to it.
+func (m *Manager) marshalOptions(opts any) ([]byte, error) {
+	switch o := opts.(type) {
+	case option.Outbound:
+		opts = &o
+	case option.Endpoint:
+		opts = &o
+	}
+	return json.MarshalContext(m.regContext(), opts)
+}
+
 func (m *Manager) GetServerByTag(tag string) (*Server, bool) {
 	start := time.Now()
 	m.access.RLock()
@@ -356,12 +383,18 @@ func warnIfReaderStarved(caller string, wait time.Duration) {
 // AddServers adds new servers. If force is true, it will overwrite any
 // existing servers with the same tags. If force is false, it returns an error
 // if any of the tags already exist. If a server fails [Server.CheckHostAccess]
-// or a user server fails [Server.CheckTLSIdentity], none are added.
+// or a user server fails [Server.CheckTLSIdentity], none are added. A user
+// server's embedded outbound or endpoint tag is set to its tag in list itself,
+// so a caller that passes list on to the tunnel uses the same tag.
 func (m *Manager) AddServers(list ServerList, force bool) error {
 	if len(list.Servers) == 0 {
 		return nil
 	}
 	for _, srv := range list.Servers {
+		normalizeUserTag(srv)
+		if err := checkUserTag(srv); err != nil {
+			return err
+		}
 		if err := srv.CheckHostAccess(); err != nil {
 			return fmt.Errorf("server %q: %w", srv.Tag, err)
 		}
@@ -402,7 +435,9 @@ func (m *Manager) RemoveServer(tag string) error {
 	return err
 }
 
-// RemoveServers removes multiple server configs by their tags and returns the removed servers.
+// RemoveServers removes multiple server configs by their tags and returns the
+// removed servers. They are removed in memory before the save, so a failed save
+// returns them with its error: they are gone until the next successful save.
 func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 	// Perform the in-memory mutation under the write lock, then release it
 	// before saving to disk (saveServers acquires its own locks). Scoped in
@@ -421,7 +456,7 @@ func (m *Manager) RemoveServers(tags []string) ([]*Server, error) {
 	}()
 	// saveServers acquires its own locks; don't hold the write lock across it.
 	if err := m.saveServers(); err != nil {
-		return nil, fmt.Errorf("failed to save servers: %w", err)
+		return removed, fmt.Errorf("failed to save servers: %w", err)
 	}
 	return removed, nil
 }
@@ -656,6 +691,9 @@ func (m *Manager) quarantineInvalidServers(buf []byte) {
 
 // AddPrivateServer fetches VPN connection info from a remote server manager and adds it as a server.
 func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
+	if err := checkUserTag(&Server{Tag: tag}); err != nil {
+		return err
+	}
 	resp, err := m.privateServerRequest(http.MethodGet, ip, port, "/api/v1/connect-config", accessToken)
 	if err != nil {
 		return err
