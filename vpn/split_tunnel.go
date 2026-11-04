@@ -15,9 +15,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/miekg/dns"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 
 	"github.com/getlantern/radiance/common/atomicfile"
 	"github.com/getlantern/radiance/common/fileperm"
@@ -279,6 +281,9 @@ func (s *SplitTunnel) saveLocked() error {
 			filterRules = append(filterRules, r)
 		}
 	}
+	if s.includeDNSGuardedLocked() {
+		filterRules = append(filterRules, includeDNSGuard())
+	}
 
 	outerRules := []O.HeadlessRule{s.rule.Rules[0]} // disable rule
 	if len(filterRules) > 0 {
@@ -314,6 +319,28 @@ func (s *SplitTunnel) saveLocked() error {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
 	return nil
+}
+
+// includeDNSGuard is added to an include-policy filter so the inverted filter
+// never matches A or AAAA queries. Inverted, the filter matches nearly every
+// lookup, including an included app's, which the OS resolver usually sends, so
+// each would first wait on the system resolver. Route evaluation has no query
+// type, so routing is unaffected.
+func includeDNSGuard() O.HeadlessRule {
+	return O.HeadlessRule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: O.DefaultHeadlessRule{
+			QueryType: badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeA), O.DNSQueryType(dns.TypeAAAA)},
+		},
+	}
+}
+
+// includeDNSGuardedLocked reports whether saveLocked writes [includeDNSGuard]
+// for the current filter. The caller must hold s.access.
+func (s *SplitTunnel) includeDNSGuardedLocked() bool {
+	return s.activeFilter.Invert && slices.ContainsFunc(s.activeFilter.Rules, func(r O.HeadlessRule) bool {
+		return !isEmptyRule(r.DefaultOptions)
+	})
 }
 
 func isEmptyRule(rule O.DefaultHeadlessRule) bool {
@@ -440,10 +467,24 @@ func (s *SplitTunnel) loadRule() error {
 			})
 		}
 	}
-	s.activeFilter = &(s.rule.Rules[1].LogicalOptions)
+	filter := &s.rule.Rules[1].LogicalOptions
+	isGuard := func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 }
+	guarded := slices.ContainsFunc(filter.Rules, isGuard)
+	filter.Rules = slices.DeleteFunc(filter.Rules, isGuard)
+	s.activeFilter = filter
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 	s.inverted.Store(s.activeFilter.Invert)
+
+	// The tunnel reads the file directly, so a file whose guard doesn't match
+	// its policy must be rewritten before the split-tunnel DNS rule uses it.
+	s.access.Lock()
+	if guarded != s.includeDNSGuardedLocked() {
+		if err := s.saveLocked(); err != nil {
+			s.logger.Error("Rewriting split tunnel rule file for DNS guard", "file", s.ruleFile, "error", err)
+		}
+	}
+	s.access.Unlock()
 
 	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
 		"file", s.ruleFile, "filters", s.Filters().len(),

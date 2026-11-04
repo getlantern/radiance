@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
@@ -671,4 +673,203 @@ func TestMigration(t *testing.T) {
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
 	assert.Equal(t, rule, st.rule)
+}
+
+// splitTunnelDNSMatcher builds a matcher with the conditions of the
+// split-tunnel evaluate rule, against st's saved rule file. A match means the
+// query is sent to the system resolver.
+func splitTunnelDNSMatcher(t *testing.T, st *SplitTunnel) adapter.DNSRule {
+	t.Helper()
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	logger := log.NewNOPFactory().Logger()
+	router := &mockRouter{}
+	service.MustRegister[adapter.Router](ctx, router)
+	service.MustRegister(ctx, new(adapter.NetworkManager))
+
+	ruleSet, err := R.NewRuleSet(ctx, logger, splitTunnelTag, O.RuleSet{
+		Type:         C.RuleSetTypeLocal,
+		Tag:          badoption.Listable[string]{splitTunnelTag},
+		LocalOptions: O.LocalRuleSet{Path: st.ruleFile},
+		Format:       C.RuleSetFormatSource,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
+	t.Cleanup(func() { ruleSet.Close() })
+	router.ruleSet = ruleSet
+
+	rules := splitTunnelDNSRules()
+	require.Len(t, rules, 2)
+	require.Equal(t, C.RuleActionTypeEvaluate, rules[0].DefaultOptions.DNSRuleAction.Action)
+	// Without server checking, NewDNSRule builds a sub-rule, where evaluate is
+	// rejected; the action doesn't affect matching.
+	evaluate := rules[0]
+	evaluate.DefaultOptions.DNSRuleAction = O.DNSRuleAction{
+		Action:       C.RuleActionTypeRoute,
+		RouteOptions: O.DNSRouteActionOptions{Server: systemDNSTag},
+	}
+	rule, err := R.NewDNSRule(ctx, logger, evaluate, false, false)
+	require.NoError(t, err)
+	require.NoError(t, rule.Start())
+	t.Cleanup(func() { rule.Close() })
+	return rule
+}
+
+func TestSplitTunnelDNSRule(t *testing.T) {
+	query := func(domain string, qtype uint16) *adapter.InboundContext {
+		return &adapter.InboundContext{Domain: domain, QueryType: qtype}
+	}
+	tests := []struct {
+		name    string
+		policy  SplitTunnelPolicy
+		filter  SplitTunnelFilter
+		matches map[*adapter.InboundContext]bool
+	}{
+		{
+			name:   "exclude domain",
+			policy: SplitTunnelPolicyExclude,
+			filter: SplitTunnelFilter{DomainSuffix: []string{"example.com"}},
+			matches: map[*adapter.InboundContext]bool{
+				query("www.example.com", dns.TypeA):     true,
+				query("www.example.com", dns.TypeAAAA):  true,
+				query("www.example.com", dns.TypeMX):    false,
+				query("www.example.com", dns.TypeHTTPS): false,
+				query("www.example.com", dns.TypeSVCB):  false,
+				query("other.com", dns.TypeA):           false,
+			},
+		},
+		{
+			name:   "include domain",
+			policy: SplitTunnelPolicyInclude,
+			filter: SplitTunnelFilter{DomainSuffix: []string{"example.com"}},
+			matches: map[*adapter.InboundContext]bool{
+				query("other.com", dns.TypeA):        false,
+				query("other.com", dns.TypeAAAA):     false,
+				query("other.com", dns.TypeHTTPS):    false,
+				query("other.com", dns.TypeMX):       false,
+				query("www.example.com", dns.TypeMX): false,
+			},
+		},
+		{
+			name:   "include app",
+			policy: SplitTunnelPolicyInclude,
+			filter: SplitTunnelFilter{ProcessName: []string{"app"}},
+			matches: map[*adapter.InboundContext]bool{
+				query("other.com", dns.TypeA):    false,
+				query("other.com", dns.TypeAAAA): false,
+				query("other.com", dns.TypeMX):   false,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+			require.NoError(t, st.AddItems(tt.filter))
+			require.NoError(t, st.SetPolicy(tt.policy))
+			require.NoError(t, st.SetEnabled(true))
+
+			rule := splitTunnelDNSMatcher(t, st)
+			for metadata, want := range tt.matches {
+				assert.Equal(t, want, rule.Match(metadata), "%s %s", metadata.Domain, dns.TypeToString[metadata.QueryType])
+			}
+		})
+	}
+}
+
+// savedFilterRules returns the rule set saved in path and its filter rule.
+func savedFilterRules(t *testing.T, path string) (rs O.PlainRuleSetCompat, filter *O.LogicalHeadlessRule) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	rs, err = json.UnmarshalExtended[O.PlainRuleSetCompat](content)
+	require.NoError(t, err)
+	outer := rs.Options.Rules[0].LogicalOptions.Rules
+	require.Len(t, outer, 2)
+	return rs, &outer[1].LogicalOptions
+}
+
+func fileHasIncludeDNSGuard(t *testing.T, path string) bool {
+	t.Helper()
+	_, filter := savedFilterRules(t, path)
+	return slices.ContainsFunc(filter.Rules, func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 })
+}
+
+func TestIncludeDNSGuardPersistence(t *testing.T) {
+	dir := t.TempDir()
+	st := newSplitTunnel(dir, rlog.NoOpLogger())
+	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	guarded := func() bool { return fileHasIncludeDNSGuard(t, st.ruleFile) }
+
+	assert.False(t, guarded(), "exclude policy is not guarded")
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	assert.True(t, guarded(), "include policy is guarded")
+
+	loaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	assert.Equal(t, SplitTunnelFilter{Domain: []string{"example.com"}}, loaded.Filters())
+	for _, r := range loaded.activeFilter.Rules {
+		assert.Empty(t, r.DefaultOptions.QueryType, "guard must not survive load")
+	}
+	require.NoError(t, loaded.SetPolicy(SplitTunnelPolicyExclude))
+	assert.False(t, guarded(), "switching back to exclude drops the guard")
+}
+
+func TestLoadRewritesStaleIncludeDNSGuard(t *testing.T) {
+	for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyInclude, SplitTunnelPolicyExclude} {
+		t.Run(string(policy), func(t *testing.T) {
+			dir := t.TempDir()
+			st := newSplitTunnel(dir, rlog.NoOpLogger())
+			require.NoError(t, st.AddItem(TypeProcessName, "app"))
+			require.NoError(t, st.SetPolicy(policy))
+			require.NoError(t, st.SetEnabled(true))
+			want := policy == SplitTunnelPolicyInclude
+			require.Equal(t, want, fileHasIncludeDNSGuard(t, st.ruleFile))
+
+			// Flip the guard to the state an older build or a stale file would have.
+			rs, filter := savedFilterRules(t, st.ruleFile)
+			if want {
+				filter.Rules = slices.DeleteFunc(filter.Rules, func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 })
+			} else {
+				filter.Rules = append(filter.Rules, includeDNSGuard())
+			}
+			buf, err := json.Marshal(rs)
+			require.NoError(t, err)
+			require.NoError(t, atomicfile.WriteFile(st.ruleFile, buf, 0o644))
+			require.NotEqual(t, want, fileHasIncludeDNSGuard(t, st.ruleFile))
+
+			loaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.NoError(t, err)
+			assert.Equal(t, want, fileHasIncludeDNSGuard(t, st.ruleFile), "load must rewrite the guard")
+			assert.Equal(t, SplitTunnelFilter{ProcessName: []string{"app"}}, loaded.Filters())
+			assert.Equal(t, policy, loaded.Policy())
+			assert.True(t, loaded.IsEnabled())
+		})
+	}
+}
+
+func TestSplitTunnelDNSRespondsOnlyPrivate(t *testing.T) {
+	rules := splitTunnelDNSRules()
+	require.Len(t, rules, 2)
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	rule, err := R.NewDNSRule(ctx, log.NewNOPFactory().Logger(), rules[1], false, false)
+	require.NoError(t, err)
+	require.NoError(t, rule.Start())
+	t.Cleanup(func() { rule.Close() })
+	require.Equal(t, C.RuleActionTypeRespond, rule.Action().Type())
+
+	answer := func(addr string) *dns.Msg {
+		rr, err := dns.NewRR("example.com. 60 IN A " + addr)
+		require.NoError(t, err)
+		return &dns.Msg{Answer: []dns.RR{rr}}
+	}
+	evaluated := func(response *dns.Msg) *adapter.InboundContext {
+		return &adapter.InboundContext{
+			Domain:            "example.com",
+			QueryType:         dns.TypeA,
+			NamedDNSResponses: map[string]*dns.Msg{splitTunnelTag: response},
+		}
+	}
+	assert.True(t, rule.Match(evaluated(answer("192.168.9.138"))), "private answer is returned")
+	assert.False(t, rule.Match(evaluated(answer("203.0.113.10"))), "public answer falls through to fake IP")
+	assert.False(t, rule.Match(&adapter.InboundContext{Domain: "example.com", QueryType: dns.TypeA}),
+		"no evaluated response must not respond")
 }

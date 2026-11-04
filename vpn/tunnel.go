@@ -208,7 +208,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		libbox.Setup(&libbox.SetupOptions{FixAndroidStack: true})
 	}
 
-	boxCtx := hostaccess.Context(t.ctx)
+	boxCtx := hostaccess.ContextWithDNSTransport(t.ctx, platformIfce)
 	if platformIfce != nil {
 		boxCtx = service.ContextWith[adapter.PlatformInterface](boxCtx, libbox.NewPlatformInterfaceWrapper(platformIfce))
 	}

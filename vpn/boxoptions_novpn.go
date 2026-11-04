@@ -56,3 +56,7 @@ func tunSelfRoutingRules() []O.Rule { return nil }
 func splitTunnelRuleSet(_ string) []O.RuleSet { return nil }
 
 func splitTunnelRoutingRules() []O.Rule { return nil }
+
+func splitTunnelDNSRules() []O.DNSRule { return nil }
+
+func splitTunnelDNSServers() []O.DNSServerOptions { return nil }
