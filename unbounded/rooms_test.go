@@ -346,20 +346,62 @@ func TestWaitForTicketsIsBounded(t *testing.T) {
 	t.Cleanup(func() { ticketWait = prev })
 
 	start := time.Now()
-	waitForTickets(context.Background(), &blockingTickets{})
+	assert.False(t, waitForTickets(context.Background(), &blockingTickets{}), "a timed-out wait still starts the widget")
 	elapsed := time.Since(start)
 	assert.GreaterOrEqual(t, elapsed, ticketWait, "waits for the fetch")
 	assert.Less(t, elapsed, time.Second, "but no longer than ticketWait")
 
 	start = time.Now()
-	waitForTickets(context.Background(), &readyTickets{})
-	waitForTickets(context.Background(), &fakeTickets{})
-	waitForTickets(context.Background(), nil)
+	assert.False(t, waitForTickets(context.Background(), &readyTickets{}))
+	assert.False(t, waitForTickets(context.Background(), &fakeTickets{}))
+	assert.False(t, waitForTickets(context.Background(), nil))
 	assert.Less(t, time.Since(start), ticketWait, "a finished fetch, or a source that can't wait, doesn't delay the start")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start = time.Now()
-	waitForTickets(ctx, &blockingTickets{})
+	assert.True(t, waitForTickets(ctx, &blockingTickets{}), "a stopped wait reports it")
 	assert.Less(t, time.Since(start), ticketWait, "a stopping widget doesn't wait")
+}
+
+// waitingTickets is a source whose first fetch never finishes. started is
+// closed when a wait begins.
+type waitingTickets struct {
+	fakeTickets
+	once    sync.Once
+	started chan struct{}
+}
+
+func (w *waitingTickets) WaitFetched(ctx context.Context) bool {
+	w.once.Do(func() { close(w.started) })
+	<-ctx.Done()
+	return false
+}
+
+// A widget stopped while it waits for its tickets stops at once, without
+// building a widget, and leaves the manager free to start again.
+func TestStopDuringTicketWaitBuildsNoWidget(t *testing.T) {
+	prev := ticketWait
+	ticketWait = 5 * time.Second
+	t.Cleanup(func() { ticketWait = prev })
+	count, _, _ := recordingWidgets(t)
+	src := &waitingTickets{started: make(chan struct{})}
+	SetTicketSource(src)
+	t.Cleanup(func() { SetTicketSource(nil) })
+	primeManager(t, nil)
+
+	manager.start()
+	select {
+	case <-src.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the widget never waited for its tickets")
+	}
+	start := time.Now()
+	manager.stop()
+	assert.Less(t, time.Since(start), time.Second, "stop doesn't wait out ticketWait")
+	assert.Equal(t, int32(0), count.Load(), "no widget is built")
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	assert.Nil(t, manager.cancel, "the run is cleared, so a later start can run")
+	assert.Nil(t, manager.done)
 }
