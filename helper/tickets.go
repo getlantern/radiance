@@ -8,6 +8,7 @@
 package helper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,13 +18,13 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/traces"
 )
@@ -113,21 +114,61 @@ func inviterPairings(tickets, tags []string) map[string]string {
 type Fetcher struct {
 	httpClient *http.Client
 	baseURL    string
+	usage      *Usage
 }
 
 // NewFetcher returns a Fetcher. baseURL includes the API version segment,
-// as common.GetBaseURL() returns it.
+// as common.GetBaseURL() returns it. The Fetcher uses a copy of httpClient
+// that follows redirects only within the request's origin, since a request
+// body can carry pairing IDs.
 func NewFetcher(httpClient *http.Client, baseURL string) *Fetcher {
-	return &Fetcher{httpClient: httpClient, baseURL: baseURL}
+	return &Fetcher{httpClient: sameorigin.Client(httpClient, "helper: tickets"), baseURL: baseURL}
+}
+
+// WithUsage makes every fetch report the bytes u has accumulated. A fetch
+// that fails to send or gets a non-2xx response puts them back for the next,
+// except on a 400, which drops them and fetches again without them.
+func (f *Fetcher) WithUsage(u *Usage) *Fetcher {
+	f.usage = u
+	return f
+}
+
+type ticketRequest struct {
+	PairedBytes []PairedBytes `json:"paired_bytes,omitempty"`
 }
 
 // Fetch calls POST {baseURL}/helper/tickets, authenticated by the device ID
 // header like the peer API, and splits the tickets by role.
 func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
-	// Untraced also keeps a redirect off /helper/ out of traces.
-	r, err := common.NewRequestWithHeaders(traces.Untraced(ctx), http.MethodPost, f.baseURL+"/helper/tickets", strings.NewReader("{}"))
+	paired := f.usage.Take()
+	delivered := false
+	defer func() {
+		if !delivered {
+			f.usage.Restore(paired)
+		}
+	}()
+	t, status, err := f.post(ctx, paired)
+	if status == http.StatusBadRequest && len(paired) > 0 {
+		// A server that predates paired_bytes rejects it, so the usage is
+		// dropped rather than sent again.
+		paired = nil
+		t, status, err = f.post(ctx, nil)
+	}
+	delivered = status >= 200 && status < 300
+	return t, err
+}
+
+// post sends one ticket request and returns the response status, 0 when none
+// came back.
+func (f *Fetcher) post(ctx context.Context, paired []PairedBytes) (Tickets, int, error) {
+	payload, err := json.Marshal(ticketRequest{PairedBytes: paired})
 	if err != nil {
-		return Tickets{}, fmt.Errorf("build ticket request: %w", err)
+		return Tickets{}, 0, fmt.Errorf("encode ticket request: %w", err)
+	}
+	// Untraced also keeps a redirect off /helper/ out of traces.
+	r, err := common.NewRequestWithHeaders(traces.Untraced(ctx), http.MethodPost, f.baseURL+"/helper/tickets", bytes.NewReader(payload))
+	if err != nil {
+		return Tickets{}, 0, fmt.Errorf("build ticket request: %w", err)
 	}
 	r.Header.Set("Content-Type", "application/json")
 	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
@@ -135,16 +176,17 @@ func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
 	}
 	resp, err := f.httpClient.Do(r)
 	if err != nil {
-		return Tickets{}, fmt.Errorf("send ticket request: %w", err)
+		return Tickets{}, 0, fmt.Errorf("send ticket request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	status := resp.StatusCode
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return Tickets{}, ErrDisabled
-	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
-		return Tickets{}, fmt.Errorf("ticket request: status %d: %w", resp.StatusCode, ErrUnavailable)
-	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		return Tickets{}, fmt.Errorf("ticket request: status %d", resp.StatusCode)
+	case status == http.StatusNotFound:
+		return Tickets{}, status, ErrDisabled
+	case status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable:
+		return Tickets{}, status, fmt.Errorf("ticket request: status %d: %w", status, ErrUnavailable)
+	case status < 200 || status >= 300:
+		return Tickets{}, status, fmt.Errorf("ticket request: status %d", status)
 	}
 	var body struct {
 		Tickets         []string `json:"tickets"`
@@ -152,14 +194,14 @@ func (f *Fetcher) Fetch(ctx context.Context) (Tickets, error) {
 		LifetimeSeconds int64    `json:"lifetime_seconds"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&body); err != nil {
-		return Tickets{}, errors.New("ticket response: malformed JSON")
+		return Tickets{}, status, errors.New("ticket response: malformed JSON")
 	}
 	t := Split(body.Tickets)
 	t.InviterPairings = inviterPairings(body.Tickets, body.InviterTags)
 	if body.LifetimeSeconds > 0 && body.LifetimeSeconds <= int64(maxLifetime/time.Second) {
 		t.Lifetime = time.Duration(body.LifetimeSeconds) * time.Second
 	}
-	return t, nil
+	return t, status, nil
 }
 
 // held is a ticket and when this device stops serving it.
@@ -190,15 +232,43 @@ type Source struct {
 	// afterRead, if set, runs after read releases s.mu. For tests.
 	afterRead func()
 	due       time.Time // zero: due at the first read
-	fetching  bool
-	busy      time.Duration // the backoff after the last 429 or 503 in a row
-	gen       uint64        // bumped by Invalidate; a fetch started under an older gen is stale
+	// fetched is closed once a fetch has finished, whatever its outcome. Made on first use.
+	fetched     chan struct{}
+	everFetched bool
+	fetching    bool
+	busy        time.Duration // the backoff after the last 429 or 503 in a row
+	gen         uint64        // bumped by Invalidate; a fetch started under an older gen is stale
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
 // tests. Cancelling ctx cancels a fetch in flight and stops further fetches.
 func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)) *Source {
 	return &Source{ctx: ctx, fetch: fetch, now: time.Now}
+}
+
+// WaitFetched starts a fetch if one is due and waits until a fetch has
+// finished, whatever its outcome, or ctx is done. It reports whether one has.
+// Reads never block, so a caller that must not act on "no tickets" before
+// lantern-cloud has had a chance to answer waits here first, with a deadline.
+func (s *Source) WaitFetched(ctx context.Context) bool {
+	s.mu.Lock()
+	s.readLocked(helperticket.RoleVolunteer, false)
+	ch := s.fetchedLocked()
+	s.mu.Unlock()
+	select {
+	case <-ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// fetchedLocked returns the channel closed once a fetch has finished.
+func (s *Source) fetchedLocked() chan struct{} {
+	if s.fetched == nil {
+		s.fetched = make(chan struct{})
+	}
+	return s.fetched
 }
 
 // Inviter returns the current inviter tickets.
@@ -344,6 +414,10 @@ func (s *Source) refresh(gen uint64) {
 	s.mu.Lock()
 	now := s.now()
 	s.fetching = false
+	if !s.everFetched {
+		s.everFetched = true
+		close(s.fetchedLocked())
+	}
 	prevPairings, prevAnswered, prevUsable := s.pairings, s.answered, s.usableTagsLocked(now)
 	switch {
 	case errors.Is(err, ErrDisabled):
