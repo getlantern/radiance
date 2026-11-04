@@ -26,11 +26,13 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 	if path == "" {
 		return candidateSource{}
 	}
+	label := fmt.Sprintf("pre-9.x %s yaml", layout)
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return candidateSource{}
+	}
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("pre-9.x yaml read failed", "path", path, "error", err)
-		}
+		slog.Warn("legacy settings migration: read failed", "path", path, "error", err)
 		return candidateSource{}
 	}
 	translated, err := translateLegacyYAML(raw, layout)
@@ -42,17 +44,23 @@ func legacyYAMLCandidate(fileDir string) candidateSource {
 		path:     path,
 		contents: translated,
 		exists:   true,
-		label:    fmt.Sprintf("pre-9.x %s yaml", layout),
+		label:    label,
 	}
 }
 
 func legacyYAMLPath(fileDir string) (path, layout string) {
 	switch runtime.GOOS {
 	case "darwin", "windows":
+		if !readsHostProfile() {
+			break
+		}
 		if cfg, err := os.UserConfigDir(); err == nil {
 			return filepath.Join(cfg, "Lantern", "settings.yaml"), "desktop"
 		}
 	case "linux":
+		if !readsHostProfile() {
+			break
+		}
 		// Pre-9.x appdir lowercased the app name on linux only.
 		if cfg, err := os.UserConfigDir(); err == nil {
 			return filepath.Join(cfg, "lantern", "settings.yaml"), "desktop"

@@ -45,3 +45,13 @@ func TestErrorResponseBodyOmittedFromLog(t *testing.T) {
 	assert.Contains(t, buf.String(), "status=400", "error log dropped the status")
 	assert.Contains(t, err.Error(), "invalid_code", "returned error dropped the server error code")
 }
+
+func TestProErrorEnvelope(t *testing.T) {
+	a, _ := newTestClient(t)
+	useProServer(t, a, serveJSON(map[string]string{"error": "device not found"}))
+
+	_, err := a.RemoveDevice(context.Background(), "device")
+	assert.ErrorContains(t, err, "device not found")
+	_, err = a.ActivationCode(context.Background(), "me@example.com", "code")
+	assert.ErrorContains(t, err, "device not found")
+}

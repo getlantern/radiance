@@ -40,13 +40,13 @@ func TestAccountChangesNotifyWithoutBackendWrappers(t *testing.T) {
 	_, err = a.FetchUserData(ctx)
 	require.NoError(t, err)
 	expect(0)
-	a.setData(&UserData{LegacyUserData: &protos.LoginResponse_UserData{UserLevel: "pro"}})
+	a.setData(&UserData{LegacyUserData: &protos.LoginResponse_UserData{UserLevel: "pro"}}, nil)
 	expect(1)
-	a.setData(&UserData{LegacyUserData: &protos.LoginResponse_UserData{UserLevel: "pro"}})
+	a.setData(&UserData{LegacyUserData: &protos.LoginResponse_UserData{UserLevel: "pro"}}, nil)
 	expect(0)
-	a.setData(&UserData{LegacyID: 456, LegacyToken: "new-token"})
+	a.setData(&UserData{LegacyID: 456, LegacyToken: "new-token"}, nil)
 	expect(1)
-	a.setData(&UserData{LegacyID: 456, LegacyToken: "new-token"})
+	a.setData(&UserData{LegacyID: 456, LegacyToken: "new-token"}, nil)
 	expect(0)
 	_, err = a.Logout(ctx, "test@example.com")
 	require.NoError(t, err)
@@ -55,6 +55,13 @@ func TestAccountChangesNotifyWithoutBackendWrappers(t *testing.T) {
 	expect(1)
 	a.ClearUser()
 	expect(0)
+
+	oauthToken := mockJWT(t, map[string]any{
+		"legacy_user_id": 123, "legacy_token": "oauth-token", "email": "test@example.com",
+	})
+	_, err = a.OAuthLoginCallback(ctx, oauthToken)
+	require.NoError(t, err)
+	expect(1)
 
 	token := mockJWT(t, map[string]any{"legacy_user_id": 789, "legacy_token": "oauth-token"})
 	require.NoError(t, a.OAuthDeviceLimitCallback(ctx, token))
