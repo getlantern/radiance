@@ -32,6 +32,12 @@ jobs:
         fi
 
     - name: Build
-      run: go build -v -tags with_clash_api ./...
+      run: make build
+
+    - name: Check for log leaks
+      run: |
+        make logleak
+        GOOS=windows make logleak
+
     - name: Test
-      run: go test -v -tags with_clash_api ./...
+      run: make test

@@ -1228,6 +1228,7 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
@@ -1517,6 +1518,7 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 			if inFlight != nil {
 				_ = closeBox(inFlight)
 			}
+			//logleak:ok recovered panic value
 			box, retErr = nil, fmt.Errorf("build or start new sing-box panicked: %v", r)
 		}
 	}()
