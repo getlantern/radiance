@@ -33,6 +33,13 @@ const (
 	testHelper2 = "helper-ba9876543210"
 )
 
+// wsaeaddrinuse is Winsock's WSAEADDRINUSE, which syscall.EADDRINUSE does not match on Windows.
+const wsaeaddrinuse = syscall.Errno(10048)
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, wsaeaddrinuse)
+}
+
 func directServer(tag string) *servers.Server {
 	return &servers.Server{Tag: tag, Type: C.TypeDirect, IsLantern: true,
 		Options: O.Outbound{Tag: tag, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{}}}
@@ -96,7 +103,7 @@ func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds func() []O.Inboun
 			break
 		}
 		_ = tun.close()
-		if attempt == 5 || !errors.Is(err, syscall.EADDRINUSE) {
+		if attempt == 5 || !isAddrInUse(err) {
 			require.NoError(t, err)
 		}
 	}
