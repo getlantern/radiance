@@ -2,38 +2,29 @@ package vpn
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
-// splitTunnelTag is the route rule-set tag the split-tunnel filter is bound to.
-// It is shared across builds so the novpn build can reference the same tag when
-// asserting the rule-set is absent.
 const splitTunnelTag = "split-tunnel"
 
-// SplitTunnelPolicy selects how the split-tunnel filter list is interpreted.
-//
-// The values describe the user-facing behavior: whether matching filters are
-// excluded from the VPN tunnel or are the only traffic included in it. An empty
-// filter list keeps all traffic in the tunnel regardless of the policy.
+// SplitTunnelPolicy selects whether matching traffic bypasses or uses the VPN.
 type SplitTunnelPolicy string
 
 const (
-	// SplitTunnelPolicyExclude makes matching apps/domains bypass the VPN and
-	// routes everything else through it.
+	// SplitTunnelPolicyExclude bypasses the VPN for matching apps and websites.
 	SplitTunnelPolicyExclude SplitTunnelPolicy = "exclude"
-	// SplitTunnelPolicyInclude routes only matching apps/domains through the VPN
-	// and sends everything else direct.
+	// SplitTunnelPolicyInclude routes only matching apps and websites through the VPN.
 	SplitTunnelPolicyInclude SplitTunnelPolicy = "include"
 )
 
+// Valid reports whether p is a supported policy.
 func (p SplitTunnelPolicy) Valid() bool {
 	return p == SplitTunnelPolicyExclude || p == SplitTunnelPolicyInclude
 }
 
-// Filter type identifiers accepted by SplitTunnel.AddItems/RemoveItems and exposed
-// through the backend and CLI. Defined here (rather than alongside the real
-// implementation) so the novpn build, which compiles an inert SplitTunnel, still
-// exports the same identifiers to callers.
+// Filter type identifiers name SplitTunnelFilter fields for callers such as the CLI.
+// They are defined here, not with the real implementation, so the novpn build exports them too.
 const (
 	TypeDomain           = "domain"
 	TypeDomainSuffix     = "domainSuffix"
@@ -45,8 +36,14 @@ const (
 	TypePackageName      = "packageName"
 )
 
-// SplitTunnelFilter is the set of domains, processes, and packages a user has
-// configured for split-tunnel routing.
+// SplitTunnelState is the persisted policy and its selections.
+type SplitTunnelState struct {
+	Enabled bool              `json:"enabled"`
+	Policy  SplitTunnelPolicy `json:"policy"`
+	Filters SplitTunnelFilter `json:"filters"`
+}
+
+// SplitTunnelFilter selects websites and apps for split-tunnel routing.
 type SplitTunnelFilter struct {
 	Domain           []string
 	DomainSuffix     []string
@@ -58,31 +55,41 @@ type SplitTunnelFilter struct {
 	PackageName      []string
 }
 
+// String formats the nonempty selectors.
 func (f SplitTunnelFilter) String() string {
 	var str []string
-	if len(f.Domain) > 0 {
-		str = append(str, fmt.Sprintf("domain: %v", f.Domain))
-	}
-	if len(f.DomainSuffix) > 0 {
-		str = append(str, fmt.Sprintf("domainSuffix: %v", f.DomainSuffix))
-	}
-	if len(f.DomainKeyword) > 0 {
-		str = append(str, fmt.Sprintf("domainKeyword: %v", f.DomainKeyword))
-	}
-	if len(f.DomainRegex) > 0 {
-		str = append(str, fmt.Sprintf("domainRegex: %v", f.DomainRegex))
-	}
-	if len(f.ProcessName) > 0 {
-		str = append(str, fmt.Sprintf("processName: %v", f.ProcessName))
-	}
-	if len(f.ProcessPath) > 0 {
-		str = append(str, fmt.Sprintf("processPath: %v", f.ProcessPath))
-	}
-	if len(f.ProcessPathRegex) > 0 {
-		str = append(str, fmt.Sprintf("processPathRegex: %v", f.ProcessPathRegex))
-	}
-	if len(f.PackageName) > 0 {
-		str = append(str, fmt.Sprintf("packageName: %v", f.PackageName))
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{
+		{TypeDomain, f.Domain}, {TypeDomainSuffix, f.DomainSuffix},
+		{TypeDomainKeyword, f.DomainKeyword}, {TypeDomainRegex, f.DomainRegex},
+		{TypeProcessName, f.ProcessName}, {TypeProcessPath, f.ProcessPath},
+		{TypeProcessPathRegex, f.ProcessPathRegex}, {TypePackageName, f.PackageName},
+	} {
+		if len(field.values) > 0 {
+			str = append(str, fmt.Sprintf("%s: %v", field.name, field.values))
+		}
 	}
 	return "{" + strings.Join(str, ", ") + "}"
+}
+
+func (f SplitTunnelFilter) clone() SplitTunnelFilter {
+	return SplitTunnelFilter{
+		Domain: slices.Clone(f.Domain), DomainSuffix: slices.Clone(f.DomainSuffix),
+		DomainKeyword: slices.Clone(f.DomainKeyword), DomainRegex: slices.Clone(f.DomainRegex),
+		ProcessName: slices.Clone(f.ProcessName), ProcessPath: slices.Clone(f.ProcessPath),
+		ProcessPathRegex: slices.Clone(f.ProcessPathRegex), PackageName: slices.Clone(f.PackageName),
+	}
+}
+
+func (f *SplitTunnelFilter) update(diff SplitTunnelFilter, fn func([]string, []string) []string) {
+	f.Domain = fn(f.Domain, diff.Domain)
+	f.DomainSuffix = fn(f.DomainSuffix, diff.DomainSuffix)
+	f.DomainKeyword = fn(f.DomainKeyword, diff.DomainKeyword)
+	f.DomainRegex = fn(f.DomainRegex, diff.DomainRegex)
+	f.ProcessName = fn(f.ProcessName, diff.ProcessName)
+	f.ProcessPath = fn(f.ProcessPath, diff.ProcessPath)
+	f.ProcessPathRegex = fn(f.ProcessPathRegex, diff.ProcessPathRegex)
+	f.PackageName = fn(f.PackageName, diff.PackageName)
 }

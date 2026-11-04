@@ -69,6 +69,11 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 	require.NoError(t, err)
 	response := servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, string(body))
 	require.Equal(t, http.StatusOK, response.Code)
+	for _, body := range []string{`{"split_tunnel":true}`, `{"split_tunnel_policy":"include"}`} {
+		response = servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, body)
+		require.Equal(t, http.StatusInternalServerError, response.Code)
+		require.Contains(t, response.Body.String(), "split tunneling is unavailable")
+	}
 
 	// "Help others too" is the owner's to turn off.
 	response = servePeerRequest(api, usr{uid: "original-user"}, http.MethodPatch, settingsEndpoint, `{"peer_serve_pool":false}`)

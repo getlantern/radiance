@@ -98,8 +98,11 @@ const (
 	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
 	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
 
-	// Split tunnel endpoint
-	splitTunnelEndpoint = "/split-tunnel"
+	// Split tunnel
+	splitTunnelEndpoint       = "/split-tunnel"
+	splitTunnelStateEndpoint  = "/split-tunnel/state"
+	splitTunnelPolicyEndpoint = "/split-tunnel/policy"
+	splitTunnelAppsEndpoint   = "/split-tunnel/apps"
 
 	// Account endpoints
 	accountNewUserEndpoint          = "/account/new-user"
@@ -312,6 +315,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 
 	// Split tunnel
 	mux.HandleFunc(splitTunnelEndpoint, traced(s.splitTunnelHandler))
+	mux.HandleFunc("GET "+splitTunnelStateEndpoint, traced(s.splitTunnelStateHandler))
+	mux.HandleFunc("PUT "+splitTunnelPolicyEndpoint, traced(s.splitTunnelPolicyHandler))
+	mux.HandleFunc("DELETE "+splitTunnelAppsEndpoint, traced(s.splitTunnelAppsHandler))
 
 	// Account
 	mux.HandleFunc("POST "+accountNewUserEndpoint, traced(s.accountNewUserHandler))
@@ -454,7 +460,7 @@ func (s *localapi) vpnDisconnectHandler(w http.ResponseWriter, r *http.Request) 
 
 func (s *localapi) vpnRestartHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).RestartVPN(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -510,7 +516,7 @@ func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *localapi) vpnClearTunnelCacheHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).ClearTunnelCache(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1022,12 +1028,12 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.backend(r.Context()).PatchSettings(updates); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), busyStatus(err))
 			return
 		}
 		fallthrough
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, settings.GetAll())
+		writeJSON(w, http.StatusOK, s.backend(r.Context()).Settings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1140,6 +1146,10 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.backend(r.Context()).SplitTunnelFilters())
 		return
 	}
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var items vpn.SplitTunnelFilter
 	if err := decodeJSON(r, &items); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1153,10 +1163,52 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		err = s.backend(r.Context()).RemoveSplitTunnelItems(items)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), busyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func busyStatus(err error) int {
+	if errors.Is(err, backend.ErrVPNBusy) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
+}
+
+type splitTunnelPolicyRequest struct {
+	Policy vpn.SplitTunnelPolicy `json:"policy"`
+}
+
+func (s *localapi) splitTunnelStateHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).SplitTunnelState())
+}
+
+func (s *localapi) splitTunnelPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var req splitTunnelPolicyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !req.Policy.Valid() {
+		http.Error(w, "invalid split-tunnel policy", http.StatusBadRequest)
+		return
+	}
+	b := s.backend(r.Context())
+	if err := b.SwitchSplitTunnelPolicy(req.Policy); err != nil {
+		http.Error(w, err.Error(), busyStatus(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, b.SplitTunnelState())
+}
+
+func (s *localapi) splitTunnelAppsHandler(w http.ResponseWriter, r *http.Request) {
+	b := s.backend(r.Context())
+	if err := b.ClearSplitTunnelApps(); err != nil {
+		http.Error(w, err.Error(), busyStatus(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, b.SplitTunnelState())
 }
 
 /////////////

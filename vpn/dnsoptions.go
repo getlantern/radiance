@@ -3,6 +3,7 @@ package vpn
 import (
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -13,12 +14,8 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// buildDNSServers returns a list of three DNSServerOptions, a local DNS server
-// used for local requests; a remote DNS server (like quad9) for remote websites
-// without sharing user private IP; and fake IP dns server, which effectively resolves
-// DNS locally while allowing us to route traffic based on domains.
-func buildDNSServers() []option.DNSServerOptions {
-	local := option.DNSServerOptions{
+func localDNSServer() option.DNSServerOptions {
+	return option.DNSServerOptions{
 		Tag:  "dns_local",
 		Type: constant.DNSTypeHTTPS,
 		Options: &option.RemoteHTTPSDNSServerOptions{
@@ -33,6 +30,11 @@ func buildDNSServers() []option.DNSServerOptions {
 			},
 		},
 	}
+}
+
+// buildDNSServers returns the remote, local, and fake-IP DNS servers.
+func buildDNSServers() []option.DNSServerOptions {
+	local := localDNSServer()
 	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
 	fakeIP := option.DNSServerOptions{
 		Tag:  "dns_fakeip",
@@ -68,6 +70,26 @@ func buildDNSServers() []option.DNSServerOptions {
 		remote,
 		local,
 		fakeIP,
+	}
+}
+
+func configureSplitTunnelDNS(opts *option.Options) {
+	// Bypassed and proxied lookups of the same domain must not share cached answers.
+	opts.DNS.IndependentCache = true
+	if !slices.ContainsFunc(opts.DNS.Servers, func(server option.DNSServerOptions) bool {
+		return server.Tag == "dns_local"
+	}) {
+		opts.DNS.Servers = append(slices.Clone(opts.DNS.Servers), localDNSServer())
+	}
+	for _, outbound := range opts.Outbounds {
+		if outbound.Tag != "direct" {
+			continue
+		}
+		// Bypassed domains must not resolve through dns_remote, which detours through the proxy.
+		if direct, ok := outbound.Options.(*option.DirectOutboundOptions); ok {
+			direct.DomainResolver = &option.DomainResolveOptions{Server: "dns_local"}
+		}
+		break
 	}
 }
 

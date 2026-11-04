@@ -73,6 +73,7 @@ type BoxOptions struct {
 	Options O.Options `json:"options"`
 	// SmartRouting contains smart routing rules to merge into the final options.
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
+	SplitTunnel  SplitTunnelState          `json:"split_tunnel"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
@@ -424,17 +425,19 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
 
 	opts := baseOpts(bOptions.BasePath)
+	configureSplitTunnelCapture(opts.Inbounds, bOptions.SplitTunnel, common.Platform)
 	slog.Debug("Base options initialized")
 
 	// add smart routing and ad block rules
-	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
+	includeOnly := bOptions.SplitTunnel.Enabled && bOptions.SplitTunnel.Policy == SplitTunnelPolicyInclude
+	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting, includeOnly)
 	if len(smartRoutingRules) > 0 {
 		slog.Info("Adding smart-routing rules")
 		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
-	} else if len(bOptions.SmartRouting) > 0 && len(smartRoutingRules) == 0 {
+	} else if len(bOptions.SmartRouting) > 0 && len(smartRoutingRules) == 0 && !includeOnly {
 		slog.Warn("No valid smart-routing rules found after normalization, skipping smart-routing configuration")
 	}
 	adBlockRules := normalizeAdBlockRules(bOptions.AdBlock)
@@ -447,7 +450,13 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 		slog.Warn("No valid ad-block rules found after normalization, skipping ad-block configuration")
 	}
 
+	if includeOnly && bOptions.Options.Route != nil {
+		bOptions.Options.Route = withoutDirectRuleSetRules(bOptions.Options.Route)
+	}
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	if bOptions.SplitTunnel.Enabled {
+		configureSplitTunnelDNS(&opts)
+	}
 	helpers := helperTags(tags)
 	// The manual selector also offers the personal proxies group, which
 	// exists only while a helper outbound does: a url-test group must never
@@ -570,13 +579,22 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	return tags
 }
 
-func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRoutingRules {
+func withoutDirectRuleSetRules(route *O.RouteOptions) *O.RouteOptions {
+	stripped := *route
+	stripped.Rules = slices.DeleteFunc(slices.Clone(route.Rules), func(rule O.Rule) bool {
+		return rule.Type == C.RuleTypeDefault && len(rule.DefaultOptions.RuleSet) > 0 &&
+			rule.DefaultOptions.RouteOptions.Outbound == "direct"
+	})
+	return &stripped
+}
+
+func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules, includeOnly bool) lcommon.SmartRoutingRules {
 	normalized := make(lcommon.SmartRoutingRules, 0, len(rules))
 	for _, sr := range rules {
 		cleaned := make([]string, 0, len(sr.Outbounds))
 		for _, outbound := range sr.Outbounds {
 			tag := strings.TrimSpace(outbound)
-			if tag == "" {
+			if tag == "" || (includeOnly && tag == "direct") {
 				continue
 			}
 			cleaned = append(cleaned, tag)
@@ -584,7 +602,9 @@ func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRo
 
 		sr.Outbounds = cleaned
 		if len(sr.Outbounds) == 0 {
-			slog.Warn("Skipping smart-routing rule with no outbounds", "category", sr.Category)
+			if !includeOnly {
+				slog.Warn("Skipping smart-routing rule with no outbounds", "category", sr.Category)
+			}
 			continue
 		}
 

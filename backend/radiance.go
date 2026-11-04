@@ -78,6 +78,7 @@ type LocalBackend struct {
 	// selection, for tests of a concurrent selection.
 	beforeRestartSelection func()
 	splitTunnelMgr         *vpn.SplitTunnel
+	splitTunnelMu          waitMutex
 	sessionHistory         *vpn.SessionHistory
 
 	peerClient   peerController
@@ -206,10 +207,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if err != nil {
 		slog.Error("Loading split tunnel handler", "error", err)
 	}
-	// Empty filters do not persist the invert flag, so reload can reset the
-	// loaded policy. Re-apply the persisted setting as the source of truth.
-	if err := splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
-		slog.Warn("Reconciling split-tunnel policy", "error", err)
+	if err := splitTunnelMgr.ImportLegacyPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+		slog.Warn("Importing legacy split-tunnel policy", "error", err)
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
@@ -772,16 +771,19 @@ func (r *LocalBackend) Features() map[string]bool {
 }
 
 func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
-	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
+	enabled, policy, err := splitTunnelSettings(updates)
+	if err != nil {
+		return err
+	}
+	updates = maps.Clone(updates)
+	delete(updates, settings.SplitTunnelKey)
+	delete(updates, settings.SplitTunnelPolicyKey)
+	curr := settings.Settings{}
+	if len(updates) > 0 {
+		curr = settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
+	}
 	diff := updates.Diff(curr)
 	slog.Log(nil, log.LevelTrace, "Patching settings", "updates", updates, "current", curr, "diff", diff)
-	// Reject an invalid split-tunnel policy before applying or persisting anything, so settings.json
-	// can't hold a value the runtime would silently fall back to exclude for.
-	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
-		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
-			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
-		}
-	}
 	// An explicit peer toggle is applied whether or not it changes the stored
 	// value, and before any other handler: the stored value can lag the
 	// runtime (a peer that stopped itself, or an "on" still starting), and
@@ -797,6 +799,12 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		peerOn = on
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
+	}
+	current := r.SplitTunnelState()
+	if (enabled != nil && *enabled != current.Enabled) || (policy != nil && *policy != current.Policy) {
+		if err := r.updateSplitTunnel(func() error { return r.splitTunnelMgr.Configure(enabled, policy) }); err != nil {
+			return err
+		}
 	}
 	// The rest of the patch is persisted before the toggle applies, so a
 	// peer it starts registers with this patch's peer settings, such as
@@ -836,22 +844,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		}
 	}
 
-	// vpn settings
-	//
-	// settings.Patch above already persisted the whole diff, so an early return
-	// on a handler error would leave a persisted key that no runtime state
-	// matches — the divergence applyPeerShare's rollback exists to prevent. Run
-	// every handler and join their errors so the caller sees write failures.
-	if _, ok := diff[settings.SplitTunnelKey]; ok {
-		if err := r.splitTunnelMgr.SetEnabled(settings.GetBool(settings.SplitTunnelKey)); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("set split-tunnel enabled: %w", err))
-		}
-	}
-	if _, ok := diff[settings.SplitTunnelPolicyKey]; ok {
-		if err := r.splitTunnelMgr.SetPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("set split-tunnel policy: %w", err))
-		}
-	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
 	}
@@ -885,11 +877,12 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) error {
 	_, adBlockChanged := updates[settings.AdBlockKey]
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
-	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
+	if (adBlockChanged || smartRoutingChanged) && r.vpnClient != nil && r.vpnClient.Status() == vpn.Connected {
 		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
 		if err := r.RestartVPN(); err != nil {
+			// %v, not %w: the settings are saved, so ErrVPNBusy must not signal a no-op.
 			return fmt.Errorf(
-				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %w",
+				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %v",
 				adBlockChanged, smartRoutingChanged, err,
 			)
 		}
@@ -1553,8 +1546,11 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	defer r.connectMu.Unlock()
 
-	if tag == "" {
-		tag = vpn.AutoSelectTag
+	tag = r.connectSelection(tag, r.vpnClient.Status())
+	if r.splitTunnelMgr != nil {
+		if err := r.splitTunnelMgr.ImportLegacyPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+			return fmt.Errorf("prepare split-tunnel rules: %w", err)
+		}
 	}
 	if err := r.awaitConnectable(ctx, tag); err != nil {
 		return err
@@ -1574,6 +1570,17 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	r.persistConnectedSelection(tag)
 	return nil
+}
+
+func (r *LocalBackend) connectSelection(tag string, status vpn.VPNStatus) string {
+	if tag == "" {
+		tag = vpn.AutoSelectTag
+	}
+	// A platform restart reconnects on auto; keep the saved selection.
+	if status == vpn.Restarting && tag == vpn.AutoSelectTag {
+		return r.savedSelectionTag()
+	}
+	return tag
 }
 
 // persistConnectedSelection persists the tag a connect selected. A config
@@ -1671,7 +1678,8 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 	// ignore error, we can still connect with default options if config is not available for some reason
 	cfg, _ := r.confHandler.GetConfig()
 	bOptions := vpn.BoxOptions{
-		BasePath: settings.GetString(settings.DataPathKey),
+		BasePath:    settings.GetString(settings.DataPathKey),
+		SplitTunnel: r.SplitTunnelState(),
 	}
 	if cfg != nil {
 		bOptions.Options = cfg.Options
@@ -1783,8 +1791,13 @@ func (r *LocalBackend) DisconnectVPN() error {
 }
 
 // RestartVPN rebuilds the tunnel on the saved selection, including one saved
-// during the restart.
+// during the restart. It waits for a running split-tunnel change or restart
+// and returns ErrVPNBusy if that does not finish in time.
 func (r *LocalBackend) RestartVPN() error {
+	if !r.splitTunnelMu.lock(splitTunnelLockTimeout) {
+		return ErrVPNBusy
+	}
+	defer r.splitTunnelMu.unlock()
 	bOptions := r.restartBoxOptions()
 	// selectionMu is not held across the restart: a platform restart may
 	// reconnect through this backend, which takes it.
@@ -2159,22 +2172,6 @@ func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
 // IPC route, which cannot build a full backend.
 func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {
 	r.helperRelay = rl
-}
-
-//////////////////
-// Split Tunnel //
-/////////////////
-
-func (r *LocalBackend) SplitTunnelFilters() vpn.SplitTunnelFilter {
-	return r.splitTunnelMgr.Filters()
-}
-
-func (r *LocalBackend) AddSplitTunnelItems(items vpn.SplitTunnelFilter) error {
-	return r.splitTunnelMgr.AddItems(items)
-}
-
-func (r *LocalBackend) RemoveSplitTunnelItems(items vpn.SplitTunnelFilter) error {
-	return r.splitTunnelMgr.RemoveItems(items)
 }
 
 /////////////
