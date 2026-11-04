@@ -1,8 +1,11 @@
 package servers
 
 import (
+	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +17,7 @@ import (
 
 	C "github.com/getlantern/common"
 	box "github.com/getlantern/lantern-box"
+	"github.com/hashicorp/go-retryablehttp"
 
 	_ "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/internal"
@@ -452,4 +456,47 @@ func TestAddPrivateServerPersistsLocationAndJoined(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, loc, got.Location)
 	assert.True(t, got.Credentials.IsJoined)
+}
+
+// failingTransport fails every request with a fixed error, which http.Client wraps in
+// a *url.Error that quotes the request URL.
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestPrivateServerErrorOmitsAccessToken(t *testing.T) {
+	const accessToken = "SECRET-ACCESS-TOKEN"
+
+	m := testManager(t)
+	m.httpClient = &http.Client{Transport: failingTransport{}}
+
+	_, err := m.InviteToPrivateServer("127.0.0.1", 8443, accessToken, "invite1")
+	require.Error(t, err, "expected a transport failure")
+	assert.NotContains(t, err.Error(), accessToken, "access token leaked through the returned error")
+	assert.Contains(t, err.Error(), "share-link", "redaction removed the request path, leaving an undiagnosable error")
+	var urlErr *url.Error
+	assert.False(t, errors.As(err, &urlErr), "the token-bearing *url.Error is reachable through the error chain")
+}
+
+func TestRetryableHTTPClientLogsOmitAccessToken(t *testing.T) {
+	const accessToken = "SECRET-ACCESS-TOKEN"
+
+	// A logger that does no redaction of its own.
+	var logs bytes.Buffer
+	client := retryableHTTPClient(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	client.HTTPClient.Transport = failingTransport{}
+	client.RetryMax = 0
+	req, err := retryablehttp.NewRequest(http.MethodGet, "http://127.0.0.1:8443/share-link?token="+accessToken, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	require.Error(t, err, "expected a transport failure")
+
+	assert.Contains(t, logs.String(), "request failed")
+	assert.Contains(t, logs.String(), "share-link")
+	assert.NotContains(t, logs.String(), accessToken)
 }
