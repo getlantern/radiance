@@ -361,6 +361,7 @@ func TestWaitForTicketsIsBounded(t *testing.T) {
 	cancel()
 	start = time.Now()
 	assert.True(t, waitForTickets(ctx, &blockingTickets{}), "a stopped wait reports it")
+	assert.True(t, waitForTickets(ctx, &readyTickets{}), "so does a stop that comes as the fetch finishes")
 	assert.Less(t, time.Since(start), ticketWait, "a stopping widget doesn't wait")
 }
 

@@ -325,11 +325,8 @@ func waitForTickets(ctx context.Context, tickets roomTickets) (stopped bool) {
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, ticketWait)
 	defer cancel()
-	if w.WaitFetched(waitCtx) {
-		return false
-	}
-	if ctx.Err() != nil {
-		return true
+	if w.WaitFetched(waitCtx) || ctx.Err() != nil {
+		return ctx.Err() != nil
 	}
 	slog.Info("Unbounded: starting before the first pairing ticket fetch finished")
 	return false
