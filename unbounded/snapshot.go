@@ -183,6 +183,7 @@ func (m *unboundedManager) recordConnection(ctx context.Context, state, slot int
 			m.releasePeer(prev)
 		}
 		delete(m.lastOwner, slot)
+		delete(m.slotPairing, slot)
 		m.peers[slot] = source
 		m.acquirePeer(source)
 	} else if state < 0 {
@@ -226,6 +227,14 @@ func (m *unboundedManager) recordPairing(ctx context.Context, slots *slotTable, 
 	if state == 0 {
 		return
 	}
+	if pairing == "" {
+		delete(m.slotPairing, slot)
+	} else {
+		if m.slotPairing == nil {
+			m.slotPairing = make(map[int]string)
+		}
+		m.slotPairing[slot] = pairing
+	}
 	if source := m.peers[slot]; source != "" {
 		if t := m.peerBytes[source]; t != nil {
 			t.pairing = pairing
@@ -245,12 +254,13 @@ func (m *unboundedManager) liveTracker() *helper.LiveTracker {
 	return helper.DefaultLive
 }
 
-// retiredRun keeps a stopped run's slot table and its final slot owners, so
-// bytes broflake delivers during its asynchronous teardown are still counted
-// and credited to the consumers that relayed them.
+// retiredRun keeps a stopped run's slot table and its final slot owners and
+// pairings, so bytes broflake delivers during its asynchronous teardown are
+// still counted and credited to the consumers and pairings that relayed them.
 type retiredRun struct {
 	slots     *slotTable
 	owners    map[int]*peerTally
+	pairings  map[int]string
 	retiredAt time.Time
 }
 
@@ -271,10 +281,11 @@ func (m *unboundedManager) releaseAllPeers() {
 		for idx, source := range m.peers {
 			owners[idx] = m.peerBytes[source]
 		}
-		m.retired = append(m.retired, retiredRun{slots: m.slots, owners: owners, retiredAt: m.clock()})
+		m.retired = append(m.retired, retiredRun{slots: m.slots, owners: owners, pairings: m.slotPairing, retiredAt: m.clock()})
 	}
 	m.slots = nil
 	m.lastOwner = nil
+	m.slotPairing = nil
 }
 
 // foldRetiredRuns folds bytes stopped runs received since the last fold, and
@@ -289,7 +300,7 @@ func (m *unboundedManager) foldRetiredRuns() {
 			r.slots.close()
 		}
 		r.slots.slots.Range(func(k, v any) bool {
-			m.addSlotBytes(r.owners[k.(int)], v.(*slotBytes))
+			m.addSlotBytes(r.owners[k.(int)], r.pairings[k.(int)], v.(*slotBytes))
 			return true
 		})
 		if !expired {
@@ -301,13 +312,14 @@ func (m *unboundedManager) foldRetiredRuns() {
 }
 
 // foldSlot moves a slot's pending bytes into the totals and, when the slot's
-// IP is known, that IP's tally. Caller must hold m.mu.
+// IP is known, that IP's tally, and credits them to m.usage when the slot
+// serves a helper pairing. Caller must hold m.mu.
 func (m *unboundedManager) foldSlot(idx int) {
 	if m.slots == nil {
 		return
 	}
 	if s, ok := m.slots.slots.Load(idx); ok {
-		m.addSlotBytes(m.slotOwner(idx), s.(*slotBytes))
+		m.addSlotBytes(m.slotOwner(idx), m.slotPairing[idx], s.(*slotBytes))
 	}
 }
 
@@ -316,9 +328,18 @@ func (m *unboundedManager) foldAllSlots() {
 		return
 	}
 	m.slots.slots.Range(func(k, v any) bool {
-		m.addSlotBytes(m.slotOwner(k.(int)), v.(*slotBytes))
+		m.addSlotBytes(m.slotOwner(k.(int)), m.slotPairing[k.(int)], v.(*slotBytes))
 		return true
 	})
+}
+
+// foldPending folds the pending bytes of every slot, live and retired, and
+// credits paired bytes to m.usage. It takes m.mu, so callers must not hold it.
+func (m *unboundedManager) foldPending() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.foldAllSlots()
+	m.foldRetiredRuns()
 }
 
 // slotOwner is the tally credited with a live slot's bytes: its current
@@ -332,7 +353,9 @@ func (m *unboundedManager) slotOwner(idx int) *peerTally {
 	return m.lastOwner[idx]
 }
 
-func (m *unboundedManager) addSlotBytes(t *peerTally, s *slotBytes) {
+// addSlotBytes drains s into the totals, and into m.usage for a non-empty
+// pairing, even when t is nil. Caller must hold m.mu.
+func (m *unboundedManager) addSlotBytes(t *peerTally, pairing string, s *slotBytes) {
 	down, up := s.down.Swap(0), s.up.Swap(0)
 	if down == 0 && up == 0 {
 		return
@@ -342,6 +365,9 @@ func (m *unboundedManager) addSlotBytes(t *peerTally, s *slotBytes) {
 	if t != nil {
 		t.down += down
 		t.up += up
+	}
+	if pairing != "" {
+		m.usage.Add(pairing, down+up)
 	}
 }
 
