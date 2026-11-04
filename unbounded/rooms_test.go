@@ -1,6 +1,7 @@
 package unbounded
 
 import (
+	"context"
 	"crypto/ed25519"
 	"slices"
 	"sync"
@@ -322,4 +323,43 @@ func TestWidgetWithoutVPNStatusReportsNone(t *testing.T) {
 	manager.start()
 	waitForCount(t, count, 1, 2*time.Second)
 	assert.Nil(t, opts(0).VPNStatus)
+}
+
+// blockingTickets is a source whose first fetch never finishes.
+type blockingTickets struct{ fakeTickets }
+
+func (*blockingTickets) WaitFetched(ctx context.Context) bool {
+	<-ctx.Done()
+	return false
+}
+
+// readyTickets is a source whose first fetch has finished.
+type readyTickets struct{ fakeTickets }
+
+func (*readyTickets) WaitFetched(context.Context) bool { return true }
+
+// A starting widget waits for its first ticket fetch, but no longer than
+// ticketWait, and not at all for a source that can't wait.
+func TestWaitForTicketsIsBounded(t *testing.T) {
+	prev := ticketWait
+	ticketWait = 30 * time.Millisecond
+	t.Cleanup(func() { ticketWait = prev })
+
+	start := time.Now()
+	waitForTickets(context.Background(), &blockingTickets{})
+	elapsed := time.Since(start)
+	assert.GreaterOrEqual(t, elapsed, ticketWait, "waits for the fetch")
+	assert.Less(t, elapsed, time.Second, "but no longer than ticketWait")
+
+	start = time.Now()
+	waitForTickets(context.Background(), &readyTickets{})
+	waitForTickets(context.Background(), &fakeTickets{})
+	waitForTickets(context.Background(), nil)
+	assert.Less(t, time.Since(start), ticketWait, "a finished fetch, or a source that can't wait, doesn't delay the start")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start = time.Now()
+	waitForTickets(ctx, &blockingTickets{})
+	assert.Less(t, time.Since(start), ticketWait, "a stopping widget doesn't wait")
 }

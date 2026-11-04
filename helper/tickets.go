@@ -232,15 +232,43 @@ type Source struct {
 	// afterRead, if set, runs after read releases s.mu. For tests.
 	afterRead func()
 	due       time.Time // zero: due at the first read
-	fetching  bool
-	busy      time.Duration // the backoff after the last 429 or 503 in a row
-	gen       uint64        // bumped by Invalidate; a fetch started under an older gen is stale
+	// fetched is closed once a fetch has finished, whatever its outcome. Made on first use.
+	fetched     chan struct{}
+	everFetched bool
+	fetching    bool
+	busy        time.Duration // the backoff after the last 429 or 503 in a row
+	gen         uint64        // bumped by Invalidate; a fetch started under an older gen is stale
 }
 
 // NewSource returns a Source that fetches with fetch, Fetcher.Fetch outside
 // tests. Cancelling ctx cancels a fetch in flight and stops further fetches.
 func NewSource(ctx context.Context, fetch func(context.Context) (Tickets, error)) *Source {
 	return &Source{ctx: ctx, fetch: fetch, now: time.Now}
+}
+
+// WaitFetched starts a fetch if one is due and waits until a fetch has
+// finished, whatever its outcome, or ctx is done. It reports whether one has.
+// Reads never block, so a caller that must not act on "no tickets" before
+// lantern-cloud has had a chance to answer waits here first, with a deadline.
+func (s *Source) WaitFetched(ctx context.Context) bool {
+	s.mu.Lock()
+	s.readLocked(helperticket.RoleVolunteer, false)
+	ch := s.fetchedLocked()
+	s.mu.Unlock()
+	select {
+	case <-ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// fetchedLocked returns the channel closed once a fetch has finished.
+func (s *Source) fetchedLocked() chan struct{} {
+	if s.fetched == nil {
+		s.fetched = make(chan struct{})
+	}
+	return s.fetched
 }
 
 // Inviter returns the current inviter tickets.
@@ -386,6 +414,10 @@ func (s *Source) refresh(gen uint64) {
 	s.mu.Lock()
 	now := s.now()
 	s.fetching = false
+	if !s.everFetched {
+		s.everFetched = true
+		close(s.fetchedLocked())
+	}
 	prevPairings, prevAnswered, prevUsable := s.pairings, s.answered, s.usableTagsLocked(now)
 	switch {
 	case errors.Is(err, ErrDisabled):

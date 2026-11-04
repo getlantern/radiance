@@ -301,6 +301,34 @@ type roomTickets interface {
 	AnsweredVolunteer() []string
 }
 
+// ticketWaiter is a roomTickets that can wait for its first fetch, as
+// helper.Source can.
+type ticketWaiter interface {
+	WaitFetched(ctx context.Context) bool
+}
+
+// ticketWait bounds how long a starting widget waits for its first ticket
+// fetch. A variable so tests can shorten it.
+var ticketWait = 10 * time.Second
+
+// waitForTickets gives tickets' first fetch up to ticketWait to finish before
+// the widget starts. broflake's room slot serves the pool until it has
+// tickets, and a pool consumer can then hold it for as long as it stays, so
+// a widget that started before its tickets came could keep its inviter out.
+// A source that can't wait, or a fetch that takes too long, starts the widget
+// anyway.
+func waitForTickets(ctx context.Context, tickets roomTickets) {
+	w, ok := tickets.(ticketWaiter)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, ticketWait)
+	defer cancel()
+	if !w.WaitFetched(ctx) {
+		slog.Info("Unbounded: starting before the first pairing ticket fetch finished")
+	}
+}
+
 // SetTicketSource sets where the widget gets its volunteer tickets. A widget
 // already running keeps its source until it restarts.
 func SetTicketSource(src roomTickets) {
@@ -861,6 +889,7 @@ func (m *unboundedManager) startLocked() {
 		// Helper pairing rooms: freddie offers this widget's genesis messages
 		// to its paired consumers first, and with "help others too" off to
 		// nobody else.
+		waitForTickets(ctx, tickets)
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
