@@ -520,9 +520,25 @@ func (c *Client) NewUser(ctx context.Context) (*account.UserData, error) {
 
 // Login authenticates the user with email and password.
 func (c *Client) Login(ctx context.Context, email, password string) (*account.UserData, error) {
+	return c.login(ctx, email, password, 0)
+}
+
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (c *Client) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	if expectedLegacyID <= 0 {
+		return nil, errors.New("expected account ID must be positive")
+	}
+	return c.login(ctx, email, password, expectedLegacyID)
+}
+
+func (c *Client) login(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	endpoint := accountLoginEndpoint
+	if expectedLegacyID != 0 {
+		endpoint += "/current"
+	}
 	var userData account.UserData
-	err := c.doJSON(ctx, http.MethodPost, accountLoginEndpoint,
-		EmailPasswordRequest{Email: email, Password: password}, &userData)
+	err := c.doJSON(ctx, http.MethodPost, endpoint,
+		LoginRequest{EmailPasswordRequest: EmailPasswordRequest{Email: email, Password: password}, ExpectedLegacyID: expectedLegacyID}, &userData)
 	if err != nil {
 		return nil, err
 	}

@@ -28,6 +28,7 @@ import (
 // testServer holds server-side SRP state for the mock auth server.
 type testServer struct {
 	loginResponse                                *protos.LoginResponse
+	beforeLogin                                  func()
 	salt                                         map[string][]byte
 	verifier                                     []byte
 	cache                                        map[string]string
@@ -138,6 +139,9 @@ func newTestServer(t *testing.T) (*httptest.Server, *testServer) {
 	})
 
 	mux.HandleFunc("/users/login", func(w http.ResponseWriter, r *http.Request) {
+		if state.beforeLogin != nil {
+			state.beforeLogin()
+		}
 		writeProtoResponse(w, state.loginResponse)
 	})
 
