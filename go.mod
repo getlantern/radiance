@@ -42,7 +42,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20261103194836-0116c50c68ff
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261026211804-dac6d561f52e
-	github.com/getlantern/lantern-box v0.0.199-0.20261105030718-5fd4cb6191c7
+	github.com/getlantern/lantern-box v0.0.199-0.20261105041313-b21decfe83a2
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/semconv v0.0.0-20261103162524-c0c2ac0e0a3e

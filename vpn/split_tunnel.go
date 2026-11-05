@@ -335,6 +335,10 @@ func includeDNSGuard() O.HeadlessRule {
 	}
 }
 
+func isIncludeDNSGuard(r O.HeadlessRule) bool {
+	return reflect.DeepEqual(r, includeDNSGuard())
+}
+
 // includeDNSGuardedLocked reports whether saveLocked writes [includeDNSGuard]
 // for the current filter. The caller must hold s.access.
 func (s *SplitTunnel) includeDNSGuardedLocked() bool {
@@ -468,20 +472,28 @@ func (s *SplitTunnel) loadRule() error {
 		}
 	}
 	filter := &s.rule.Rules[1].LogicalOptions
-	isGuard := func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 }
-	guarded := slices.ContainsFunc(filter.Rules, isGuard)
-	filter.Rules = slices.DeleteFunc(filter.Rules, isGuard)
+	guarded := slices.ContainsFunc(filter.Rules, isIncludeDNSGuard)
+	filter.Rules = slices.DeleteFunc(filter.Rules, isIncludeDNSGuard)
+	// Only the guard may carry a query type: routing never matches a rule that
+	// has one.
+	strayQueryType := false
+	for i := range filter.Rules {
+		if len(filter.Rules[i].DefaultOptions.QueryType) > 0 {
+			filter.Rules[i].DefaultOptions.QueryType = nil
+			strayQueryType = true
+		}
+	}
 	s.activeFilter = filter
 	s.initRuleMap()
 	s.enabled.Store(s.rule.Mode == C.LogicalTypeOr)
 	s.inverted.Store(s.activeFilter.Invert)
 
-	// The tunnel reads the file directly, so a file whose guard doesn't match
-	// its policy must be rewritten before the split-tunnel DNS rule uses it.
+	// The tunnel reads the file directly, so a file whose query types don't
+	// match its policy must be rewritten before the tunnel uses it.
 	s.access.Lock()
-	if guarded != s.includeDNSGuardedLocked() {
+	if strayQueryType || guarded != s.includeDNSGuardedLocked() {
 		if err := s.saveLocked(); err != nil {
-			s.logger.Error("Rewriting split tunnel rule file for DNS guard", "file", s.ruleFile, "error", err)
+			s.logger.Error("Rewriting split tunnel rule file", "file", s.ruleFile, "error", err)
 		}
 	}
 	s.access.Unlock()

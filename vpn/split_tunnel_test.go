@@ -790,7 +790,7 @@ func savedFilterRules(t *testing.T, path string) (rs O.PlainRuleSetCompat, filte
 func fileHasIncludeDNSGuard(t *testing.T, path string) bool {
 	t.Helper()
 	_, filter := savedFilterRules(t, path)
-	return slices.ContainsFunc(filter.Rules, func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 })
+	return slices.ContainsFunc(filter.Rules, isIncludeDNSGuard)
 }
 
 func TestIncludeDNSGuardPersistence(t *testing.T) {
@@ -827,7 +827,7 @@ func TestLoadRewritesStaleIncludeDNSGuard(t *testing.T) {
 			// Flip the guard to the state an older build or a stale file would have.
 			rs, filter := savedFilterRules(t, st.ruleFile)
 			if want {
-				filter.Rules = slices.DeleteFunc(filter.Rules, func(r O.HeadlessRule) bool { return len(r.DefaultOptions.QueryType) > 0 })
+				filter.Rules = slices.DeleteFunc(filter.Rules, isIncludeDNSGuard)
 			} else {
 				filter.Rules = append(filter.Rules, includeDNSGuard())
 			}
@@ -842,6 +842,44 @@ func TestLoadRewritesStaleIncludeDNSGuard(t *testing.T) {
 			assert.Equal(t, SplitTunnelFilter{ProcessName: []string{"app"}}, loaded.Filters())
 			assert.Equal(t, policy, loaded.Policy())
 			assert.True(t, loaded.IsEnabled())
+		})
+	}
+}
+
+func TestLoadStripsStrayQueryTypes(t *testing.T) {
+	for _, policy := range []SplitTunnelPolicy{SplitTunnelPolicyInclude, SplitTunnelPolicyExclude} {
+		t.Run(string(policy), func(t *testing.T) {
+			dir := t.TempDir()
+			st := newSplitTunnel(dir, rlog.NoOpLogger())
+			require.NoError(t, st.AddItem(TypeDomainSuffix, "example.com"))
+			require.NoError(t, st.SetPolicy(policy))
+
+			// Replace the guard with an incomplete one and add a query type to the filter rule.
+			rs, filter := savedFilterRules(t, st.ruleFile)
+			filter.Rules = slices.DeleteFunc(filter.Rules, isIncludeDNSGuard)
+			require.Len(t, filter.Rules, 1)
+			filter.Rules[0].DefaultOptions.QueryType = badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeMX)}
+			filter.Rules = append(filter.Rules, O.HeadlessRule{
+				Type:           C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{QueryType: badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeA)}},
+			})
+			buf, err := json.Marshal(rs)
+			require.NoError(t, err)
+			require.NoError(t, atomicfile.WriteFile(st.ruleFile, buf, 0o644))
+
+			loaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+			require.NoError(t, err)
+			assert.Equal(t, SplitTunnelFilter{DomainSuffix: []string{"example.com"}}, loaded.Filters())
+
+			_, filter = savedFilterRules(t, st.ruleFile)
+			want := []O.HeadlessRule{{
+				Type:           C.RuleTypeDefault,
+				DefaultOptions: O.DefaultHeadlessRule{DomainSuffix: badoption.Listable[string]{"example.com"}},
+			}}
+			if policy == SplitTunnelPolicyInclude {
+				want = append(want, includeDNSGuard())
+			}
+			assert.Equal(t, want, filter.Rules, "load must strip stray query types and restore the guard")
 		})
 	}
 }
