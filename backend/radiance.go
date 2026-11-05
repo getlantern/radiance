@@ -141,6 +141,9 @@ type LocalBackend struct {
 	helperRelay *helper.Relayer
 	// helperActivity is today's sharing time and bytes, kept on the device.
 	helperActivity *helper.ActivityTracker
+	// helperPairingKeys is the K_pair of each helper pairing, pushed by
+	// lantern-core over IPC.
+	helperPairingKeys *helper.PairingKeys
 }
 
 type Options struct {
@@ -256,6 +259,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
 	r.helperUsage = &helper.Usage{}
+	r.helperPairingKeys = &helper.PairingKeys{}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
@@ -2154,6 +2158,24 @@ func (r *LocalBackend) HelperActivity() helper.Activity {
 // volunteer now.
 func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
 	return helper.DefaultLive.Snapshot()
+}
+
+// SetHelperPairingKeys replaces this device's helper pairing keys (see
+// helper.PairingKeys.Set).
+func (r *LocalBackend) SetHelperPairingKeys(keys map[string]helper.PairingKey) {
+	r.helperPairingKeys.Set(keys)
+}
+
+// HelperPairingKeys returns the store SetHelperPairingKeys writes to; it is
+// nil on a backend not built by NewLocalBackend.
+func (r *LocalBackend) HelperPairingKeys() *helper.PairingKeys {
+	return r.helperPairingKeys
+}
+
+// UseHelperPairingKeysForTest sets the store SetHelperPairingKeys writes to,
+// for tests of the IPC route, which cannot build a full backend.
+func (r *LocalBackend) UseHelperPairingKeysForTest(p *helper.PairingKeys) {
+	r.helperPairingKeys = p
 }
 
 // SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
