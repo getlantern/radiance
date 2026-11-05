@@ -169,6 +169,7 @@ var lineBreakEscaper = strings.NewReplacer("\r", `\r`, "\n", `\n`)
 func recoverToError(err *error, operation string) {
 	if r := recover(); r != nil {
 		common.WriteRecoveredPanic(operation, r)
+		//logleak:ok recovered panic value
 		*err = fmt.Errorf("panic %s: %s", operation, lineBreakEscaper.Replace(fmt.Sprint(r)))
 	}
 }
@@ -228,7 +229,7 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	t.prefetchInviterTickets(options.Outbounds)
 
 	t.ctx = boxCtx
-	t.logFactory = lblog.NewFactory(slog.Default().Handler())
+	t.logFactory = lblog.NewFactory(rlog.RedactConnectionInfo(slog.Default().Handler()))
 	service.MustRegister[sblog.Factory](t.ctx, t.logFactory)
 
 	t.selectionHistory = lbA.NewAutoSelectHistoryStorage()
@@ -377,6 +378,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Panic starting libbox service", "panic", r)
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("panic starting libbox service: %v", r)
 		}
 	}()
@@ -1307,8 +1309,8 @@ func (s streamingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	resp, err := s.inner.RoundTrip(req)
 	if err != nil {
 		slog.Error("unbounded signaling RoundTrip error",
-			slog.String("url", req.URL.String()),
-			slog.Any("error", err))
+			"host", req.URL.Host, "path", req.URL.Path, "error", err,
+		)
 		return nil, err
 	}
 	return resp, nil

@@ -34,6 +34,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal/hostaccess"
+	rlog "github.com/getlantern/radiance/log"
 )
 
 // StatusEvent fires whenever the Client's session state changes — successful
@@ -732,7 +733,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	go c.credRotationLoop(runCtx, rotation)
 
 	slog.Info("peer client started",
-		"external_ip", externalIP,
 		"external_port", mapping.ExternalPort,
 		"internal_port", mapping.InternalPort,
 		"method", mapping.Method,
@@ -1229,6 +1229,7 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
@@ -1518,6 +1519,7 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 			if inFlight != nil {
 				_ = closeBox(inFlight)
 			}
+			//logleak:ok recovered panic value
 			box, retErr = nil, fmt.Errorf("build or start new sing-box panicked: %v", r)
 		}
 	}()
@@ -2105,6 +2107,6 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
 	ctx = hostaccess.Context(ctx)
-	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(slog.Default().Handler())))
 	return ctx
 }

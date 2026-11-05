@@ -463,13 +463,16 @@ func startRoutedPersonalProxyTestTunnel(t *testing.T) (*tunnel, func() net.Conn)
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
-	inbound, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := uint16(inbound.Addr().(*net.TCPAddr).Port)
-	require.NoError(t, inbound.Close())
 	listen := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
-	tun := startPersonalProxiesTestTunnelWith(t, []O.Inbound{{Type: C.TypeMixed, Tag: "mixed-in",
-		Options: &O.HTTPMixedInboundOptions{ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port}}}})
+	var port uint16
+	tun := startPersonalProxiesTestTunnelWith(t, func() []O.Inbound {
+		inbound, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port = uint16(inbound.Addr().(*net.TCPAddr).Port)
+		require.NoError(t, inbound.Close())
+		return []O.Inbound{{Type: C.TypeMixed, Tag: "mixed-in",
+			Options: &O.HTTPMixedInboundOptions{ListenOptions: O.ListenOptions{Listen: &listen, ListenPort: port}}}}
+	})
 	client := socks.NewClient(N.SystemDialer, M.ParseSocksaddrHostPort("127.0.0.1", port), socks.Version5, "", "")
 	dial := func() net.Conn {
 		t.Helper()

@@ -36,17 +36,17 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261103013533-7904ee7e70b5
+	github.com/getlantern/broflake v0.0.0-20261104021032-cb53ceff4301
 	github.com/getlantern/common v1.2.1-0.20261103194836-0116c50c68ff
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261026211804-dac6d561f52e
-	github.com/getlantern/lantern-box v0.0.192-0.20261103194955-3dc0500e5d0f
+	github.com/getlantern/lantern-box v0.0.199-0.20261105024054-717e14d4f4ba
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
-	github.com/getlantern/semconv v0.0.0-20261028170058-373fcfda8972
+	github.com/getlantern/semconv v0.0.0-20261103162524-c0c2ac0e0a3e
 	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
-	github.com/gofrs/flock v0.12.1
+	github.com/gofrs/flock v0.13.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
@@ -358,7 +358,7 @@ require (
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.49.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/grpc v1.83.2

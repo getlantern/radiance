@@ -301,6 +301,37 @@ type roomTickets interface {
 	AnsweredVolunteer() []string
 }
 
+// ticketWaiter is a roomTickets that can wait for its first fetch, as
+// helper.Source can.
+type ticketWaiter interface {
+	WaitFetched(ctx context.Context) bool
+}
+
+// ticketWait bounds how long a starting widget waits for its first ticket
+// fetch. A variable so tests can shorten it.
+var ticketWait = 10 * time.Second
+
+// waitForTickets gives tickets' first fetch up to ticketWait to finish before
+// the widget starts. broflake's room slot serves the pool until it has
+// tickets, and a pool consumer can then hold it for as long as it stays, so
+// a widget that started before its tickets came could keep its inviter out.
+// A source that can't wait, or a fetch that takes too long, starts the widget
+// anyway. It reports whether ctx was done during the wait, so the widget
+// shouldn't start at all.
+func waitForTickets(ctx context.Context, tickets roomTickets) (stopped bool) {
+	w, ok := tickets.(ticketWaiter)
+	if !ok {
+		return false
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, ticketWait)
+	defer cancel()
+	if w.WaitFetched(waitCtx) || ctx.Err() != nil {
+		return ctx.Err() != nil
+	}
+	slog.Info("Unbounded: starting before the first pairing ticket fetch finished")
+	return false
+}
+
 // SetTicketSource sets where the widget gets its volunteer tickets. A widget
 // already running keeps its source until it restarts.
 func SetTicketSource(src roomTickets) {
@@ -838,6 +869,9 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
+		// freddie counts outcomes for each kind of volunteer, so the apps can be
+		// compared with the browser widget and lantern-box nodes.
+		rtcOpt.VolunteerKind = common.VolunteerKindApp
 		if ucfg != nil {
 			rtcOpt.STUNBatch = donorSTUNBatch(ucfg.STUNServers)
 			if ucfg.DiscoverySrv != "" {
@@ -858,6 +892,16 @@ func (m *unboundedManager) startLocked() {
 		// Helper pairing rooms: freddie offers this widget's genesis messages
 		// to its paired consumers first, and with "help others too" off to
 		// nobody else.
+		if stopped := waitForTickets(ctx, tickets); stopped {
+			// Stopped while waiting: don't build a widget only to tear it down.
+			m.mu.Lock()
+			m.cancel = nil
+			m.done = nil
+			m.runningCfg = nil
+			m.mu.Unlock()
+			slog.Info("Unbounded: broflake widget proxy stopped before it started")
+			return
+		}
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()

@@ -922,3 +922,27 @@ func TestFetcherFollowsSameOriginRedirects(t *testing.T) {
 	assert.JSONEq(t, `{"paired_bytes":[{"pairing_id":"`+usagePairingA+`","bytes":70}]}`, body)
 	assert.Empty(t, u.Take())
 }
+
+// WaitFetched starts the first fetch and waits for it to finish, whatever its
+// outcome, and a later call returns at once.
+func TestSourceWaitFetched(t *testing.T) {
+	f := &fakeFetch{results: make(chan fetchResult)}
+	src := NewSource(context.Background(), f.fetch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	assert.False(t, src.WaitFetched(ctx), "no fetch has finished yet")
+	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, time.Millisecond)
+
+	done := make(chan bool)
+	go func() { done <- src.WaitFetched(context.Background()) }()
+	f.results <- fetchResult{err: errors.New("unreachable")}
+	select {
+	case ok := <-done:
+		assert.True(t, ok, "a failed fetch has still finished")
+	case <-time.After(time.Second):
+		t.Fatal("WaitFetched did not return after the fetch finished")
+	}
+	assert.True(t, src.WaitFetched(context.Background()))
+	assert.Equal(t, int32(1), f.calls.Load(), "waiting again does not fetch again before the retry is due")
+}
