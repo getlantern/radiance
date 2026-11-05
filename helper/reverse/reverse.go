@@ -1,6 +1,6 @@
 // Package reverse derives per-pairing short IDs and seals the inviter's route
 // for its paired helper under K_pair, so the relay that carries the route
-// learns nothing from it.
+// learns none of its contents.
 package reverse
 
 import (
@@ -17,14 +17,23 @@ import (
 )
 
 const (
+	// BlobVersion is the blob format this package seals and opens; a peer on
+	// another version rejects every blob with ErrBlob.
 	BlobVersion = 1
 	// MaxBlobLen keeps a register request carrying one blob per pairing inside
 	// lantern-cloud's request body limit.
-	MaxBlobLen    = 256
-	MaxDomainLen  = 63
-	MaxBlobAge    = 10 * time.Minute
+	MaxBlobLen = 256
+	// MaxDomainLen is the longest cover domain a route can carry.
+	MaxDomainLen = 63
+	// MaxBlobAge is the oldest a blob can be and still open; older blobs fail
+	// with ErrStale.
+	MaxBlobAge = 10 * time.Minute
+	// MaxBlobFuture is how far ahead of now a blob's issue time can be and
+	// still open; further ahead fails with ErrFuture.
 	MaxBlobFuture = 2 * time.Minute
-	EpochLength   = 24 * time.Hour
+	// EpochLength is the lifetime of a short ID; peers using different values
+	// derive different short IDs.
+	EpochLength = 24 * time.Hour
 )
 
 var (
@@ -53,7 +62,8 @@ type Route struct {
 	PublicKey      [32]byte
 	CertSPKISHA256 [32]byte
 	CoverDomain    string
-	// IssuedAt is sealed in whole Unix seconds.
+	// IssuedAt is sealed in whole Unix seconds, and Open returns it in the
+	// local time zone.
 	IssuedAt time.Time
 }
 
@@ -157,7 +167,8 @@ func additionalData(pairingID string) []byte {
 
 // Open decrypts and validates a blob sealed by Seal for the same kPair and
 // pairingID. It returns an error wrapping ErrBlob, ErrStale or ErrFuture when
-// the blob is rejected.
+// the blob is rejected, and an error wrapping none of them when kPair is not
+// 32 bytes.
 func Open(kPair []byte, pairingID string, blob []byte, now time.Time) (Route, error) {
 	aead, err := chacha20poly1305.NewX(kPair)
 	if err != nil {
