@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/events"
-	"github.com/getlantern/radiance/portforward"
 )
 
 // dnsFailure is what a dial looks like when nothing can be resolved.

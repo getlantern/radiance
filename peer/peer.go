@@ -28,11 +28,11 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
-	"github.com/getlantern/radiance/portforward"
 )
 
 // StatusEvent fires whenever the Client's session state changes — successful
@@ -76,7 +76,7 @@ const (
 )
 
 type portForwarder interface {
-	MapPort(ctx context.Context, internalPort uint16, description string) (*portforward.Mapping, error)
+	MapPort(ctx context.Context, protocol string, internalPort uint16, description string) (*portforward.Mapping, error)
 	UnmapPort(ctx context.Context) error
 	StartRenewal(ctx context.Context)
 	ExternalIP(ctx context.Context) (string, error)
@@ -516,10 +516,15 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		return fmt.Errorf("discover gateway: %w", err)
 	}
 	internalPort := pickInternalPort()
-	mapping, err := fwd.MapPort(ctx, internalPort, "Lantern Share My Connection")
+	mapping, err := fwd.MapPort(ctx, portforward.TCP, internalPort, "Lantern Share My Connection")
 	if err != nil {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
+	// Renew from the moment the port is mapped: a PCP or NAT-PMP gateway can
+	// grant a lease shorter than registering, starting the box and verifying
+	// take. Not tied to the caller's ctx, which ends with Start: UnmapPort,
+	// which both rollback and Stop call, stops the renewal.
+	fwd.StartRenewal(context.Background())
 
 	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
@@ -722,7 +727,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		rotation = peerCredRotationInterval
 	}
 
-	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
 	go c.credRotationLoop(runCtx, rotation)
 
@@ -1057,6 +1061,24 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 	return true
 }
 
+// sendHeartbeat sends one heartbeat carrying the traffic relayed since the
+// last one that succeeded. A heartbeat that fails keeps that traffic for the
+// next, except on a 400 for a heartbeat that carried traffic: a server that
+// predates the usage fields rejects them, so the traffic is dropped and the
+// heartbeat sent again without it.
+func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
+	usage := c.relay.takeUsage()
+	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
+	if err == nil {
+		return resp, nil
+	}
+	if (usage.RelayedBytes > 0 || len(usage.PairedBytes) > 0) && isBadRequest(err) {
+		return c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), RelayUsage{})
+	}
+	c.relay.restoreUsage(usage)
+	return resp, err
+}
+
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
 // tearing down resources. The channel is passed in rather than read off the
 // Client because Stop nils c.runDone before waiting on its local copy.
@@ -1077,7 +1099,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			resp, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			resp, err := c.sendHeartbeat(hbCtx, routeID)
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
@@ -1123,6 +1145,11 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+func isBadRequest(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 400
 }
 
 // credRotationLoop periodically rotates the peer's samizdat credentials
