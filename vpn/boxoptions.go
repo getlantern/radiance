@@ -630,11 +630,12 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	}
 }
 
-// helperTags returns the tags in tags that are helper outbounds.
+// helperTags returns the tags in tags that are helper outbounds, reverse
+// ones included.
 func helperTags(tags []string) []string {
 	var out []string
 	for _, tag := range tags {
-		if lbA.IsHelperTag(tag) {
+		if lbA.IsHelperTag(tag) || lbA.IsReverseHelperTag(tag) {
 			out = append(out, tag)
 		}
 	}

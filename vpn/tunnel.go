@@ -892,7 +892,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		replaced := prev != nil && cur != nil && cur != prev
 		if replaced {
 			err = nil
-			if lbA.IsHelperTag(outbound.Tag) {
+			if lbA.IsHelperTag(outbound.Tag) || lbA.IsReverseHelperTag(outbound.Tag) {
 				if t.replacedHelpers == nil {
 					t.replacedHelpers = make(map[string]struct{})
 				}
@@ -1038,7 +1038,8 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 // reconcileHelpers makes the tunnel's helper outbounds those in helpers:
 // it removes the helpers in the selection groups that helpers does not name,
 // adds the missing ones and swaps in those whose options changed, all under
-// one hold of t.outboundMu. helpers must hold only helper servers.
+// one hold of t.outboundMu. helpers must hold only helper servers. Reverse
+// outbounds are left alone: setReverseOutbounds owns them.
 func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
@@ -1053,7 +1054,7 @@ func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
 			continue
 		}
 		for _, tag := range helperTags(group.All()) {
-			if !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
+			if !lbA.IsReverseHelperTag(tag) && !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
 				stale = append(stale, tag)
 			}
 		}
@@ -1150,10 +1151,11 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	}
 
 	// collect tags present in the current group but absent from the new config
+	// (reverse outbounds are never in a config: setReverseOutbounds owns them)
 	newTags := list.Tags()
 	var toRemove []string
 	for _, tag := range selector.All() {
-		if !slices.Contains(newTags, tag) {
+		if !lbA.IsReverseHelperTag(tag) && !slices.Contains(newTags, tag) {
 			toRemove = append(toRemove, tag)
 		}
 	}

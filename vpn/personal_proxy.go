@@ -130,14 +130,18 @@ func (t *tunnel) roomsConsumersLocked(selector lbA.MutableOutboundGroup) []strin
 }
 
 // personalProxyMembersLocked returns what friend's group holds now: its direct
-// outbound if the selector offers it, and the rooms consumers if they may reach
-// it. The caller must hold t.outboundMu.
+// and reverse outbounds if the selector offers them, and the rooms consumers if
+// they may reach it. The caller must hold t.outboundMu.
 func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, friend string) []string {
 	var members []string
 	if slices.Contains(selector.All(), friend) {
 		if out := t.liveOutbound(friend); out != nil && out.Type() != roomsConsumerType {
 			members = append(members, friend)
 		}
+	}
+	if reverse := lbA.ReverseHelperTag(friend); reverse != "" && slices.Contains(selector.All(), reverse) &&
+		t.liveOutbound(reverse) != nil {
+		members = append(members, reverse)
 	}
 	if roomsReachable(t.inviterTickets, friend) {
 		members = append(members, t.roomsConsumersLocked(selector)...)
@@ -450,6 +454,9 @@ type PersonalProxyStatus struct {
 	// Direct reports whether the config carries the friend's direct outbound,
 	// which it does while the friend has a live route.
 	Direct bool `json:"direct"`
+	// Reverse reports whether this device holds the friend's reverse
+	// outbound, through which the friend dials in to carry its traffic.
+	Reverse bool `json:"reverse"`
 	// Rooms reports whether this device has a rooms consumer and an inviter
 	// ticket for the friend's pairing.
 	Rooms bool `json:"rooms"`

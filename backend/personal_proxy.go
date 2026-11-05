@@ -19,6 +19,7 @@ import (
 // friend.
 type friendReach struct {
 	direct   bool // the friend's direct outbound is a managed server
+	reverse  bool // the VPN client holds the friend's reverse outbound
 	consumer bool // a rooms consumer is
 	tickets  bool // the ticket source holds an inviter ticket for the friend's pairing
 	answered bool // the ticket source has been answered
@@ -28,12 +29,12 @@ type friendReach struct {
 // source is first answered a consumer counts, so a selection persisted across
 // a restart is not dropped before its tickets can arrive.
 func (f friendReach) live() bool {
-	return f.direct || (f.consumer && (f.tickets || !f.answered))
+	return f.direct || f.reverse || (f.consumer && (f.tickets || !f.answered))
 }
 
 // selectable reports whether the friend may be newly selected.
 func (f friendReach) selectable() bool {
-	return f.direct || (f.consumer && f.tickets)
+	return f.direct || f.reverse || (f.consumer && f.tickets)
 }
 
 func (r *LocalBackend) friendReach(friend string) friendReach {
@@ -48,6 +49,7 @@ func (r *LocalBackend) friendReach(friend string) friendReach {
 			f.direct = true
 		}
 	}
+	f.reverse = slices.Contains(r.reverseOutbounds(), lbA.ReverseHelperTag(friend))
 	f.answered = true
 	if f.consumer && r.helperTickets != nil {
 		var tickets []string
@@ -97,6 +99,11 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 			tags = append(tags, srv.Tag)
 		}
 	}
+	for _, reverse := range r.reverseOutbounds() {
+		if friend, ok := lbA.HelperTagOfReverse(reverse); ok {
+			tags = append(tags, friend)
+		}
+	}
 	if r.helperTickets != nil {
 		tags = append(tags, r.helperTickets.InviterTags()...)
 	}
@@ -105,13 +112,21 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	statuses := make([]vpn.PersonalProxyStatus, 0, len(tags))
 	for _, tag := range tags {
 		f := r.friendReach(tag)
-		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Rooms: f.consumer && f.tickets}
+		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Reverse: f.reverse, Rooms: f.consumer && f.tickets}
 		if f.direct && r.vpnClient != nil {
 			status.DirectDelayMs = r.vpnClient.PersonalProxyMember(tag).DirectDelay
 		}
 		statuses = append(statuses, status)
 	}
 	return statuses
+}
+
+// reverseOutbounds returns the reverse tags the VPN client holds.
+func (r *LocalBackend) reverseOutbounds() []string {
+	if r.vpnClient == nil {
+		return nil
+	}
+	return r.vpnClient.ReverseOutbounds()
 }
 
 // fallbackFor is where a selection of tag goes once the manager no longer

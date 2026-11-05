@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal/redact"
@@ -80,6 +84,11 @@ type VPNClient struct {
 	// inviterTickets, if set, gives each tunnel's Unbounded consumer this
 	// device's helper inviter tickets. Guarded by mu.
 	inviterTickets InviterTickets
+
+	// reversePortal and reverseTags are the reverse direct state each tunnel
+	// is given when it comes up. Guarded by mu.
+	reversePortal *samizdatreverse.PortalConfig
+	reverseTags   []string
 
 	mu sync.RWMutex
 }
@@ -236,6 +245,10 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
 			c.tunnel = t
+			if err := c.restoreReverseLocked(); err != nil {
+				// The error can name a reverse tag or the portal's port.
+				c.logger.Warn("Failed to restore reverse direct state on the new tunnel")
+			}
 			c.setStatus(Connected, nil)
 			c.logger.Debug("Tunnel started")
 			return nil
@@ -495,6 +508,82 @@ func (c *VPNClient) ReconcileHelpers(helpers servers.ServerList) error {
 		return ErrTunnelNotConnected
 	}
 	return c.tunnel.reconcileHelpers(helpers)
+}
+
+// SetReversePortal creates the portal inbound on first use and configures
+// it. A nil cfg removes the portal and every reverse outbound, and forgets the
+// tags SetReverseOutbounds kept. cfg is kept and applied to each tunnel that
+// comes up; with no tunnel running it is only kept, and SetReversePortal
+// returns nil. A configure error leaves cfg kept.
+func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cfg == nil {
+		c.reversePortal, c.reverseTags = nil, nil
+	} else {
+		kept := *cfg
+		kept.Pairings = maps.Clone(cfg.Pairings)
+		c.reversePortal = &kept
+	}
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.setReversePortal(c.reversePortal)
+}
+
+// SetReverseOutbounds makes the reverse outbounds exactly this set of
+// reverse tags (lbA.IsReverseHelperTag), adding and removing as needed, and
+// resyncs the groups. Like SetReversePortal, it keeps tags for later tunnels
+// and returns nil with no tunnel running. A set holding any other tag is
+// refused and changes nothing.
+func (c *VPNClient) SetReverseOutbounds(tags []string) error {
+	for _, tag := range tags {
+		if !lbA.IsReverseHelperTag(tag) {
+			return errors.New("not a reverse helper tag")
+		}
+	}
+	tags = slices.Compact(slices.Sorted(slices.Values(tags)))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reverseTags = tags
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.setReverseOutbounds(tags)
+}
+
+// ReverseOutbounds returns the reverse tags last given to SetReverseOutbounds,
+// whether or not a tunnel holds them.
+func (c *VPNClient) ReverseOutbounds() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return slices.Clone(c.reverseTags)
+}
+
+// RebindReversePortal rebinds the running portal's listener to the current
+// default interface (see samizdatreverse.Portal.Rebind). No-op without a
+// tunnel or portal.
+func (c *VPNClient) RebindReversePortal() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.rebindReversePortal()
+}
+
+// restoreReverseLocked gives the tunnel the kept reverse direct state. The
+// caller must hold c.mu.
+func (c *VPNClient) restoreReverseLocked() error {
+	if c.reversePortal == nil && len(c.reverseTags) == 0 {
+		return nil
+	}
+	var errs []error
+	if c.reversePortal != nil {
+		errs = append(errs, c.tunnel.setReversePortal(c.reversePortal))
+	}
+	errs = append(errs, c.tunnel.setReverseOutbounds(c.reverseTags))
+	return errors.Join(errs...)
 }
 
 func (c *VPNClient) RemoveOutbounds(tags []string) error {

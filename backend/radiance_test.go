@@ -400,6 +400,13 @@ func TestEndedHelpersAreThoseTheConfigNoLongerCarries(t *testing.T) {
 		"Lantern helpers the config dropped; a user server is not the config's to end")
 }
 
+// Reverse outbounds belong to the reverse client, not to the config.
+func TestEndedHelpersExcludeReverseOutbounds(t *testing.T) {
+	rev := lbA.ReverseHelperTag("helper-0123456789ab")
+	existing := []*servers.Server{newTestServer(rev, true, false, time.Time{})}
+	assert.Empty(t, endedHelpers(existing, map[string]struct{}{}))
+}
+
 func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
 	options := option.Options{
 		Outbounds: []option.Outbound{
@@ -1564,6 +1571,17 @@ func TestPersonalProxiesServerExistsWhileAHelperDoes(t *testing.T) {
 	for _, s := range r.AllServers() {
 		assert.NotEqual(t, vpn.PersonalProxiesTag, s.Tag, "never listed among servers")
 	}
+}
+
+func TestPersonalProxiesServerExistsWhileAReverseOutboundDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "lantern-1")
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{lbA.ReverseHelperTag("helper-0123456789ab")}))
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.True(t, found)
+	require.NoError(t, r.vpnClient.SetReverseOutbounds(nil))
+	_, found = r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found)
 }
 
 func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {

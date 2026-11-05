@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
@@ -315,6 +316,23 @@ func TestPersonalProxyStatus(t *testing.T) {
 		{Tag: ppFriendA, Direct: true, Rooms: true},
 		{Tag: ppFriendB, Rooms: true},
 	}, r.PersonalProxyStatus())
+}
+
+// A friend's reverse outbound is part of that friend, never a friend of its
+// own, and alone makes the friend selectable.
+func TestPersonalProxyStatusFoldsReverseOutboundsIntoTheirFriend(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA, "lantern-1"), false))
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{
+		lbA.ReverseHelperTag(ppFriendA), lbA.ReverseHelperTag(ppFriendB),
+	}))
+	assert.Equal(t, []vpn.PersonalProxyStatus{
+		{Tag: ppFriendA, Direct: true, Reverse: true},
+		{Tag: ppFriendB, Reverse: true},
+	}, r.PersonalProxyStatus())
+	_, found := r.GetServerByTag(vpn.PersonalProxySelection(ppFriendB))
+	assert.True(t, found)
+	assert.NoError(t, r.checkConnectSelection(vpn.PersonalProxySelection(ppFriendB)))
 }
 
 // A connect may restore the persisted friend before its tickets are known,
