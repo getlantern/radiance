@@ -1616,15 +1616,25 @@ func ensurePeerOutboundsBypassVPN(options string) (string, error) {
 // doesn't listen on (or, worse, one it does listen on for another
 // service). Out-of-range / unparseable values are logged at Warn and
 // the resolution falls through to the next source as if unset.
-func pickManualForwarder() portForwarder {
+func pickManualForwarder() portForwarder { return chooseManualForwarder(true) }
+
+// chooseManualForwarder is pickManualForwarder; with logPort false its log
+// lines carry neither the port nor a rejected value.
+func chooseManualForwarder(logPort bool) portForwarder {
+	attr := func(key string, value any) []any {
+		if !logPort {
+			return nil
+		}
+		return []any{key, value}
+	}
 	if raw := settings.GetInt(settings.PeerManualPortKey); raw != 0 {
 		if raw < 1 || raw > 65535 {
 			slog.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
-				"value", raw)
+				attr("value", raw)...)
 		} else {
 			port := uint16(raw)
 			slog.Info("peer client using manual port forward",
-				"port", port, "source", "setting")
+				append(attr("port", port), "source", "setting")...)
 			return portforward.NewManualForwarder(port)
 		}
 	}
@@ -1632,10 +1642,10 @@ func pickManualForwarder() portForwarder {
 		port, err := portforward.ParseManualPort(raw)
 		if err != nil {
 			slog.Warn("ignoring invalid "+env.PeerExternalPort.String(),
-				"value", raw, "err", err)
+				append(attr("value", raw), attr("err", err)...)...)
 		} else {
 			slog.Info("peer client using manual port forward",
-				"port", port, "source", env.PeerExternalPort.String())
+				append(attr("port", port), "source", env.PeerExternalPort.String())...)
 			return portforward.NewManualForwarder(port)
 		}
 	}
@@ -1643,8 +1653,17 @@ func pickManualForwarder() portForwarder {
 }
 
 func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
-	if fwd := pickManualForwarder(); fwd != nil {
-		return fwd, nil
+	return newForwarder(ctx, pickManualForwarder())
+}
+
+// newQuietForwarder is newDefaultForwarder without the manual port in the log.
+func newQuietForwarder(ctx context.Context) (portForwarder, error) {
+	return newForwarder(ctx, chooseManualForwarder(false))
+}
+
+func newForwarder(ctx context.Context, manual portForwarder) (portForwarder, error) {
+	if manual != nil {
+		return manual, nil
 	}
 	// Explicitly return a nil interface on error — `return
 	// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)

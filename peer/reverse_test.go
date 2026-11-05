@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/helper/reverse"
 )
@@ -229,9 +231,10 @@ type revServer struct {
 	deregisters int
 	// next answers register calls in order; once used up, every call gets
 	// fallback.
-	next     []revResponse
-	fallback revResponse
-	block    chan struct{}
+	next        []revResponse
+	fallback    revResponse
+	deregStatus int
+	block       chan struct{}
 }
 
 func revTag(pairingID string) string {
@@ -280,9 +283,13 @@ func newRevServer(t *testing.T, log *revLog) *revServer {
 		case "/v1/helper/reverse/deregister":
 			s.mu.Lock()
 			s.deregisters++
+			status := s.deregStatus
 			s.mu.Unlock()
 			log.add("deregister")
-			w.WriteHeader(http.StatusOK)
+			if status == 0 {
+				status = http.StatusOK
+			}
+			w.WriteHeader(status)
 		default:
 			http.NotFound(w, r)
 		}
@@ -389,7 +396,7 @@ func TestReverseRegistersSealedRoute(t *testing.T) {
 	e.srv.queue(revResponse{observedIP: "198.51.100.7"})
 
 	assert.Equal(t, defaultReverseRegisterInterval, e.cycle(t))
-	assert.Equal(t, []string{"map", "register:0", "portal", "outbounds:0", "register:1", "portal", "outbounds:1"}, e.log.take())
+	assert.Equal(t, []string{"register:0", "map", "portal", "outbounds:0", "register:1", "portal", "outbounds:1"}, e.log.take())
 
 	ports := e.fwd.mappedPorts()
 	require.Len(t, ports, 1)
@@ -449,7 +456,7 @@ func TestReverseKeepsOneAddressPerFamily(t *testing.T) {
 	e.srv.setFallback(revResponse{observedIP: "2001:db8::7"})
 
 	e.cycle(t)
-	assert.Equal(t, []string{"map", "register:0", "portal", "outbounds:0", "register:1", "portal", "outbounds:1", "register:1"}, e.log.take())
+	assert.Equal(t, []string{"register:0", "map", "portal", "outbounds:0", "register:1", "portal", "outbounds:1", "register:1"}, e.log.take())
 	internal := e.fwd.mappedPorts()[0]
 	r := openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
 	assert.ElementsMatch(t, []netip.AddrPort{
@@ -476,9 +483,8 @@ func TestReverseNoAddressDeregisters(t *testing.T) {
 	e.srv.setFallback(revResponse{observedIP: ""})
 
 	e.cycle(t)
-	assert.Equal(t, []string{"map", "register:0", "outbounds:0"}, e.log.take())
-	assert.True(t, e.fwd.wasMapped())
-	assert.False(t, e.fwd.wasUnmapped())
+	assert.Equal(t, []string{"register:0", "outbounds:0"}, e.log.take())
+	assert.False(t, e.fwd.wasMapped(), "no port is mapped without an address to advertise")
 
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
@@ -488,14 +494,14 @@ func TestReverseNoAddressDeregisters(t *testing.T) {
 	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
-	assert.Equal(t, []string{"register:0", "portal", "register:1", "portal", "outbounds:1"}, e.log.take())
+	assert.Equal(t, []string{"register:0", "map", "portal", "register:1", "portal", "outbounds:1"}, e.log.take())
 
 	// Losing every address withdraws the registered route and the outbounds.
 	e.c.NetworkChanged()
 	e.srv.setFallback(revResponse{observedIP: ""})
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
-	assert.Equal(t, []string{"rebind", "unmap", "map", "register:0", "deregister", "outbounds:0"}, e.log.take())
+	assert.Equal(t, []string{"deregister", "rebind", "unmap", "register:0", "outbounds:0"}, e.log.take())
 }
 
 func TestReverseRotationKeepsPortAndCoverDomain(t *testing.T) {
@@ -534,7 +540,7 @@ func TestReverseNetworkChangedRemaps(t *testing.T) {
 		t.Fatal("NetworkChanged did not ask for a cycle")
 	}
 	e.cycle(t)
-	assert.Equal(t, []string{"rebind", "unmap", "map", "register:0", "register:1"}, e.log.take())
+	assert.Equal(t, []string{"deregister", "rebind", "unmap", "register:0", "map", "register:1"}, e.log.take())
 	ports := e.fwd.mappedPorts()
 	require.Len(t, ports, 2)
 	assert.Equal(t, ports[0], ports[1], "the portal keeps its port across a remap")
@@ -603,7 +609,7 @@ func TestReverseDisabledIdlesAnHour(t *testing.T) {
 	e.srv.setFallback(revResponse{status: http.StatusNotFound})
 
 	assert.Equal(t, reverseDisabledWait, e.cycle(t))
-	assert.Equal(t, []string{"map", "register:0"}, e.log.take())
+	assert.Equal(t, []string{"register:0"}, e.log.take(), "a disabled feature maps no port")
 
 	e.clock.Advance(30 * time.Minute)
 	e.c.PairingsChanged()
@@ -651,8 +657,8 @@ func TestReverseMapFailureRetriesNextTick(t *testing.T) {
 	e.keys.set("p1")
 	e.fwd.mapErr = errors.New("no gateway at 192.168.1.1")
 	assert.Equal(t, defaultReverseRegisterInterval, e.cycle(t))
-	assert.Equal(t, []string{"map-failed", "unmap"}, e.log.take())
-	assert.Zero(t, e.srv.registerCount())
+	assert.Equal(t, []string{"register:0", "map-failed", "unmap"}, e.log.take())
+	assert.Empty(t, e.srv.lastRegister(), "no route is registered without a mapping")
 
 	e.fwd.mapErr = nil
 	e.cycle(t)
@@ -664,12 +670,12 @@ func TestReverseBoxErrorsRetryNextTick(t *testing.T) {
 	e.keys.set("p1")
 	e.box.setErrs(errors.New("bind failed"), nil)
 	assert.Equal(t, defaultReverseRegisterInterval, e.cycle(t))
-	assert.Equal(t, []string{"map", "register:0", "portal", "register:1", "portal"}, e.log.take())
+	assert.Equal(t, []string{"register:0", "map", "portal"}, e.log.take(), "no route while no portal serves it")
 
 	e.box.setErrs(nil, errors.New("outbounds failed"))
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
-	assert.Equal(t, []string{"portal", "outbounds:1", "register:1"}, e.log.take())
+	assert.Equal(t, []string{"portal", "outbounds:0", "register:1", "portal", "outbounds:1"}, e.log.take())
 
 	e.box.setErrs(nil, nil)
 	e.clock.Advance(defaultReverseRegisterInterval)
@@ -760,3 +766,118 @@ func TestReverseCoverDomainsFit(t *testing.T) {
 		assert.False(t, strings.ContainsAny(d, " /:"))
 	}
 }
+
+func TestReverseFailedRotationKeepsAdvertisingTheRunningPortal(t *testing.T) {
+	e := newRevEnv(t)
+	key := e.keys.set("p1")
+	e.cycle(t)
+	running := e.box.lastPortal()
+
+	e.box.setErrs(errors.New("bind failed"), nil)
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	r := openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
+	assert.Equal(t, x25519Public(t, running.PrivateKey), r.PublicKey)
+
+	e.box.setErrs(nil, nil)
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	r = openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
+	assert.Equal(t, x25519Public(t, e.box.lastPortal().PrivateKey), r.PublicKey)
+	assert.NotEqual(t, x25519Public(t, running.PrivateKey), r.PublicKey)
+}
+
+func TestReverseDisabledTearsDown(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+	e.log.take()
+
+	e.srv.setFallback(revResponse{status: http.StatusNotFound})
+	e.clock.Advance(defaultReverseRegisterInterval)
+	assert.Equal(t, reverseDisabledWait, e.cycle(t))
+	assert.Equal(t, []string{"register:1", "clear-portal", "unmap"}, e.log.take())
+
+	e.c.NetworkChanged()
+	e.clock.Advance(59 * time.Minute)
+	e.cycle(t)
+	assert.Empty(t, e.log.take())
+
+	// Stop has nothing left to withdraw.
+	e.c.teardown()
+	assert.Empty(t, e.log.take())
+}
+
+func TestReverseDeregisterErrorsBackOff(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		wait   time.Duration
+	}{
+		{http.StatusNotFound, reverseDisabledWait},
+		{http.StatusTooManyRequests, 2 * defaultReverseRegisterInterval},
+		{http.StatusServiceUnavailable, 2 * defaultReverseRegisterInterval},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			e := newRevEnv(t)
+			e.keys.set("p1")
+			e.cycle(t)
+			e.keys.remove("p1")
+			e.srv.mu.Lock()
+			e.srv.deregStatus = tc.status
+			e.srv.mu.Unlock()
+			e.log.take()
+
+			assert.Equal(t, tc.wait, e.cycle(t))
+			assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take())
+			for range 3 {
+				e.clock.Advance(tc.wait / 4)
+				e.cycle(t)
+			}
+			assert.Empty(t, e.log.take(), "no calls while held off")
+
+			e.clock.Advance(tc.wait)
+			e.cycle(t)
+			if tc.status == http.StatusNotFound {
+				assert.Empty(t, e.log.take(), "a disabled server keeps no route to withdraw")
+			} else {
+				assert.Equal(t, []string{"deregister"}, e.log.take())
+			}
+		})
+	}
+}
+
+func TestReverseNeverLogsTheManualPort(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
+	var buf strings.Builder
+	var bufMu sync.Mutex
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+		bufMu.Lock()
+		defer bufMu.Unlock()
+		return buf.Write(p)
+	}), &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	e := newRevEnv(t)
+	e.c.cfg.NewForwarder = nil
+	e.c = NewReverseClient(ReverseConfig{API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now})
+	e.keys.set("p1")
+	e.cycle(t)
+	e.c.NetworkChanged()
+	e.cycle(t)
+	require.Equal(t, uint16(41234), e.box.lastPortal().ListenPort)
+
+	bufMu.Lock()
+	defer bufMu.Unlock()
+	assert.Contains(t, buf.String(), "manual port forward")
+	assert.NotContains(t, buf.String(), "41234")
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

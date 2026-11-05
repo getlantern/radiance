@@ -119,7 +119,7 @@ type reverseState struct {
 // NewReverseClient returns a stopped ReverseClient.
 func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = newDefaultForwarder
+		cfg.NewForwarder = newQuietForwarder
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -141,7 +141,8 @@ func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 }
 
 // Start starts serving in the background and returns at once; it does no
-// network I/O itself. Starting a started client does nothing.
+// network I/O itself. Starting a started client does nothing. It returns an
+// error only when API, Keys or Box is nil.
 func (c *ReverseClient) Start(context.Context) error {
 	if c.cfg.API == nil || c.cfg.Keys == nil || c.cfg.Box == nil {
 		return errors.New("peer: ReverseConfig needs API, Keys and Box")
@@ -179,8 +180,8 @@ func (c *ReverseClient) Stop(ctx context.Context) {
 	}
 }
 
-// NetworkChanged forgets the observed addresses, rebinds the portal, maps the
-// port again and registers at once.
+// NetworkChanged forgets the observed addresses, deregisters, rebinds the
+// portal, maps the port again and registers at once.
 func (c *ReverseClient) NetworkChanged() {
 	c.netChanged.Store(true)
 	c.wake()
@@ -220,7 +221,7 @@ func (c *ReverseClient) teardown() {
 	ctx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 	defer cancel()
 	s := &c.st
-	c.deregister(ctx)
+	c.deregister(ctx, c.cfg.Now())
 	c.clearBox()
 	c.unmap(ctx)
 	s.v4, s.v6 = observedAddr{}, observedAddr{}
@@ -231,26 +232,30 @@ func (c *ReverseClient) teardown() {
 // cycle does one round of work and returns how long to wait before the next.
 func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 	s := &c.st
+	now := c.cfg.Now()
+	gated := now.Before(s.apiNotBefore)
 	if c.netChanged.Swap(false) {
 		s.v4, s.v6 = observedAddr{}, observedAddr{}
+		if !gated {
+			c.deregister(ctx, now)
+		}
 		if s.boxSet {
 			if err := c.cfg.Box.RebindReversePortal(); err != nil {
 				slog.Warn("reverse: could not rebind the portal")
 			}
 		}
 		c.unmap(ctx)
+		gated = now.Before(s.apiNotBefore)
 	}
-	now := c.cfg.Now()
-	gated := now.Before(s.apiNotBefore)
 	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
 	if len(ids) == 0 {
 		if !gated {
-			c.deregister(ctx)
+			c.deregister(ctx, now)
 		}
 		c.clearBox()
 		c.unmap(ctx)
 		s.tags = nil
-		return c.cfg.RegisterInterval
+		return c.untilNextCycle(now)
 	}
 	if gated {
 		return s.apiNotBefore.Sub(now)
@@ -268,6 +273,21 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 			delete(s.tags, id)
 		}
 	}
+	s.expire(now, c.cfg.AddrMemory)
+	// The empty register comes before any mapping, so a disabled feature
+	// never opens a port.
+	if s.mapping == nil || !s.hasAddr() {
+		resp, err := c.cfg.API.Register(ctx, nil)
+		if err != nil {
+			return c.apiFailed(ctx, err, now)
+		}
+		s.backoff = 0
+		s.observe(resp.ObservedIP, now)
+		if !s.hasAddr() {
+			c.withdraw(ctx, now)
+			return c.untilNextCycle(now)
+		}
+	}
 	if s.mapping == nil && !c.mapPort(ctx) {
 		return c.cfg.RegisterInterval
 	}
@@ -279,24 +299,18 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		}
 		s.creds, s.credsAt = &creds, now
 	}
-	s.expire(now, c.cfg.AddrMemory)
-	if !s.hasAddr() {
-		resp, err := c.cfg.API.Register(ctx, nil)
-		if err != nil {
-			return c.apiFailed(ctx, err, now)
-		}
-		s.backoff = 0
-		s.observe(resp.ObservedIP, now)
-		if !s.hasAddr() {
-			c.withdraw(ctx)
-			return c.cfg.RegisterInterval
-		}
-	}
 	if slices.ContainsFunc(s.registeredIDs, func(id string) bool { return !slices.Contains(ids, id) }) {
-		c.deregister(ctx)
+		if c.deregister(ctx, now); now.Before(s.apiNotBefore) {
+			return s.apiNotBefore.Sub(now)
+		}
 	}
 	c.applyBox(ids, now)
 	for range 1 + maxReverseReregisters {
+		// Routes advertise the identity the running portal holds, which a
+		// failed reconfigure leaves at the previous credentials.
+		if s.portal == nil || s.portal.ListenPort != s.mapping.InternalPort {
+			return c.cfg.RegisterInterval
+		}
 		blobs := c.seal(ids, now)
 		if len(blobs) == 0 {
 			return c.cfg.RegisterInterval
@@ -317,6 +331,15 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		if !s.observe(resp.ObservedIP, now) {
 			break
 		}
+	}
+	return c.cfg.RegisterInterval
+}
+
+// untilNextCycle is the register interval, or longer while API calls are
+// held off.
+func (c *ReverseClient) untilNextCycle(now time.Time) time.Duration {
+	if wait := c.st.apiNotBefore.Sub(now); wait > c.cfg.RegisterInterval {
+		return wait
 	}
 	return c.cfg.RegisterInterval
 }
@@ -344,7 +367,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 		s.lastPort = 0
 		return false
 	}
-	// UnmapPort stops the renewal, so it must not end with this cycle.
+	// Renewal runs until UnmapPort, which outlives the run's ctx in teardown.
 	fwd.StartRenewal(context.Background())
 	s.fwd, s.mapping, s.lastPort = fwd, mapping, mapping.InternalPort
 	return true
@@ -363,13 +386,15 @@ func (c *ReverseClient) unmap(ctx context.Context) {
 	s.fwd, s.mapping = nil, nil
 }
 
-func (c *ReverseClient) deregister(ctx context.Context) {
+func (c *ReverseClient) deregister(ctx context.Context, now time.Time) {
 	s := &c.st
 	if !s.registered {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peerCleanupTimeout)
+	defer cancel()
 	if err := c.cfg.API.Deregister(ctx); err != nil {
-		slog.Warn("reverse: deregister failed", "err", err)
+		c.apiFailed(ctx, err, now)
 		return
 	}
 	s.registered = false
@@ -378,8 +403,8 @@ func (c *ReverseClient) deregister(ctx context.Context) {
 
 // withdraw takes this device's routes and reverse outbounds down while it
 // knows no address to reach it at, keeping the mapping and portal.
-func (c *ReverseClient) withdraw(ctx context.Context) {
-	c.deregister(ctx)
+func (c *ReverseClient) withdraw(ctx context.Context, now time.Time) {
+	c.deregister(ctx, now)
 	c.setOutbounds(nil)
 }
 
@@ -407,6 +432,11 @@ func (c *ReverseClient) apiFailed(ctx context.Context, err error, now time.Time)
 	case errors.Is(err, helper.ErrReverseDisabled):
 		slog.Info("reverse: routes disabled by lantern-cloud")
 		s.apiNotBefore = now.Add(reverseDisabledWait)
+		// A disabled server serves no routes, and the rows it holds expire.
+		s.registered, s.registeredIDs = false, nil
+		c.clearBox()
+		c.unmap(ctx)
+		s.creds, s.credsAt = nil, time.Time{}
 		return reverseDisabledWait
 	case errors.As(err, &apiErr) &&
 		(apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable):
@@ -415,17 +445,18 @@ func (c *ReverseClient) apiFailed(ctx context.Context, err error, now time.Time)
 		s.apiNotBefore = now.Add(s.backoff)
 		return s.backoff
 	}
-	slog.Warn("reverse: register failed", "err", err)
+	slog.Warn("reverse: lantern-cloud call failed", "err", err)
 	return c.cfg.RegisterInterval
 }
 
-// seal returns a fresh blob for each pairing in ids.
+// seal returns a fresh blob for each pairing in ids, for the portal's
+// credentials.
 func (c *ReverseClient) seal(ids []string, now time.Time) []helper.ReverseBlob {
 	s := &c.st
 	route := reverse.Route{
-		PublicKey:      s.creds.PublicKey,
-		CertSPKISHA256: s.creds.SPKI,
-		CoverDomain:    s.creds.CoverDomain,
+		PublicKey:      s.portalCreds.PublicKey,
+		CertSPKISHA256: s.portalCreds.SPKI,
+		CoverDomain:    s.portalCreds.CoverDomain,
 		IssuedAt:       now,
 	}
 	// The router forwards only IPv4, to the internal port; IPv6 reaches the
@@ -510,7 +541,6 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 		if err := c.cfg.Box.SetReversePortal(cfg, c.coverDomain); err != nil {
 			// The error can name the port or a tag.
 			slog.Warn("reverse: could not configure the portal")
-			s.portal = nil
 			return
 		}
 		s.portal, s.portalCreds = cfg, s.creds
