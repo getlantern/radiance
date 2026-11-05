@@ -29,8 +29,8 @@ type PairingKeys struct {
 
 // Set replaces every key with keys, dropping entries whose Key is not a
 // chacha20poly1305 key or whose Role is neither inviter nor volunteer. It
-// copies keys, and runs the change callback, without p's lock held, only when
-// the stored set changed.
+// copies keys. Only when the stored set changed does it run the change
+// callback, synchronously and without p's lock held, before returning.
 func (p *PairingKeys) Set(keys map[string]PairingKey) {
 	if p == nil {
 		return
@@ -92,7 +92,9 @@ func (p *PairingKeys) IDs(role string) []string {
 	return ids
 }
 
-// SetOnChange sets f to run after each Set that changes the stored keys.
+// SetOnChange sets f to run after each Set that changes the stored keys. f runs
+// on Set's goroutine, which for the keys lantern-core pushes is the IPC
+// handler's, so it must not block.
 func (p *PairingKeys) SetOnChange(f func()) {
 	if p == nil {
 		return

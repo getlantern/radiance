@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"time"
 
@@ -144,6 +145,10 @@ type LocalBackend struct {
 	// helperPairingKeys is the K_pair of each helper pairing, pushed by
 	// lantern-core over IPC.
 	helperPairingKeys *helper.PairingKeys
+	// reverseClient serves this device's paired helpers as a reverse inviter
+	// while reverseGate runs it. Nil where reverseUnsupported.
+	reverseClient reverseController
+	reverseGate   atomic.Pointer[reverseGate]
 }
 
 type Options struct {
@@ -260,6 +265,9 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.helperUsage = &helper.Usage{}
 	r.helperPairingKeys = &helper.PairingKeys{}
+	if !reverseUnsupported() {
+		r.useReverseClient(newReverseClient(platformDeviceID, r.helperPairingKeys, reverseBox{r: r}))
+	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
@@ -378,6 +386,7 @@ func (r *LocalBackend) Start() {
 		}
 	}
 	r.startVPNStatusListeners()
+	r.startReverse()
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
@@ -557,6 +566,7 @@ func (r *LocalBackend) Close() {
 			r.helperActivity.Flush()
 		}
 		r.closePeerClient()
+		r.stopReverse()
 		// unbounded.start spawns its worker on a context.Background-
 		// derived ctx (it has to outlive any single NewConfigEvent),
 		// so Close has to explicitly tell it to shut down — otherwise
@@ -1843,12 +1853,18 @@ func (r *LocalBackend) savedSelectionTag() string {
 	return vpn.AutoSelectTag
 }
 
-// ResetNetwork drops the VPN's connections and re-seeds its interface state.
-func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
+// ResetNetwork drops the VPN's connections and re-seeds its interface state,
+// and has the reverse client re-register from the new network.
+func (r *LocalBackend) ResetNetwork() {
+	r.vpnClient.ResetNetwork()
+	r.reverseNetworkChanged()
+}
 
 // ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+// The reverse client re-registers from the new network either way.
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	r.vpnClient.ResetNetworkForMonitor(listener)
+	r.reverseNetworkChanged()
 }
 
 // Pause pauses the VPN for a device sleep.

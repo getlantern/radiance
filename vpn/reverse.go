@@ -14,12 +14,13 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
+	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/servers"
 )
 
 // reversePortalTag is the portal inbound's tag, which every reverse outbound
 // names to find its sessions.
-const reversePortalTag = "samizdat-portal"
+const reversePortalTag = redact.ReversePortalTag
 
 type reversePortal interface {
 	Configure(samizdatreverse.PortalConfig) error
