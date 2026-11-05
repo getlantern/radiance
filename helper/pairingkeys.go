@@ -93,8 +93,7 @@ func (p *PairingKeys) IDs(role string) []string {
 }
 
 // SetOnChange sets f to run after each Set that changes the stored keys. f runs
-// on Set's goroutine, which for the keys lantern-core pushes is the IPC
-// handler's, so it must not block.
+// synchronously on Set's goroutine and must not block.
 func (p *PairingKeys) SetOnChange(f func()) {
 	if p == nil {
 		return

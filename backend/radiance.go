@@ -149,6 +149,9 @@ type LocalBackend struct {
 	// while reverseGate runs it. Nil where reverseUnsupported.
 	reverseClient reverseController
 	reverseGate   atomic.Pointer[reverseGate]
+	// reverseStopping is set from a stop of the reverse client until its next
+	// start (see reverseGate.stopping).
+	reverseStopping atomic.Bool
 }
 
 type Options struct {

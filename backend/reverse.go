@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
@@ -25,8 +26,8 @@ const helperReverseFeature = "helper_reverse"
 // teardown; the teardown runs to its own deadline either way.
 const reverseStopTimeout = 10 * time.Second
 
-// reverseUnsupported reports platforms that must never run the reverse client.
-// It is a var solely so tests can fake it, like peerShareUnsupported.
+// reverseUnsupported reports whether this platform must never run the reverse
+// client. It is a var solely so tests can fake it.
 var reverseUnsupported = common.IsIOS
 
 // reverseController is the subset of *peer.ReverseClient that LocalBackend
@@ -56,15 +57,24 @@ func (r *LocalBackend) useReverseClient(c reverseController) {
 // startReverse runs the reverse client while the VPN is connected and the
 // config enables helperReverseFeature, until stopReverse or r.ctx ends.
 func (r *LocalBackend) startReverse() {
+	status := func() vpn.VPNStatus { return "" }
+	if r.vpnClient != nil {
+		status = r.vpnClient.Status
+	}
+	r.startReverseWith(status)
+}
+
+func (r *LocalBackend) startReverseWith(vpnStatus func() vpn.VPNStatus) {
 	if r.reverseClient == nil || reverseUnsupported() {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
 	g := &reverseGate{
-		client: r.reverseClient,
-		kick:   make(chan struct{}, 1),
-		cancel: cancel,
-		exited: make(chan struct{}),
+		client:   r.reverseClient,
+		stopping: &r.reverseStopping,
+		kick:     make(chan struct{}, 1),
+		cancel:   cancel,
+		exited:   make(chan struct{}),
 	}
 	if prev := r.reverseGate.Swap(g); prev != nil {
 		prev.stop()
@@ -76,9 +86,7 @@ func (r *LocalBackend) startReverse() {
 		}
 	})
 	// Seeded after subscribing, so a change in between is not lost.
-	if r.vpnClient != nil {
-		g.setVPNStatus(r.vpnClient.Status())
-	}
+	g.setVPNStatus(vpnStatus())
 	if cfg, err := r.confHandler.GetConfig(); err == nil && cfg != nil {
 		g.setFeature(cfg.Features[helperReverseFeature])
 	}
@@ -103,9 +111,12 @@ func (r *LocalBackend) reverseNetworkChanged() {
 // and IPC paths that report its inputs never wait on it.
 type reverseGate struct {
 	client reverseController
-	kick   chan struct{}
-	cancel context.CancelFunc
-	exited chan struct{}
+	// stopping is set from a Stop until the next Start, so the client's
+	// teardown leaves the saved selection alone.
+	stopping *atomic.Bool
+	kick     chan struct{}
+	cancel   context.CancelFunc
+	exited   chan struct{}
 
 	mu        sync.Mutex
 	vpnUp     bool
@@ -118,7 +129,7 @@ func (g *reverseGate) setVPNStatus(s vpn.VPNStatus) {
 		g.set(&g.vpnUp, true)
 	case vpn.Connecting, vpn.Restarting:
 		// A restart keeps the client: the new tunnel restores its portal and
-		// outbounds. A connect follows a disconnect, which already stopped it.
+		// outbounds. Every other way out of Connected already set the VPN down.
 	default:
 		g.set(&g.vpnUp, false)
 	}
@@ -157,6 +168,7 @@ func (g *reverseGate) run(ctx context.Context) {
 		want := g.wanted()
 		switch {
 		case want && !running:
+			g.stopping.Store(false)
 			if err := g.client.Start(ctx); err != nil {
 				slog.Warn("Failed to start the reverse client", "error", err)
 				continue
@@ -170,6 +182,7 @@ func (g *reverseGate) run(ctx context.Context) {
 }
 
 func (g *reverseGate) stopClient() {
+	g.stopping.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), reverseStopTimeout)
 	defer cancel()
 	g.client.Stop(ctx)
@@ -180,16 +193,22 @@ func (g *reverseGate) stop() {
 	<-g.exited
 }
 
-// reverseBox is the VPN client as the reverse client's box. Changing the
-// reverse outbounds can withdraw the friend a selection names, so each change
-// re-checks the selection under r.selectionMu, as config updates do.
+// reverseBox is the VPN client as the reverse client's box. A selection of a
+// friend reachable only by its reverse outbound is cleared, under
+// r.selectionMu as config updates do, only when that friend's pairing ends:
+// when the running client drops the friend's outbound from a non-empty set,
+// or removes the portal because no inviter pairing is left. A stop, or an
+// empty set while the client has no address to offer, keeps the selection
+// for the outbounds' return.
 type reverseBox struct{ r *LocalBackend }
 
 func (b reverseBox) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
 	b.r.selectionMu.Lock()
 	defer b.r.selectionMu.Unlock()
 	err := b.r.vpnClient.SetReversePortal(cfg, masqueradeDomain)
-	b.reconcileSelectionLocked()
+	if cfg == nil {
+		b.reconcileSelectionLocked()
+	}
 	return err
 }
 
@@ -197,7 +216,9 @@ func (b reverseBox) SetReverseOutbounds(tags []string) error {
 	b.r.selectionMu.Lock()
 	defer b.r.selectionMu.Unlock()
 	err := b.r.vpnClient.SetReverseOutbounds(tags)
-	b.reconcileSelectionLocked()
+	if len(tags) > 0 {
+		b.reconcileSelectionLocked()
+	}
 	return err
 }
 
@@ -205,7 +226,8 @@ func (b reverseBox) RebindReversePortal() error { return b.r.vpnClient.RebindRev
 
 func (b reverseBox) reconcileSelectionLocked() {
 	// After Close a replacement backend may own the selection.
-	if !b.r.selectionClosed {
-		b.r.clearSelectedIfMissingLocked()
+	if b.r.selectionClosed || b.r.reverseStopping.Load() {
+		return
 	}
+	b.r.clearSelectedIfMissingLocked()
 }
