@@ -26,9 +26,10 @@ type reversePortal interface {
 	Rebind() error
 }
 
-// setReversePortal configures the portal, creating it first if need be, or
-// with a nil cfg removes it and every reverse outbound.
-func (t *tunnel) setReversePortal(cfg *samizdatreverse.PortalConfig) error {
+// setReversePortal configures the portal, first creating it for
+// masqueradeDomain if it is missing or was created for another, or with a nil
+// cfg removes it and every reverse outbound.
+func (t *tunnel) setReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
 	if cfg == nil {
@@ -38,28 +39,30 @@ func (t *tunnel) setReversePortal(cfg *samizdatreverse.PortalConfig) error {
 		}
 		return errors.Join(err, t.removeReversePortalLocked())
 	}
-	portal, err := t.reversePortalLocked()
+	portal, err := t.reversePortalLocked(masqueradeDomain)
 	if err != nil {
 		return err
 	}
 	return portal.Configure(*cfg)
 }
 
-// reversePortalLocked returns the tunnel's portal, creating it on first use.
-// The caller must hold t.outboundMu.
-func (t *tunnel) reversePortalLocked() (reversePortal, error) {
+// reversePortalLocked returns the tunnel's portal for masqueradeDomain,
+// creating it, or replacing one created for another domain, since the
+// masquerade is fixed at creation. The caller must hold t.outboundMu.
+func (t *tunnel) reversePortalLocked(masqueradeDomain string) (reversePortal, error) {
 	inbounds := service.FromContext[adapter.InboundManager](t.ctx)
 	if inbounds == nil {
 		return nil, errors.New("inbound manager not found")
 	}
-	if _, ok := inbounds.Get(reversePortalTag); !ok {
+	if _, ok := inbounds.Get(reversePortalTag); !ok || t.portalMasquerade != masqueradeDomain {
 		router := service.FromContext[adapter.Router](t.ctx)
 		logger := t.logFactory.NewLogger("inbound/" + reversePortalTag + "[" + lbC.TypeSamizdatPortal + "]")
-		err := inbounds.Create(t.ctx, router, logger, reversePortalTag, lbC.TypeSamizdatPortal,
-			&lbO.SamizdatPortalInboundOptions{})
-		if err != nil {
+		in := reversePortalInbound(masqueradeDomain)
+		// Create closes a portal already under the tag.
+		if err := inbounds.Create(t.ctx, router, logger, in.Tag, in.Type, in.Options); err != nil {
 			return nil, fmt.Errorf("create reverse portal: %w", err)
 		}
+		t.portalMasquerade = masqueradeDomain
 	}
 	in, _ := inbounds.Get(reversePortalTag)
 	portal, ok := in.(reversePortal)
@@ -144,6 +147,43 @@ func (t *tunnel) setReverseOutboundsLocked(tags []string) error {
 	}
 	errs = append(errs, t.syncPersonalProxiesLocked())
 	return errors.Join(errs...)
+}
+
+// reversePortalInbound is the portal inbound, forwarding probes that fail
+// authentication to masqueradeDomain.
+func reversePortalInbound(masqueradeDomain string) O.Inbound {
+	return O.Inbound{
+		Type:    lbC.TypeSamizdatPortal,
+		Tag:     reversePortalTag,
+		Options: &lbO.SamizdatPortalInboundOptions{MasqueradeDomain: masqueradeDomain},
+	}
+}
+
+// loggableTag is tag, or "reverse" for a reverse tag: a reverse tag in a log
+// line would show that the pairing has a reverse route.
+func loggableTag(tag string) string {
+	if lbA.IsReverseHelperTag(tag) {
+		return "reverse"
+	}
+	return tag
+}
+
+// loggableTags is tags with each reverse tag replaced as loggableTag does.
+func loggableTags(tags []string) []string {
+	out := make([]string, len(tags))
+	for i, tag := range tags {
+		out[i] = loggableTag(tag)
+	}
+	return out
+}
+
+// loggableError is err for logging under tag: for a reverse tag, its text with
+// helper and reverse tags redacted, since sing-box errors name the outbound.
+func loggableError(tag string, err error) any {
+	if err == nil || !lbA.IsReverseHelperTag(tag) {
+		return err
+	}
+	return lbA.RedactHelperTags(err.Error())
 }
 
 // reverseServer is the reverse outbound for tag. It is not a Lantern server:

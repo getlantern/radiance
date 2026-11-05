@@ -99,6 +99,9 @@ type tunnel struct {
 	// personalProxyFault, if set, can fail a personal proxy group step by
 	// name. For tests.
 	personalProxyFault func(step string) error
+	// portalMasquerade is the masquerade domain the reverse portal inbound,
+	// if any, was created with. Guarded by outboundMu.
+	portalMasquerade string
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
@@ -856,7 +859,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		return nil
 	}
 
-	slog.Info("Adding servers", "tags", list.Tags())
+	slog.Info("Adding servers", "tags", loggableTags(list.Tags()))
 	// remove duplicates from list before adding to avoid unnecessary reloads
 	newList := removeDuplicates(t.ctx, t.optsMap, list)
 	newOutbounds := newList.Outbounds()
@@ -878,7 +881,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		added     = 0
 	)
 	for _, outbound := range newOutbounds {
-		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		logger := t.logFactory.NewLogger("outbound/" + loggableTag(outbound.Tag) + "[" + outbound.Type + "]")
 		prev := t.liveOutbound(outbound.Tag)
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
@@ -914,9 +917,9 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		}
 		if err != nil {
 			slog.Warn("Failed to load outbound",
-				"tag", outbound.Tag,
+				"tag", loggableTag(outbound.Tag),
 				"type", outbound.Type,
-				"error", err,
+				"error", loggableError(outbound.Tag, err),
 			)
 			errs = append(errs, err)
 		} else {
@@ -1211,7 +1214,7 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		deduped = append(deduped, srv)
 	}
 	if len(dropped) > 0 {
-		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", dropped)
+		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", loggableTags(dropped))
 	}
 	return servers.ServerList{
 		Servers:      deduped,

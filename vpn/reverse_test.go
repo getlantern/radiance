@@ -8,17 +8,22 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	rlog "github.com/getlantern/radiance/log"
@@ -157,7 +162,7 @@ func TestReversePortalFollowsItsConfig(t *testing.T) {
 	c := newReverseTestClient(t, tun)
 	rev := lbA.ReverseHelperTag(testHelper1)
 
-	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev)))
+	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev), "a.example.com"))
 	portal := livePortal(t, tun)
 	require.NotNil(t, portal)
 	require.NotNil(t, portal.Addr(), "configured with a pairing, the portal listens")
@@ -168,25 +173,35 @@ func TestReversePortalFollowsItsConfig(t *testing.T) {
 	require.NotNil(t, portal.Addr())
 	assert.Equal(t, port, portal.Addr().(*net.TCPAddr).Port, "a rebind keeps the port")
 
+	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev), "a.example.com"))
+	assert.Same(t, portal, livePortal(t, tun), "the same masquerade keeps the portal")
+	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev), "b.example.com"))
+	replaced := livePortal(t, tun)
+	require.NotNil(t, replaced)
+	assert.NotSame(t, portal, replaced, "a new masquerade replaces the portal")
+	assert.Nil(t, portal.Addr(), "the replaced portal is closed")
+	require.NotNil(t, replaced.Addr())
+	portal = replaced
+
 	bad := testPortalConfig(t, rev)
 	bad.PrivateKey = []byte{1, 2, 3}
-	assert.Error(t, c.SetReversePortal(bad), "a configure error reaches the caller")
+	assert.Error(t, c.SetReversePortal(bad, "a.example.com"), "a configure error reaches the caller")
 
-	require.NoError(t, c.SetReversePortal(nil))
+	require.NoError(t, c.SetReversePortal(nil, ""))
 	assert.Nil(t, livePortal(t, tun))
 	assert.Nil(t, portal.Addr())
 	requireTornDown(t, tun, rev)
 	assert.Nil(t, tun.personalProxiesGroup())
 	assert.Empty(t, c.ReverseOutbounds())
 	require.NoError(t, c.RebindReversePortal(), "nothing to rebind")
-	require.NoError(t, c.SetReversePortal(nil), "nothing to remove")
+	require.NoError(t, c.SetReversePortal(nil, ""), "nothing to remove")
 }
 
 // State set while no tunnel runs is kept and applied to the next tunnel.
 func TestReverseStateAppliesToTheNextTunnel(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 	rev := lbA.ReverseHelperTag(testHelper1)
-	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev)))
+	require.NoError(t, c.SetReversePortal(testPortalConfig(t, rev), "a.example.com"))
 	require.NoError(t, c.SetReverseOutbounds([]string{rev}))
 	require.NoError(t, c.RebindReversePortal())
 
@@ -207,4 +222,63 @@ func TestReverseStateAppliesToTheNextTunnel(t *testing.T) {
 		c.tunnel = nil
 		c.mu.Unlock()
 	}
+}
+
+// A tunnel starts with the kept reverse outbounds and portal in its options,
+// so a selection whose only members are reverse outbounds starts on them.
+func TestBuildOptionsStartsReverseOnlySelections(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	revA, revB := lbA.ReverseHelperTag(friendA), lbA.ReverseHelperTag(friendB)
+	require.NoError(t, c.SetReversePortal(testPortalConfig(t, revA, revB), "cover.example.com"))
+	require.NoError(t, c.SetReverseOutbounds([]string{revA, revB}))
+	build := func(t *testing.T, initial string) (O.Options, *lbO.MutableSelectorOutboundOptions) {
+		t.Helper()
+		options, _ := testBoxOptions(t)
+		c.mu.Lock()
+		boxOptions := c.withReverse(c.withPersonalProxyRooms(BoxOptions{
+			BasePath: t.TempDir(), Options: options, InitialServer: initial,
+		}))
+		c.mu.Unlock()
+		opts, err := buildOptions(boxOptions)
+		require.NoError(t, err)
+		return opts, findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+	}
+	groupMembers := func(opts O.Options, tag string) []string {
+		group := findOutbound(opts.Outbounds, tag)
+		require.NotNil(t, group, tag)
+		return group.Options.(*lbO.MutableURLTestOutboundOptions).Outbounds
+	}
+
+	opts, manual := build(t, PersonalProxiesTag)
+	assert.Equal(t, PersonalProxiesTag, manual.Outbounds[0])
+	assert.ElementsMatch(t, []string{revA, revB}, groupMembers(opts, PersonalProxiesTag))
+	auto := findOutbound(opts.Outbounds, AutoSelectTag).Options.(*lbO.MutableAutoSelectOutboundOptions)
+	assert.Subset(t, auto.Outbounds, []string{revA, revB})
+	var portal *O.Inbound
+	for i := range opts.Inbounds {
+		if opts.Inbounds[i].Tag == reversePortalTag {
+			portal = &opts.Inbounds[i]
+		}
+	}
+	require.NotNil(t, portal, "the portal starts with the tunnel")
+	assert.Equal(t, lbC.TypeSamizdatPortal, portal.Type)
+	assert.Equal(t, "cover.example.com", portal.Options.(*lbO.SamizdatPortalInboundOptions).MasqueradeDomain)
+
+	opts, manual = build(t, PersonalProxySelection(friendB))
+	assert.Equal(t, PersonalProxyTag, manual.Outbounds[0])
+	assert.Equal(t, []string{revB}, groupMembers(opts, PersonalProxyTag))
+
+	require.NoError(t, c.SetReversePortal(nil, ""))
+	opts, _ = build(t, "")
+	assert.Nil(t, findOutbound(opts.Outbounds, revA))
+	assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag))
+	for _, in := range opts.Inbounds {
+		assert.NotEqual(t, reversePortalTag, in.Tag)
+	}
+}
+
+func TestLogsNeverNameReverseTags(t *testing.T) {
+	rev := lbA.ReverseHelperTag(testHelper1)
+	assert.Equal(t, []string{"lantern-1", testHelper1, "reverse"}, loggableTags([]string{"lantern-1", testHelper1, rev}))
+	assert.NotContains(t, fmt.Sprint(loggableError(rev, errors.New("outbound/x["+rev+"]: failed"))), rev)
 }

@@ -19,7 +19,7 @@ import (
 // friend.
 type friendReach struct {
 	direct   bool // the friend's direct outbound is a managed server
-	reverse  bool // the VPN client holds the friend's reverse outbound
+	reverse  bool // the VPN client keeps the friend's reverse tag
 	consumer bool // a rooms consumer is
 	tickets  bool // the ticket source holds an inviter ticket for the friend's pairing
 	answered bool // the ticket source has been answered
@@ -121,7 +121,6 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	return statuses
 }
 
-// reverseOutbounds returns the reverse tags the VPN client holds.
 func (r *LocalBackend) reverseOutbounds() []string {
 	if r.vpnClient == nil {
 		return nil

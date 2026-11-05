@@ -67,13 +67,14 @@ func personalProxyOutbound(members []string) O.Outbound {
 // personalProxyStartMembers returns the members of friend's group in a tunnel
 // built with outbounds, whose helper tags are helpers.
 func personalProxyStartMembers(friend string, helpers []string, outbounds []O.Outbound, rooms bool) []string {
+	reverse := lbA.ReverseHelperTag(friend)
 	var members []string
 	for _, out := range outbounds {
 		if !slices.Contains(helpers, out.Tag) || slices.Contains(members, out.Tag) {
 			continue
 		}
 		consumer := out.Type == roomsConsumerType
-		if (consumer && rooms) || (!consumer && out.Tag == friend) {
+		if (consumer && rooms) || (!consumer && (out.Tag == friend || out.Tag == reverse)) {
 			members = append(members, out.Tag)
 		}
 	}
@@ -454,8 +455,8 @@ type PersonalProxyStatus struct {
 	// Direct reports whether the config carries the friend's direct outbound,
 	// which it does while the friend has a live route.
 	Direct bool `json:"direct"`
-	// Reverse reports whether this device holds the friend's reverse
-	// outbound, through which the friend dials in to carry its traffic.
+	// Reverse reports whether the VPN client keeps the friend's reverse tag,
+	// whose outbound carries traffic over the session the friend dials in.
 	Reverse bool `json:"reverse"`
 	// Rooms reports whether this device has a rooms consumer and an inviter
 	// ticket for the friend's pairing.

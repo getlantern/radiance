@@ -85,10 +85,12 @@ type VPNClient struct {
 	// device's helper inviter tickets. Guarded by mu.
 	inviterTickets InviterTickets
 
-	// reversePortal and reverseTags are the reverse direct state each tunnel
-	// is given when it comes up. Guarded by mu.
-	reversePortal *samizdatreverse.PortalConfig
-	reverseTags   []string
+	// reversePortal, reverseMasquerade and reverseTags are the reverse direct
+	// state each tunnel is given when it comes up. Written under mu;
+	// reverseTags is read lock-free so the backend never waits out a connect.
+	reversePortal     *samizdatreverse.PortalConfig
+	reverseMasquerade string
+	reverseTags       atomic.Pointer[[]string]
 
 	mu sync.RWMutex
 }
@@ -121,6 +123,7 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
 		initialLanternTags:   boxOptions.LanternServerTags,
 		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		portalMasquerade:     boxOptions.reverseMasquerade,
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
 	}
@@ -135,6 +138,27 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
 func (c *VPNClient) withPersonalProxyRooms(boxOptions BoxOptions) BoxOptions {
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
 		boxOptions.personalProxyRooms = roomsReachable(c.inviterTickets, friend)
+	}
+	return boxOptions
+}
+
+// withReverse adds the kept reverse outbounds, and the portal when one is
+// configured, to boxOptions, so a selection that depends on them can start.
+// Caller holds c.mu.
+func (c *VPNClient) withReverse(boxOptions BoxOptions) BoxOptions {
+	tags := c.ReverseOutbounds()
+	if len(tags) > 0 {
+		outbounds := slices.Clone(boxOptions.Options.Outbounds)
+		for _, tag := range tags {
+			if !slices.ContainsFunc(outbounds, func(o option.Outbound) bool { return o.Tag == tag }) {
+				outbounds = append(outbounds, reverseServer(tag).Options.(option.Outbound))
+			}
+		}
+		boxOptions.Options.Outbounds = outbounds
+	}
+	if c.reversePortal != nil {
+		boxOptions.reversePortal = true
+		boxOptions.reverseMasquerade = c.reverseMasquerade
 	}
 	return boxOptions
 }
@@ -205,7 +229,7 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 	}
 
 	c.logger.Info("Connecting VPN")
-	boxOptions = c.withPersonalProxyRooms(boxOptions)
+	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
@@ -321,7 +345,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if err := c.close(); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
-	boxOptions = c.withPersonalProxyRooms(boxOptions)
+	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
@@ -510,25 +534,29 @@ func (c *VPNClient) ReconcileHelpers(helpers servers.ServerList) error {
 	return c.tunnel.reconcileHelpers(helpers)
 }
 
-// SetReversePortal creates the portal inbound on first use and configures
-// it. A nil cfg removes the portal and every reverse outbound, and forgets the
-// tags SetReverseOutbounds kept. cfg is kept and applied to each tunnel that
-// comes up; with no tunnel running it is only kept, and SetReversePortal
-// returns nil. A configure error leaves cfg kept.
-func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig) error {
+// SetReversePortal configures the running tunnel's portal, creating it if the
+// tunnel has none, with probes that fail authentication forwarded to
+// masqueradeDomain. A portal created for another masqueradeDomain is replaced,
+// ending its sessions. A nil cfg removes the portal and every reverse outbound,
+// and forgets the tags SetReverseOutbounds kept. cfg and masqueradeDomain are
+// kept and applied to each tunnel that comes up; with no tunnel running they
+// are only kept, and SetReversePortal returns nil. A configure error leaves
+// them kept.
+func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if cfg == nil {
-		c.reversePortal, c.reverseTags = nil, nil
+		c.reversePortal, c.reverseMasquerade = nil, ""
+		c.reverseTags.Store(nil)
 	} else {
 		kept := *cfg
 		kept.Pairings = maps.Clone(cfg.Pairings)
-		c.reversePortal = &kept
+		c.reversePortal, c.reverseMasquerade = &kept, masqueradeDomain
 	}
 	if c.tunnel == nil {
 		return nil
 	}
-	return c.tunnel.setReversePortal(c.reversePortal)
+	return c.tunnel.setReversePortal(c.reversePortal, c.reverseMasquerade)
 }
 
 // SetReverseOutbounds makes the reverse outbounds exactly this set of
@@ -545,7 +573,7 @@ func (c *VPNClient) SetReverseOutbounds(tags []string) error {
 	tags = slices.Compact(slices.Sorted(slices.Values(tags)))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.reverseTags = tags
+	c.reverseTags.Store(&tags)
 	if c.tunnel == nil {
 		return nil
 	}
@@ -555,9 +583,11 @@ func (c *VPNClient) SetReverseOutbounds(tags []string) error {
 // ReverseOutbounds returns the reverse tags last given to SetReverseOutbounds,
 // whether or not a tunnel holds them.
 func (c *VPNClient) ReverseOutbounds() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return slices.Clone(c.reverseTags)
+	tags := c.reverseTags.Load()
+	if tags == nil {
+		return nil
+	}
+	return slices.Clone(*tags)
 }
 
 // RebindReversePortal rebinds the running portal's listener to the current
@@ -575,14 +605,15 @@ func (c *VPNClient) RebindReversePortal() error {
 // restoreReverseLocked gives the tunnel the kept reverse direct state. The
 // caller must hold c.mu.
 func (c *VPNClient) restoreReverseLocked() error {
-	if c.reversePortal == nil && len(c.reverseTags) == 0 {
+	tags := c.ReverseOutbounds()
+	if c.reversePortal == nil && len(tags) == 0 {
 		return nil
 	}
 	var errs []error
 	if c.reversePortal != nil {
-		errs = append(errs, c.tunnel.setReversePortal(c.reversePortal))
+		errs = append(errs, c.tunnel.setReversePortal(c.reversePortal, c.reverseMasquerade))
 	}
-	errs = append(errs, c.tunnel.setReverseOutbounds(c.reverseTags))
+	errs = append(errs, c.tunnel.setReverseOutbounds(tags))
 	return errors.Join(errs...)
 }
 

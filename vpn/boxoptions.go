@@ -103,6 +103,11 @@ type BoxOptions struct {
 	// personalProxyRooms reports whether a rooms consumer may reach the
 	// friend InitialServer selects; the VPN client sets it.
 	personalProxyRooms bool
+	// reversePortal reports whether the tunnel starts with the reverse
+	// portal inbound, created for reverseMasquerade; the VPN client sets
+	// both.
+	reversePortal     bool
+	reverseMasquerade string
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
@@ -448,6 +453,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	if bOptions.reversePortal {
+		opts.Inbounds = append(opts.Inbounds, reversePortalInbound(bOptions.reverseMasquerade))
+	}
 	helpers := helperTags(tags)
 	// The manual selector also offers the personal proxies group, which
 	// exists only while a helper outbound does: a url-test group must never
