@@ -348,23 +348,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, errors.New("peer: Config.API is required")
 	}
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			if fwd := pickManualForwarder(); fwd != nil {
-				return fwd, nil
-			}
-			// Explicitly return a nil interface on error — `return
-			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
-			// pair into a typed-nil interface on failure, which then panics
-			// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
-			// because the nil-check passes (interface has a type) but the
-			// receiver is nil. Surfacing the underlying error here lets the
-			// caller see ErrNoPortForwarding instead of a runtime panic.
-			fwd, err := portforward.NewForwarder(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return fwd, nil
-		}
+		cfg.NewForwarder = newDefaultForwarder
 	}
 	if cfg.BuildBoxService == nil {
 		cfg.BuildBoxService = defaultBuildBoxService
@@ -1656,6 +1640,24 @@ func pickManualForwarder() portForwarder {
 		}
 	}
 	return nil
+}
+
+func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
+	if fwd := pickManualForwarder(); fwd != nil {
+		return fwd, nil
+	}
+	// Explicitly return a nil interface on error — `return
+	// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
+	// pair into a typed-nil interface on failure, which then panics
+	// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
+	// because the nil-check passes (interface has a type) but the
+	// receiver is nil. Surfacing the underlying error here lets the
+	// caller see ErrNoPortForwarding instead of a runtime panic.
+	fwd, err := portforward.NewForwarder(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fwd, nil
 }
 
 func pickInternalPort() uint16 {
