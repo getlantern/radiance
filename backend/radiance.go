@@ -2215,6 +2215,16 @@ func (r *LocalBackend) CompleteChangeEmail(ctx context.Context, newEmail, passwo
 	return r.accountClient.CompleteChangeEmail(ctx, newEmail, password, code)
 }
 
+// StartBindLegacyEmail sends a verification code for a legacy account's new email.
+func (r *LocalBackend) StartBindLegacyEmail(ctx context.Context, email string) error {
+	return r.accountClient.StartBindLegacyEmail(ctx, email)
+}
+
+// CompleteBindLegacyEmail binds email and password to the current legacy account and signs in.
+func (r *LocalBackend) CompleteBindLegacyEmail(ctx context.Context, email, password, code string) error {
+	return r.accountClient.CompleteBindLegacyEmail(ctx, email, password, code)
+}
+
 func (r *LocalBackend) StartRecoveryByEmail(ctx context.Context, email string) error {
 	return r.accountClient.StartRecoveryByEmail(ctx, email)
 }

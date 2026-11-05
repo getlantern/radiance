@@ -96,6 +96,12 @@ type RecoveryCompleteRequest struct {
 	Code        string `json:"code"`
 }
 
+type BindLegacyEmailCompleteRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
 type ActivationRequest struct {
 	Email        string `json:"email"`
 	ResellerCode string `json:"resellerCode"`

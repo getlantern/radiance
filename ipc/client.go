@@ -634,6 +634,19 @@ func (c *Client) CompleteChangeEmail(ctx context.Context, newEmail, password, co
 	return err
 }
 
+// StartBindLegacyEmail sends a verification code for a legacy account's new email.
+func (c *Client) StartBindLegacyEmail(ctx context.Context, email string) error {
+	_, err := c.do(ctx, http.MethodPost, accountBindLegacyEmailEndpoint+"/start", EmailRequest{Email: email})
+	return err
+}
+
+// CompleteBindLegacyEmail binds email and password to the current legacy account and signs in.
+func (c *Client) CompleteBindLegacyEmail(ctx context.Context, email, password, code string) error {
+	_, err := c.do(ctx, http.MethodPost, accountBindLegacyEmailEndpoint+"/complete",
+		BindLegacyEmailCompleteRequest{Email: email, Password: password, Code: code})
+	return err
+}
+
 // StartRecoveryByEmail initiates account recovery by email.
 func (c *Client) StartRecoveryByEmail(ctx context.Context, email string) error {
 	_, err := c.do(ctx, http.MethodPost, accountRecoveryEndpoint+"/start", EmailRequest{Email: email})
