@@ -42,7 +42,7 @@ func TestVPNClientPassesItsInviterTicketsToTheTunnel(t *testing.T) {
 	src := &countingInviter{}
 	c := NewVPNClient(t.TempDir(), nil, nil)
 	c.SetInviterTickets(src)
-	tn := c.newTunnel(BoxOptions{})
+	tn := c.newTunnel(BoxOptions{}, AutoSelectTag)
 	get := lbA.RoomTicketSourceFromContext(withHelperRoomTickets(context.Background(), tn))
 	require.NotNil(t, get)
 	get()

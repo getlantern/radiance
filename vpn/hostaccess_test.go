@@ -133,7 +133,7 @@ func startPolicyTestTunnel(t *testing.T) *tunnel {
 		Route: &O.RouteOptions{Rules: []O.Rule{{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
-				RawDefaultRule: O.RawDefaultRule{ClashMode: "rule"},
+				RawDefaultRule: O.RawDefaultRule{ClashMode: ManualSelectTag},
 				RuleAction: O.RuleAction{
 					Action:       C.RuleActionTypeRoute,
 					RouteOptions: O.RouteActionOptions{Outbound: ManualSelectTag},
@@ -141,18 +141,16 @@ func startPolicyTestTunnel(t *testing.T) *tunnel {
 			},
 		}}},
 		Experimental: &O.ExperimentalOptions{
-			ClashAPI:  &O.ClashAPIOptions{DefaultMode: "rule"},
 			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
 		},
 	}
-	tun := &tunnel{dataPath: t.TempDir()}
+	tun := &tunnel{dataPath: t.TempDir(), initialMode: ManualSelectTag}
 	t.Cleanup(func() { assert.NoError(t, tun.close()) })
 	require.NoError(t, tun.init(t.Context(), options, nil))
 	require.NoError(t, tun.boxInstance.Start())
 	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
 	tun.nonSelectableTags = makeNonSelectableTagSet(nil, options)
-	clash := service.FromContext[adapter.ClashServer](tun.ctx).(*clashServer)
-	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), clash.connTracker)
+	mutGrpMgr, err := newMutableGroupManager(tun.ctx, tun.logFactory.NewLogger("groupsManager"), tun.connTracker)
 	require.NoError(t, err)
 	tun.mutGrpMgr = mutGrpMgr
 	t.Cleanup(mutGrpMgr.Close)

@@ -434,7 +434,7 @@ func TestCurrentSelectedServer_WhileRejecting(t *testing.T) {
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
 		AutoSelectTag: stubGroup{now: "srv-a"},
 	}}
-	tun.clashServer.setRejectMode(true)
+	tun.clashModeManager.setRejectMode(true)
 	c := &VPNClient{tunnel: tun}
 	c.status.Store(Connected)
 

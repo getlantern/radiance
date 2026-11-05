@@ -170,7 +170,6 @@ func main() {
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 	hist := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, hist)
-	service.MustRegister[adapter.URLTestHistoryStorage](ctx, hist)
 	// The instance ctx must outlive the whole run: a deadline here would kill
 	// outbounds mid-loop during sequential throughput downloads and report
 	// them as STALLED. --timeout scopes only the URLTest call below;
