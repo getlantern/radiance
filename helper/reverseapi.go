@@ -23,8 +23,8 @@ const (
 	maxReverseErrLen = 200
 )
 
-// ErrReverseDisabled is the error of every ReverseAPI call when lantern-cloud
-// has reverse routes off for this client.
+// ErrReverseDisabled means lantern-cloud has reverse routes off for this
+// client. It is a server-side flag state, so it is not permanent.
 var ErrReverseDisabled = errors.New("helper: reverse routes disabled")
 
 // ReverseBlob is one pairing's sealed reverse route. Blob is opaque to
@@ -40,7 +40,8 @@ type ReverseRegisterResponse struct {
 	// ObservedIP is the address lantern-cloud saw the request come from, or
 	// "" when it could not tell.
 	ObservedIP string `json:"observed_ip"`
-	// Tags maps each registered pairing ID to its outbound tag.
+	// Tags maps each named pairing this device invited to its helper outbound
+	// tag.
 	Tags map[string]string `json:"tags"`
 }
 
@@ -64,7 +65,6 @@ func (e *ReverseAPIError) Error() string {
 }
 
 // ReverseAPI calls lantern-cloud's reverse-route endpoints as one device.
-// Nothing here logs a request or response body.
 type ReverseAPI struct {
 	httpClient *http.Client
 	baseURL    string
@@ -87,8 +87,10 @@ type reverseRegisterRequest struct {
 	Routes []ReverseBlob `json:"routes"`
 }
 
-// Register replaces this device's reverse routes with routes, which may be
-// empty.
+// Register stores the routes of the named pairings this device invited, and
+// drops a named pairing's route that lantern-cloud refuses. Routes of pairings
+// it does not name are left to expire; only Deregister withdraws them at once.
+// An empty routes stores nothing but still reports ObservedIP.
 func (a *ReverseAPI) Register(ctx context.Context, routes []ReverseBlob) (*ReverseRegisterResponse, error) {
 	if routes == nil {
 		routes = []ReverseBlob{}
