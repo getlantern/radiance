@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -31,7 +32,8 @@ type fakeReverse struct {
 	running, yielded                  atomic.Bool
 	box                               peer.ReverseBox
 	tags                              []string
-	// hang makes Stop wait for its ctx, as a teardown that overruns does.
+	// hang makes Stop and Release wait for their ctx, as a teardown that
+	// overruns does.
 	hang atomic.Bool
 }
 
@@ -56,6 +58,13 @@ func (f *fakeReverse) Stop(ctx context.Context) {
 		_ = f.box.SetReversePortal(nil, "")
 	}
 	f.running.Store(false)
+}
+
+func (f *fakeReverse) Release(ctx context.Context) {
+	if f.box != nil {
+		_ = f.box.SetReverseOutbounds(nil)
+	}
+	f.Stop(ctx)
 }
 
 func (f *fakeReverse) NetworkChanged()  { f.networks.Add(1) }
@@ -419,4 +428,42 @@ func TestPeerShareOnWithoutAReverseGate(t *testing.T) {
 	require.NoError(t, r.applyPeerShare(true))
 	require.NoError(t, r.applyPeerShare(false))
 	assert.Equal(t, int64(1), peerFake.startCalls.Load())
+}
+
+func TestPeerShareSelfStopRestartsAYieldedReverseClient(t *testing.T) {
+	r, fake, peerFake := newPeerShareReverseBackend(t)
+	require.NoError(t, r.applyPeerShare(true))
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
+
+	peerFake.active.Store(false)
+	r.onPeerSelfStop(errors.New("router lost the mapping"))
+	assert.False(t, peerShareOn())
+	require.Eventually(t, func() bool {
+		return fake.starts.Load() == 3 && fake.running.Load() && !fake.YieldedManualPort()
+	}, time.Second, 5*time.Millisecond)
+}
+
+// A personal proxies group whose only members are reverse outbounds goes
+// with them while peer sharing pauses the reverse client, and the tunnel
+// falls back to auto-select. The saved group is selected again once they
+// return.
+func TestPeerSharePauseRestoresTheSavedPersonalProxiesGroup(t *testing.T) {
+	r, fake := newReverseFriendBackend(t, t.TempDir())
+	peerFake := &fakePeerController{}
+	r.peerClient = peerFake
+	tunnel := &fakeHelperTunnel{live: map[string]string{}}
+	tunnel.attach(r)
+	r.persistSelection(vpn.PersonalProxiesTag)
+	require.NoError(t, r.liveTunnel().SelectServer(vpn.PersonalProxiesTag))
+
+	peerFake.onStart = func() {
+		assert.False(t, fake.running.Load())
+		assert.Empty(t, r.reverseOutbounds())
+		// The tunnel withdrew the emptied group.
+		require.NoError(t, tunnel.SelectServer(vpn.AutoSelectTag))
+	}
+	require.NoError(t, r.applyPeerShare(true))
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
+	assert.Equal(t, vpn.PersonalProxiesTag, tunnel.current())
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
 }

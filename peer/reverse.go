@@ -96,6 +96,9 @@ type ReverseClient struct {
 	cancel context.CancelFunc
 	// done closes when the last started run has torn down.
 	done chan struct{}
+	// released closes when the last started run has removed its portal and
+	// unmapped its port, before it deregisters.
+	released chan struct{}
 	// yielded says the running client skipped the manual port for peer
 	// sharing.
 	yielded bool
@@ -185,9 +188,9 @@ func (c *ReverseClient) Start(context.Context) error {
 		slog.Info("reverse: peer sharing holds the manual port, mapping another")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	prev, done := c.done, make(chan struct{})
-	c.cancel, c.done, c.yielded = cancel, done, yielded
-	go c.run(ctx, prev, done, manual, yielded)
+	prev, done, released := c.done, make(chan struct{}), make(chan struct{})
+	c.cancel, c.done, c.released, c.yielded = cancel, done, released, yielded
+	go c.run(ctx, prev, done, released, manual, yielded)
 	return nil
 }
 
@@ -199,23 +202,40 @@ func (c *ReverseClient) YieldedManualPort() bool {
 	return c.cancel != nil && c.yielded
 }
 
-// Stop deregisters this device's routes, removes the portal and its reverse
-// outbounds from the box, and unmaps the port, in that order. It waits for that
+// Stop removes the portal and its reverse outbounds from the box, unmaps the
+// port, and deregisters this device's routes, in that order. It waits for that
 // teardown or for ctx, whichever ends first; the teardown has its own
-// deadline and finishes either way.
+// deadlines and finishes either way.
 func (c *ReverseClient) Stop(ctx context.Context) {
+	done, _ := c.halt()
+	waitOrDone(ctx, done)
+}
+
+// Release is Stop, but waits only until the portal is removed and the port
+// unmapped; the deregister finishes in the background.
+func (c *ReverseClient) Release(ctx context.Context) {
+	_, released := c.halt()
+	waitOrDone(ctx, released)
+}
+
+func (c *ReverseClient) halt() (done, released <-chan struct{}) {
 	c.mu.Lock()
-	cancel, done := c.cancel, c.done
+	cancel := c.cancel
 	c.cancel = nil
+	done, released = c.done, c.released
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if done == nil {
+	return done, released
+}
+
+func waitOrDone(ctx context.Context, ch <-chan struct{}) {
+	if ch == nil {
 		return
 	}
 	select {
-	case <-done:
+	case <-ch:
 	case <-ctx.Done():
 	}
 }
@@ -239,14 +259,14 @@ func (c *ReverseClient) wake() {
 	}
 }
 
-func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done chan struct{}, manual uint16, yielded bool) {
+func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done, released chan struct{}, manual uint16, yielded bool) {
 	defer close(done)
 	if prev != nil {
 		<-prev
 	}
 	// The last run's port may be the manual port this run must not map.
 	c.st.manualPort, c.st.yielded, c.st.lastPort = manual, yielded, 0
-	defer c.teardown()
+	defer c.teardown(released)
 	for {
 		wait := c.cycle(ctx)
 		timer := time.NewTimer(wait)
@@ -261,13 +281,14 @@ func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done chan
 	}
 }
 
-func (c *ReverseClient) teardown() {
-	ctx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
-	defer cancel()
+// teardown releases the portal and port before it deregisters, so released
+// never waits on lantern-cloud.
+func (c *ReverseClient) teardown(released chan struct{}) {
 	s := &c.st
-	c.deregister(ctx, c.cfg.Now())
 	c.clearBox()
-	c.unmap(ctx)
+	c.unmap(context.Background())
+	close(released)
+	c.deregister(context.Background(), c.cfg.Now())
 	s.v4, s.v6 = observedAddr{}, observedAddr{}
 	s.tags = nil
 	s.creds, s.credsAt = nil, time.Time{}
@@ -503,7 +524,8 @@ func (c *ReverseClient) deregister(ctx context.Context, now time.Time) {
 	if !s.registered {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peerCleanupTimeout)
+	// A cancelled run's deregister ends at once; teardown deregisters again.
+	ctx, cancel := context.WithTimeout(ctx, peerCleanupTimeout)
 	defer cancel()
 	if err := c.cfg.API.Deregister(ctx); err != nil {
 		c.apiFailed(ctx, err, now)

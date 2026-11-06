@@ -807,7 +807,7 @@ func TestReverseStartReturnsAtOnceAndStopTearsDownInOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	e.c.Stop(ctx)
-	assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take())
+	assert.Equal(t, []string{"clear-portal", "unmap", "deregister"}, e.log.take())
 	assert.True(t, e.fwd.renewStopped)
 
 	// A restart serves again.
@@ -902,7 +902,7 @@ func TestReverseDisabledTearsDown(t *testing.T) {
 	assert.Empty(t, e.log.take())
 
 	// Stop has nothing left to withdraw.
-	e.c.teardown()
+	e.c.teardown(make(chan struct{}))
 	assert.Empty(t, e.log.take())
 }
 
@@ -1101,7 +1101,7 @@ func TestReverseChoosesItsForwardingAtStart(t *testing.T) {
 
 	e.log.take()
 	stop()
-	assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take(), "Stop releases the mapped port")
+	assert.Equal(t, []string{"clear-portal", "unmap", "deregister"}, e.log.take(), "Stop releases the mapped port")
 	sharing.Store(false)
 	e.c.NetworkChanged()
 	require.NoError(t, e.c.Start(context.Background()))
@@ -1127,4 +1127,33 @@ func TestReverseNeverMapsTheManualPortAutomatically(t *testing.T) {
 	p := pickInternalPortExcept(80)
 	assert.GreaterOrEqual(t, int(p), internalPortMin)
 	assert.Less(t, int(p), internalPortMax)
+}
+
+// Release returns once the portal and port are free, without waiting for
+// lantern-cloud to answer the deregister.
+func TestReverseReleaseDoesNotWaitForTheDeregister(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	require.NoError(t, e.c.Start(context.Background()))
+	require.Eventually(t, func() bool {
+		return slices.Contains(e.box.lastOutbounds(), lbA.ReverseHelperTag(revTag("p1")))
+	}, 5*time.Second, 10*time.Millisecond)
+	e.log.take()
+
+	gate := make(chan struct{})
+	e.srv.mu.Lock()
+	e.srv.block = gate
+	e.srv.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	e.c.Release(ctx)
+	assert.Less(t, time.Since(start), time.Second)
+	assert.NoError(t, ctx.Err())
+	assert.Nil(t, e.box.lastPortal())
+	assert.Equal(t, []string{"clear-portal", "unmap"}, e.log.take())
+
+	close(gate)
+	e.c.Stop(ctx)
+	assert.Equal(t, []string{"deregister"}, e.log.take())
 }

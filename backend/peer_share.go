@@ -270,6 +270,7 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	if err := persistPeerShare(false); err != nil {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
 	}
+	r.restartYieldedReverse()
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the

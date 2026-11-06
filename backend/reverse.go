@@ -41,6 +41,7 @@ var reverseUnsupported = common.IsIOS
 type reverseController interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context)
+	Release(ctx context.Context)
 	NetworkChanged()
 	PairingsChanged()
 	YieldedManualPort() bool
@@ -148,8 +149,9 @@ func (r *LocalBackend) stopReverse() {
 func peerShareOn() bool { return settings.GetBool(settings.PeerShareEnabledKey) }
 
 // pauseReverse stops the reverse client, if it runs, and keeps it stopped
-// until resume is called. It returns once the client's teardown has finished
-// or timed out, or ctx ends. resume may be called more than once.
+// until resume is called. It returns once the client has removed its portal
+// and unmapped its port, that wait has timed out, or ctx ends. resume may be
+// called more than once.
 func (r *LocalBackend) pauseReverse(ctx context.Context) (resume func()) {
 	g := r.reverseGate.Load()
 	if g == nil {
@@ -267,14 +269,15 @@ func (g *reverseGate) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			if running {
-				g.stopClient()
+				g.stopClient(g.client.Stop)
 			}
 			return
 		case <-g.kick:
 		}
 		want, restart, acks := g.take()
 		if running && (!want || (restart && g.client.YieldedManualPort())) {
-			g.stopClient()
+			// A later Start waits out the deregister itself.
+			g.stopClient(g.client.Release)
 			running = false
 		}
 		if want && !running {
@@ -290,10 +293,10 @@ func (g *reverseGate) run(ctx context.Context) {
 	}
 }
 
-func (g *reverseGate) stopClient() {
+func (g *reverseGate) stopClient(stop func(context.Context)) {
 	ctx, cancel := context.WithTimeout(context.Background(), reverseStopTimeout)
 	defer cancel()
-	g.client.Stop(ctx)
+	stop(ctx)
 	if ctx.Err() != nil {
 		slog.Warn("Reverse client teardown is still running")
 	}
@@ -326,8 +329,9 @@ func (b reverseBox) SetReverseOutbounds(tags []string) error {
 func (b reverseBox) RebindReversePortal() error { return b.r.vpnClient.RebindReversePortal() }
 
 // restoreReverseSelection has the tunnel select the saved friend once one of
-// reverseTags is that friend's: a tunnel that came up without the friend's
-// outbound fell back from it.
+// reverseTags is that friend's, or the saved personal proxies group: a tunnel
+// that came up without the friend's outbound, or lost the group's last
+// members, fell back from it.
 func (r *LocalBackend) restoreReverseSelection(reverseTags []string) {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
@@ -338,10 +342,12 @@ func (r *LocalBackend) restoreReverseSelection(reverseTags []string) {
 	if err := settings.GetStruct(settings.SelectedServerKey, &saved); err != nil {
 		return
 	}
-	friend, ok := vpn.ParsePersonalProxySelection(saved.Tag)
-	if !ok || !slices.Contains(reverseTags, lbA.ReverseHelperTag(friend)) ||
-		r.liveTunnel().SelectedPersonalProxy() == friend {
-		return
+	if saved.Tag != vpn.PersonalProxiesTag {
+		friend, ok := vpn.ParsePersonalProxySelection(saved.Tag)
+		if !ok || !slices.Contains(reverseTags, lbA.ReverseHelperTag(friend)) ||
+			r.liveTunnel().SelectedPersonalProxy() == friend {
+			return
+		}
 	}
 	if err := r.liveTunnel().SelectServer(saved.Tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		// The error can name the friend.
