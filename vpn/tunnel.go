@@ -847,11 +847,28 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	return t.loadOutboundsLocked(list, true)
 }
 
+// applyProbeTimeoutsLocked sets the probe timeouts of list's auto-select
+// options on the auto group. A list without options leaves them alone. The
+// caller must hold t.outboundMu.
+func (t *tunnel) applyProbeTimeoutsLocked(list servers.ServerList) {
+	if list.AutoSelectOptions == nil {
+		return
+	}
+	if err := t.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, list.AutoSelectOptions.ProbeTimeoutsMs); err != nil {
+		slog.Warn("Failed to set probe timeouts", "error", err)
+	}
+}
+
 // loadOutboundsLocked adds the servers in list to the tunnel, or swaps in
 // those whose options changed, and with applyOverrides sets list's bandit URL
 // overrides on the auto group. The caller must hold t.outboundMu.
 func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides bool) error {
 	list = allowedServers(list)
+	// Before any member joins the auto-select group: adding one probes it at
+	// once, with whatever timeouts the group has then.
+	if applyOverrides {
+		t.applyProbeTimeoutsLocked(list)
+	}
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -1137,6 +1154,8 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 && len(list.URLOverrides) == 0 {
+		// A config with no servers still sets, or clears, the probe timeouts.
+		t.applyProbeTimeoutsLocked(list)
 		slog.Debug("No outbounds, endpoints, or bandit overrides to update, skipping")
 		return nil
 	}
@@ -1217,8 +1236,9 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", loggableTags(dropped))
 	}
 	return servers.ServerList{
-		Servers:      deduped,
-		URLOverrides: list.URLOverrides,
+		Servers:           deduped,
+		URLOverrides:      list.URLOverrides,
+		AutoSelectOptions: list.AutoSelectOptions,
 	}
 }
 

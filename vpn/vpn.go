@@ -32,6 +32,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	"github.com/getlantern/radiance/events"
@@ -932,7 +933,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 //
 // Tests are cancelled and results discarded if ctx is cancelled or
 // [VPNClient.Connect] is called while they are running.
-func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (results map[string]uint16, err error) {
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string, autoSelect *lbO.MutableAutoSelectOutboundOptions) (results map[string]uint16, err error) {
 	defer func() {
 		if err != nil {
 			results = nil
@@ -969,7 +970,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
+	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs, autoSelect))
 	// CacheFile must stay disabled: enabling it holds an exclusive flock on
 	// a file in the iOS App Group container, which the OS kills across
 	// suspend with 0xdead10cc.

@@ -263,7 +263,7 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 	c.status.Store(Connected)
 	c.tunnel = &tunnel{}
 
-	_, err := c.RunOfflineURLTests(t.Context(), "", nil, nil)
+	_, err := c.RunOfflineURLTests(t.Context(), "", nil, nil, nil)
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 }
 
@@ -324,7 +324,7 @@ func TestRunOfflineURLTests_Panic(t *testing.T) {
 			})
 
 			client := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-			results, err := client.RunOfflineURLTests(ctx, "", []O.Outbound{{Type: "panic-test", Tag: "panic"}}, nil)
+			results, err := client.RunOfflineURLTests(ctx, "", []O.Outbound{{Type: "panic-test", Tag: "panic"}}, nil, nil)
 			require.ErrorContains(t, err, "panic running offline URL tests:")
 			assert.Contains(t, err.Error(), phase)
 			assert.NotContains(t, err.Error(), "\n")
@@ -349,7 +349,7 @@ func TestRunOfflineURLTests_Panic(t *testing.T) {
 				t.Fatal("offline test completion was not signalled")
 			}
 
-			results, err = client.RunOfflineURLTests(t.Context(), "", []O.Outbound{{Type: "missing-outbound", Tag: "invalid"}}, nil)
+			results, err = client.RunOfflineURLTests(t.Context(), "", []O.Outbound{{Type: "missing-outbound", Tag: "invalid"}}, nil, nil)
 			require.ErrorContains(t, err, "failed to create sing-box instance")
 			assert.NotContains(t, err.Error(), "offline tests already running")
 			assert.Nil(t, results)
