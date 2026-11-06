@@ -833,6 +833,10 @@ func (m *unboundedManager) startLocked() {
 			if ucfg.PTableSize > 0 {
 				bfOpt.PTableSize = ucfg.PTableSize
 			}
+			// Empty, the default, reports nothing. Set, the widget reports its
+			// connected consumers, IP addresses included, to netstated for the
+			// network visualizations, as the browser widget does.
+			bfOpt.Netstated = ucfg.Netstated
 		}
 
 		// Wire the broflake connection callback into the radiance event
