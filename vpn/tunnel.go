@@ -865,6 +865,14 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 	newOutbounds := newList.Outbounds()
 	newEndpoints := newList.Endpoints()
 
+	// Before any member joins the auto-select group: adding one probes it at
+	// once, with whatever timeouts the group has then.
+	if applyOverrides && list.AutoSelectOptions != nil {
+		if err := t.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, list.AutoSelectOptions.ProbeTimeoutsMs); err != nil {
+			slog.Warn("Failed to set probe timeouts", "error", err)
+		}
+	}
+
 	ctx := t.ctx
 	router := service.FromContext[adapter.Router](ctx)
 
@@ -959,13 +967,6 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 	if !applyOverrides {
 		slog.Debug("Added servers", "added", added)
 		return errors.Join(errs...)
-	}
-	// Before the URL overrides, so the probe cycle they trigger uses the new
-	// timeouts.
-	if list.AutoSelectOptions != nil {
-		if err := t.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, list.AutoSelectOptions.ProbeTimeoutsMs); err != nil {
-			slog.Warn("Failed to set probe timeouts", "error", err)
-		}
 	}
 	if len(list.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to auto-select group",
