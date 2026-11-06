@@ -267,6 +267,10 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 		s.polled = nil
 		return b.cfg.PollInterval
 	}
+	// The hold-off outlives a run, so a restart cannot cut it short.
+	if now := b.cfg.Now(); now.Before(s.apiNotBefore) {
+		return s.apiNotBefore.Sub(now)
+	}
 	callCtx, release := b.pairing.Watch(ctx, snapshot)
 	resp, err := b.cfg.API.Routes(callCtx)
 	interrupted := callCtx.Err() != nil && ctx.Err() == nil

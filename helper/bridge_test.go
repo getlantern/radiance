@@ -379,12 +379,22 @@ func TestBridgeBacksOffWhileBusyAndIdlesWhileDisabled(t *testing.T) {
 	box := h.allBoxes()[0]
 
 	h.api.set(http.StatusServiceUnavailable, ReverseRoutesResponse{})
-	assert.Equal(t, 2*testPoll, h.cycle())
+	wait := h.cycle()
+	assert.Equal(t, 2*testPoll, wait)
+	calls := h.api.calls.Load()
+	h.advance(wait / 2)
+	assert.Equal(t, wait/2, h.cycle(), "a cycle inside the back-off waits out the rest")
+	assert.Equal(t, calls, h.api.calls.Load())
+	h.advance(wait / 2)
 	h.api.set(http.StatusTooManyRequests, ReverseRoutesResponse{})
-	assert.Equal(t, 4*testPoll, h.cycle())
-	assert.Equal(t, maxBridgeBackoff, h.cycle())
+	wait = h.cycle()
+	assert.Equal(t, 4*testPoll, wait)
+	h.advance(wait)
+	wait = h.cycle()
+	assert.Equal(t, maxBridgeBackoff, wait)
 	assert.False(t, box.isClosed(), "a busy server keeps the bridges")
 
+	h.advance(wait)
 	h.api.set(http.StatusInternalServerError, ReverseRoutesResponse{})
 	assert.Equal(t, testPoll, h.cycle())
 
@@ -392,10 +402,35 @@ func TestBridgeBacksOffWhileBusyAndIdlesWhileDisabled(t *testing.T) {
 	assert.Equal(t, bridgeDisabledWait, h.cycle())
 	assert.True(t, box.isClosed())
 
+	h.advance(bridgeDisabledWait)
 	h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, testRoute(h.clock()))}, BridgeConfig: bridgeConfig1})
 	assert.Equal(t, testPoll, h.cycle())
 	h.api.set(http.StatusServiceUnavailable, ReverseRoutesResponse{})
 	assert.Equal(t, 2*testPoll, h.cycle(), "a success resets the backoff")
+}
+
+// Restarting the client, as the widget does, does not cut short the wait
+// lantern-cloud asked for.
+func TestBridgeRestartKeepsTheHoldOff(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h := newBridgeHarness(t)
+			h.api.set(status, ReverseRoutesResponse{})
+			h.cycle()
+			require.EqualValues(t, 1, h.api.calls.Load())
+
+			h.client.SetRunning(context.Background(), true)
+			h.client.SetRunning(context.Background(), false)
+			h.client.SetRunning(context.Background(), true)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				h.client.Stop(ctx)
+			})
+			time.Sleep(100 * time.Millisecond)
+			assert.EqualValues(t, 1, h.api.calls.Load())
+		})
+	}
 }
 
 func TestBridgeCountsBytesUnderThePairing(t *testing.T) {

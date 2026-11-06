@@ -669,6 +669,32 @@ func TestReverseBacksOffOnOverload(t *testing.T) {
 	}
 }
 
+// Stopping and starting the client, as a VPN toggle does, makes no
+// lantern-cloud call while it is held off.
+func TestReverseRestartKeepsTheHoldOff(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			e := newRevEnv(t)
+			e.keys.set("p1")
+			e.cycle(t)
+			e.srv.setFallback(revResponse{status: status})
+			e.clock.Advance(defaultReverseRegisterInterval)
+			e.cycle(t)
+			e.log.take()
+			arrived := e.srv.arrived.Load()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			for range 3 {
+				require.NoError(t, e.c.Start(context.Background()))
+				time.Sleep(20 * time.Millisecond)
+				e.c.Stop(ctx)
+			}
+			assert.Equal(t, arrived, e.srv.arrived.Load(), "a restart called lantern-cloud while held off")
+		})
+	}
+}
+
 func TestReverseOtherErrorsRetryNextTick(t *testing.T) {
 	e := newRevEnv(t)
 	e.keys.set("p1")

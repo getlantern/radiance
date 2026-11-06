@@ -300,7 +300,11 @@ func (c *ReverseClient) teardown(released chan struct{}) {
 	c.clearBox()
 	c.unmap(context.Background())
 	close(released)
-	c.deregister(context.Background(), c.cfg.Now())
+	// While held off the routes are left to expire, so a restart loop
+	// cannot cut the hold-off short.
+	if now := c.cfg.Now(); !now.Before(s.apiNotBefore) {
+		c.deregister(context.Background(), now)
+	}
 	s.v4, s.v6 = observedAddr{}, observedAddr{}
 	s.tags = nil
 	s.creds, s.credsAt = nil, time.Time{}
