@@ -474,7 +474,7 @@ type quietLogSetter interface {
 func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	s := &c.st
 	var fwd portForwarder
-	if s.manualPort != 0 && !s.yielded {
+	if s.mapsManualPort() {
 		fwd = portforward.NewManualForwarder(s.manualPort)
 	} else {
 		var err error
@@ -690,6 +690,12 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 		if err := c.cfg.Box.SetReversePortal(cfg, c.coverDomain); err != nil {
 			// The error can name the port or a tag.
 			slog.Warn("reverse: could not configure the portal")
+			// Another socket holds the port the client picked, so the next
+			// cycle maps a different one.
+			if s.portal == nil && !s.mapsManualPort() && portInUse(err) {
+				c.unmap(context.Background())
+				s.lastPort = 0
+			}
 			return
 		}
 		s.portal, s.portalCreds = cfg, s.creds
@@ -710,6 +716,8 @@ func (c *ReverseClient) setOutbounds(tags []string) {
 	}
 	s.outbounds, s.outboundsKnown = tags, true
 }
+
+func (s *reverseState) mapsManualPort() bool { return s.manualPort != 0 && !s.yielded }
 
 func (s *reverseState) hasAddr() bool { return s.v4.ip.IsValid() || s.v6.ip.IsValid() }
 

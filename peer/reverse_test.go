@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -1197,4 +1198,60 @@ func TestReverseRevocationDoesNotWaitForARegisterInFlight(t *testing.T) {
 	require.Eventually(t, func() bool { return !serves("p1") }, time.Second, 5*time.Millisecond)
 	assert.True(t, serves("p2"))
 	assert.NotContains(t, e.box.lastOutbounds(), tag("p1"))
+}
+
+func inUseError(t *testing.T) error {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+	_, err = net.Listen("tcp", ln.Addr().String())
+	require.Error(t, err)
+	require.True(t, portInUse(err))
+	return fmt.Errorf("portal: listen: %w", err)
+}
+
+// A mapped port another socket holds is given up, so the next cycle maps
+// another instead of retrying it forever.
+func TestReverseMovesOffAnOccupiedPort(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.box.setErrs(inUseError(t), nil)
+	assert.Equal(t, defaultReverseRegisterInterval, e.cycle(t))
+	assert.Equal(t, []string{"register:0", "map", "portal", "unmap"}, e.log.take())
+	assert.Zero(t, e.c.st.lastPort)
+
+	e.box.setErrs(nil, nil)
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "map", "portal", "outbounds:0", "register:1", "portal", "outbounds:1"}, e.log.take())
+	assert.Len(t, e.fwd.mappedPorts(), 2)
+}
+
+// Only a bind failure on a port the client picked moves it: not another
+// error, not the manual port, and not while a portal serves.
+func TestReverseKeepsItsPortOnOtherPortalErrors(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.box.setErrs(errors.New("bad certificate"), nil)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "map", "portal"}, e.log.take())
+
+	e.box.setErrs(nil, nil)
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	e.log.take()
+	e.box.setErrs(inUseError(t), nil)
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.cycle(t)
+	log := e.log.take()
+	assert.Contains(t, log, "portal")
+	assert.NotContains(t, log, "unmap", "a serving portal keeps its mapping")
+
+	e = newRevEnv(t)
+	e.c.st.manualPort = 41234
+	e.keys.set("p1")
+	e.box.setErrs(inUseError(t), nil)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "portal"}, e.log.take(), "the manual port is never given up")
 }
