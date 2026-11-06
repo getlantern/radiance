@@ -131,8 +131,9 @@ type LocalBackend struct {
 	stopSelectionHistoryListener context.CancelFunc
 	selectionHistoryMu           sync.Mutex
 	// stopSelectionRestore ends the periodic restoreSavedSelection of the
-	// connected tunnel. Guarded by selectionRestoreMu.
-	stopSelectionRestore context.CancelFunc
+	// connected tunnel and waits for a restore in progress. Guarded by
+	// selectionRestoreMu.
+	stopSelectionRestore func()
 	selectionRestoreMu   sync.Mutex
 	selectionReporter    *selectionReporter
 
@@ -1359,8 +1360,12 @@ func (r *LocalBackend) setSelectionRestoreTicker(on bool) {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
-	r.stopSelectionRestore = cancel
+	done := make(chan struct{})
+	// Waiting means no restore selects after the ticker is stopped. Callers
+	// do not hold selectionMu, which a restore takes.
+	r.stopSelectionRestore = func() { cancel(); <-done }
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(selectionRestoreInterval)
 		defer ticker.Stop()
 		for {
