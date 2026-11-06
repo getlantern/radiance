@@ -45,6 +45,9 @@ type ReverseBox interface {
 	SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error
 	SetReverseOutbounds(tags []string) error
 	RebindReversePortal() error
+	// ReversePortalListening reports whether a running portal holds a
+	// listener. A failed bind or rebind leaves it without one.
+	ReversePortalListening() bool
 }
 
 // PairingKeySource returns this device's helper pairing keys; helper.PairingKeys
@@ -387,7 +390,7 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 	for range 1 + maxReverseReregisters {
 		// Routes advertise the identity the running portal holds, which a
 		// failed reconfigure leaves at the previous credentials.
-		if s.portal == nil || s.portal.ListenPort != s.mapping.InternalPort {
+		if s.portal == nil || s.portal.ListenPort != s.mapping.InternalPort || c.portalDown() {
 			return c.cfg.RegisterInterval
 		}
 		blobs := c.seal(ids, now)
@@ -682,7 +685,7 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 	tags = slices.Compact(tags)
 
 	if s.portal == nil || s.portalCreds != s.creds || s.portal.ListenPort != s.mapping.InternalPort ||
-		!maps.Equal(s.portal.Pairings, pairings) {
+		!maps.Equal(s.portal.Pairings, pairings) || c.portalDown() {
 		cfg := &samizdatreverse.PortalConfig{
 			ListenPort: s.mapping.InternalPort,
 			PrivateKey: s.creds.PrivateKey[:],
@@ -694,17 +697,29 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 		if err := c.cfg.Box.SetReversePortal(cfg, c.coverDomain); err != nil {
 			// The error can name the port or a tag.
 			c.cfg.Logger.Warn("reverse: could not configure the portal")
-			// Another socket holds the port the client picked, so the next
-			// cycle maps a different one.
-			if s.portal == nil && !s.mapsManualPort() && portInUse(err) {
-				c.unmap(context.Background())
-				s.lastPort = 0
+			if s.portal == nil || len(s.portal.Pairings) == 0 || c.portalDown() {
+				// Nothing serves: no route is published until a configure
+				// succeeds.
+				s.portal = nil
+				// Another socket holds the port the client picked, so the
+				// next cycle maps a different one.
+				if !s.mapsManualPort() && portInUse(err) {
+					c.unmap(context.Background())
+					s.lastPort = 0
+				}
 			}
 			return
 		}
 		s.portal, s.portalCreds = cfg, s.creds
 	}
 	c.setOutbounds(tags)
+}
+
+// portalDown reports whether the portal configured with pairings has lost its
+// listener, to a failed rebind or a tunnel that came up without it.
+func (c *ReverseClient) portalDown() bool {
+	s := &c.st
+	return s.portal != nil && len(s.portal.Pairings) > 0 && !c.cfg.Box.ReversePortalListening()
 }
 
 func (c *ReverseClient) setOutbounds(tags []string) {

@@ -338,6 +338,8 @@ func (b reverseBox) SetReverseOutbounds(tags []string) error {
 
 func (b reverseBox) RebindReversePortal() error { return b.r.vpnClient.RebindReversePortal() }
 
+func (b reverseBox) ReversePortalListening() bool { return b.r.vpnClient.ReversePortalListening() }
+
 // restoreSavedSelection is restoreSavedSelectionLocked for a caller not
 // holding r.selectionMu.
 func (r *LocalBackend) restoreSavedSelection() {

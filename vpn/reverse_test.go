@@ -224,6 +224,31 @@ func TestReverseStateAppliesToTheNextTunnel(t *testing.T) {
 	}
 }
 
+// A portal whose restore could not bind on a new tunnel reports no listener,
+// and the kept config brings it up once the port is free.
+func TestReversePortalListeningAfterAFailedRestore(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.False(t, c.ReversePortalListening(), "no tunnel")
+	occupied, err := net.Listen("tcp", "[::]:0")
+	require.NoError(t, err)
+	cfg := testPortalConfig(t, lbA.ReverseHelperTag(testHelper1))
+	cfg.ListenPort = uint16(occupied.Addr().(*net.TCPAddr).Port)
+	require.NoError(t, c.SetReversePortal(cfg, "a.example.com"))
+
+	tun := startPersonalProxiesTestTunnel(t)
+	c.mu.Lock()
+	c.tunnel = tun
+	assert.Error(t, c.restoreReverseLocked())
+	c.mu.Unlock()
+	assert.False(t, c.ReversePortalListening())
+
+	require.NoError(t, occupied.Close())
+	require.NoError(t, c.SetReversePortal(cfg, "a.example.com"))
+	assert.True(t, c.ReversePortalListening())
+	require.NoError(t, c.SetReversePortal(nil, ""))
+	assert.False(t, c.ReversePortalListening())
+}
+
 // A tunnel starts with the kept reverse outbounds and portal in its options,
 // so a selection whose only members are reverse outbounds starts on them.
 func TestBuildOptionsStartsReverseOnlySelections(t *testing.T) {

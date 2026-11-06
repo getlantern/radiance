@@ -129,6 +129,11 @@ type revBox struct {
 	rebinds      int
 	portalErr    error
 	outboundsErr error
+	rebindErr    error
+	// serving is the last portal configured without error, and down says
+	// it lost its listener to a failed rebind.
+	serving *samizdatreverse.PortalConfig
+	down    bool
 }
 
 func (b *revBox) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
@@ -141,6 +146,9 @@ func (b *revBox) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeD
 	}
 	b.portals = append(b.portals, cfg)
 	b.masquerades = append(b.masquerades, masqueradeDomain)
+	if b.portalErr == nil {
+		b.serving, b.down = cfg, false
+	}
 	return b.portalErr
 }
 
@@ -157,7 +165,16 @@ func (b *revBox) RebindReversePortal() error {
 	defer b.mu.Unlock()
 	b.log.add("rebind")
 	b.rebinds++
-	return nil
+	if b.rebindErr != nil {
+		b.down = true
+	}
+	return b.rebindErr
+}
+
+func (b *revBox) ReversePortalListening() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.serving != nil && len(b.serving.Pairings) > 0 && !b.down
 }
 
 func (b *revBox) lastPortal() *samizdatreverse.PortalConfig {
@@ -1252,4 +1269,69 @@ func TestReverseKeepsItsPortOnOtherPortalErrors(t *testing.T) {
 	e.box.setErrs(inUseError(t), nil)
 	e.cycle(t)
 	assert.Equal(t, []string{"register:0", "portal"}, e.log.take(), "the manual port is never given up")
+}
+
+// A portal that lost its listener, to a failed rebind or a tunnel that came
+// up without it, is configured again, and no route is published until it
+// listens.
+func TestReverseRestoresAPortalThatLostItsListener(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+	require.True(t, e.box.ReversePortalListening())
+	e.log.take()
+
+	e.box.mu.Lock()
+	e.box.rebindErr = errors.New("listen failed")
+	e.box.mu.Unlock()
+	e.box.setErrs(errors.New("listen failed"), nil)
+	e.c.NetworkChanged()
+	e.clock.Advance(time.Second)
+	e.cycle(t)
+	assert.Equal(t, []string{"deregister", "rebind", "unmap", "register:0", "map", "portal"}, e.log.take(),
+		"no route is published for a portal without a listener")
+	assert.True(t, e.c.st.portal == nil)
+
+	e.box.setErrs(nil, nil)
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	assert.True(t, e.box.ReversePortalListening())
+
+	// A tunnel restart whose restore failed.
+	e.box.mu.Lock()
+	e.box.down = true
+	e.box.mu.Unlock()
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+}
+
+// The first bind happens when the pairings arrive, after a portal with none
+// was configured, and an occupied port moves the client off it then too.
+func TestReverseMovesOffAPortOccupiedWhenThePairingsArrive(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	var configures int
+	e.c.cfg.Box = portalErrAfter{revBox: e.box, err: inUseError(t), n: 1, count: &configures}
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "map", "portal", "outbounds:0", "register:1", "portal", "unmap"}, e.log.take())
+	assert.Zero(t, e.c.st.lastPort)
+	assert.True(t, e.c.st.portal == nil)
+}
+
+// portalErrAfter fails every portal configure after the first n.
+type portalErrAfter struct {
+	*revBox
+	err   error
+	n     int
+	count *int
+}
+
+func (b portalErrAfter) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
+	*b.count++
+	if *b.count > b.n {
+		b.revBox.setErrs(b.err, nil)
+	}
+	return b.revBox.SetReversePortal(cfg, masqueradeDomain)
 }

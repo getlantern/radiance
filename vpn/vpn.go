@@ -603,6 +603,14 @@ func (c *VPNClient) RebindReversePortal() error {
 	return c.tunnel.rebindReversePortal()
 }
 
+// ReversePortalListening reports whether the running tunnel's portal holds a
+// listener. It is false with no tunnel or no portal.
+func (c *VPNClient) ReversePortalListening() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tunnel != nil && c.tunnel.reversePortalListening()
+}
+
 // PhysicalInterfaceControl returns a socket control that binds a dial to the
 // running tunnel's underlying default interface, so the dial bypasses the
 // tunnel. It is nil with no tunnel running or no interface monitor to bind by.

@@ -3,6 +3,7 @@ package vpn
 import (
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -25,6 +26,7 @@ const reversePortalTag = redact.ReversePortalTag
 type reversePortal interface {
 	Configure(samizdatreverse.PortalConfig) error
 	Rebind() error
+	Addr() net.Addr
 }
 
 // setReversePortal configures the portal, first creating it for
@@ -105,6 +107,21 @@ func (t *tunnel) rebindReversePortal() error {
 		return errors.New("reverse portal cannot be rebound")
 	}
 	return portal.Rebind()
+}
+
+func (t *tunnel) reversePortalListening() bool {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	inbounds := service.FromContext[adapter.InboundManager](t.ctx)
+	if inbounds == nil {
+		return false
+	}
+	in, ok := inbounds.Get(reversePortalTag)
+	if !ok {
+		return false
+	}
+	portal, ok := in.(reversePortal)
+	return ok && portal.Addr() != nil
 }
 
 func (t *tunnel) setReverseOutbounds(tags []string) error {
