@@ -55,8 +55,9 @@ type BridgeConfig struct {
 // to each, counting the bytes relayed into Usage. It is safe for concurrent
 // use.
 type BridgeClient struct {
-	cfg  BridgeConfig
-	kick chan struct{}
+	cfg     BridgeConfig
+	kick    chan struct{}
+	pairing PairingWatch
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -104,6 +105,7 @@ func NewBridgeClient(cfg BridgeConfig) *BridgeClient {
 // the bridges of pairings that no longer hold a volunteer key. It does not
 // block.
 func (b *BridgeClient) PairingsChanged() {
+	b.pairing.Changed()
 	select {
 	case b.kick <- struct{}{}:
 	default:
@@ -227,6 +229,7 @@ func (b *BridgeClient) setBridges(bridges map[string]*lbO.SamizdatBridgeInboundO
 // cycle does one poll and returns how long to wait before the next.
 func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 	s := &b.st
+	snapshot := b.pairing.Snapshot()
 	ids := b.volunteerIDs()
 	b.dropRevoked(ids)
 	// Only a device with volunteer pairings has routes to fetch.
@@ -234,8 +237,15 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 		b.closeBox()
 		return b.cfg.PollInterval
 	}
-	resp, err := b.cfg.API.Routes(ctx)
+	callCtx, release := b.pairing.Watch(ctx, snapshot)
+	resp, err := b.cfg.API.Routes(callCtx)
+	interrupted := callCtx.Err() != nil && ctx.Err() == nil
+	release()
 	if err != nil {
+		if interrupted {
+			// The pairings changed: drop the revoked and poll again.
+			return 0
+		}
 		return b.routesFailed(ctx, err)
 	}
 	s.backoff = 0

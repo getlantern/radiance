@@ -518,3 +518,50 @@ func TestBridgePairingsChangedDropsWithoutTheAPI(t *testing.T) {
 	assert.Contains(t, box.last(), BridgeTag(bridgePairingB))
 	assert.Equal(t, calls, h.api.calls.Load())
 }
+
+// A revocation closes its bridge at once even while a poll is stuck.
+func TestBridgeRevocationDoesNotWaitForAPollInFlight(t *testing.T) {
+	h := newBridgeHarness(t)
+	r := testRoute(h.clock())
+	h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, r), h.seal(bridgePairingB, r)}, BridgeConfig: bridgeConfig1})
+	h.cycle()
+	box := h.allBoxes()[0]
+	require.Len(t, box.last(), 2)
+
+	block := make(chan struct{})
+	h.api.block = block
+	calls := h.api.calls.Load()
+	h.client.SetRunning(context.Background(), true)
+	t.Cleanup(func() {
+		close(block)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.client.Stop(ctx)
+	})
+	require.Eventually(t, func() bool { return h.api.calls.Load() > calls }, 5*time.Second, 5*time.Millisecond)
+
+	h.revoke(bridgePairingA)
+	h.client.PairingsChanged()
+	require.Eventually(t, func() bool { return len(box.last()) == 1 }, time.Second, 5*time.Millisecond)
+	assert.Contains(t, box.last(), BridgeTag(bridgePairingB))
+	assert.False(t, box.isClosed())
+}
+
+func TestPairingWatchCancelsOnlyAfterItsSnapshot(t *testing.T) {
+	var w PairingWatch
+	snap := w.Snapshot()
+	ctx, release := w.Watch(context.Background(), snap)
+	assert.NoError(t, ctx.Err())
+	w.Changed()
+	assert.Error(t, ctx.Err(), "a change cancels the call in flight")
+	release()
+
+	ctx, release = w.Watch(context.Background(), snap)
+	assert.Error(t, ctx.Err(), "a change since the snapshot cancels at once")
+	release()
+
+	ctx, release = w.Watch(context.Background(), w.Snapshot())
+	release()
+	w.Changed()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled, "release cancels its own ctx")
+}

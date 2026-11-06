@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -239,6 +240,8 @@ type revServer struct {
 	fallback    revResponse
 	deregStatus int
 	block       chan struct{}
+	// arrived counts requests, blocked or not.
+	arrived atomic.Int32
 }
 
 func revTag(pairingID string) string {
@@ -249,6 +252,7 @@ func revTag(pairingID string) string {
 func newRevServer(t *testing.T, log *revLog) *revServer {
 	s := &revServer{log: log, fallback: revResponse{observedIP: "198.51.100.7"}}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.arrived.Add(1)
 		s.mu.Lock()
 		block := s.block
 		s.mu.Unlock()
@@ -1156,4 +1160,41 @@ func TestReverseReleaseDoesNotWaitForTheDeregister(t *testing.T) {
 	close(gate)
 	e.c.Stop(ctx)
 	assert.Equal(t, []string{"deregister"}, e.log.take())
+}
+
+// A revocation leaves the portal at once even while a register is stuck.
+func TestReverseRevocationDoesNotWaitForARegisterInFlight(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.keys.set("p2")
+	require.NoError(t, e.c.Start(context.Background()))
+	gate := make(chan struct{})
+	t.Cleanup(func() {
+		e.srv.mu.Lock()
+		e.srv.block = nil
+		e.srv.mu.Unlock()
+		close(gate)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		e.c.Stop(ctx)
+	})
+	tag := func(id string) string { return lbA.ReverseHelperTag(revTag(id)) }
+	serves := func(id string) bool {
+		p := e.box.lastPortal()
+		return p != nil && slices.Contains(slices.Collect(maps.Values(p.Pairings)), tag(id))
+	}
+	require.Eventually(t, func() bool { return serves("p1") && serves("p2") }, 5*time.Second, 5*time.Millisecond)
+
+	e.srv.mu.Lock()
+	e.srv.block = gate
+	e.srv.mu.Unlock()
+	arrived := e.srv.arrived.Load()
+	e.c.wake()
+	require.Eventually(t, func() bool { return e.srv.arrived.Load() > arrived }, 5*time.Second, 5*time.Millisecond)
+
+	e.keys.remove("p1")
+	e.c.PairingsChanged()
+	require.Eventually(t, func() bool { return !serves("p1") }, time.Second, 5*time.Millisecond)
+	assert.True(t, serves("p2"))
+	assert.NotContains(t, e.box.lastOutbounds(), tag("p1"))
 }

@@ -91,6 +91,7 @@ type ReverseClient struct {
 	coverDomain string
 	kick        chan struct{}
 	netChanged  atomic.Bool
+	pairing     helper.PairingWatch
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -251,7 +252,10 @@ func (c *ReverseClient) NetworkChanged() {
 }
 
 // PairingsChanged registers at once for the current inviter pairings.
-func (c *ReverseClient) PairingsChanged() { c.wake() }
+func (c *ReverseClient) PairingsChanged() {
+	c.pairing.Changed()
+	c.wake()
+}
 
 func (c *ReverseClient) wake() {
 	select {
@@ -296,8 +300,12 @@ func (c *ReverseClient) teardown(released chan struct{}) {
 }
 
 // cycle does one round of work and returns how long to wait before the next.
-func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
+func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 	s := &c.st
+	// lantern-cloud calls end when the pairings change, so a revocation
+	// never waits on one.
+	ctx, release := c.pairing.Watch(runCtx, c.pairing.Snapshot())
+	defer release()
 	now := c.cfg.Now()
 	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
 	c.dropRevoked(ids)
@@ -355,7 +363,7 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 			return c.untilNextCycle(now)
 		}
 	}
-	if s.mapping == nil && !c.mapPort(ctx) {
+	if s.mapping == nil && !c.mapPort(runCtx) {
 		return c.cfg.RegisterInterval
 	}
 	if s.creds == nil || now.Sub(s.credsAt) >= c.cfg.RotateInterval {
