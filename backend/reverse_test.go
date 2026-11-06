@@ -699,8 +699,9 @@ func TestSelectionRestoreTickerCatchesAMissedMember(t *testing.T) {
 
 	r.setSelectionRestoreTicker(false)
 	require.NoError(t, tunnel.SelectServer(vpn.AutoSelectTag))
-	n = selectCalls(tunnel)
-	assert.Never(t, func() bool { return selectCalls(tunnel) != n }, 50*time.Millisecond, 5*time.Millisecond, "stopped")
+	// A fresh variable: the previous Never's last check can still be reading n.
+	stopped := selectCalls(tunnel)
+	assert.Never(t, func() bool { return selectCalls(tunnel) != stopped }, 50*time.Millisecond, 5*time.Millisecond, "stopped")
 }
 
 // The VPN client reports Connected before Connect returns. A restore it, or a
