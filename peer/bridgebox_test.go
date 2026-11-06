@@ -20,6 +20,8 @@ import (
 // built from it starts without downloading any.
 const testBridgeConfig = `{
 	"inbounds": [{"type": "mixed", "tag": "stray", "listen": "127.0.0.1", "listen_port": 0}],
+	"endpoints": [{"type": "wireguard", "tag": "stray-endpoint", "listen_port": 0}],
+	"services": [{"type": "resolved", "tag": "stray-service", "listen": "127.0.0.1", "listen_port": 0}],
 	"outbounds": [{"type": "direct", "tag": "direct"}],
 	"route": {
 		"final": "direct",
@@ -51,6 +53,8 @@ func TestBridgeBoxOptionsBypassTheVPNAndListenNowhere(t *testing.T) {
 	opts, err := bridgeBoxOptions(box.Context(context.Background()), testBridgeConfig)
 	require.NoError(t, err)
 	assert.Empty(t, opts.Inbounds)
+	assert.Empty(t, opts.Endpoints)
+	assert.Empty(t, opts.Services)
 	assert.Nil(t, opts.Experimental)
 	require.NotNil(t, opts.Route)
 	assert.True(t, opts.Route.AutoDetectInterface)

@@ -64,8 +64,9 @@ func bridgeBoxOptions(ctx context.Context, bridgeConfig string) (option.Options,
 	if err != nil {
 		return option.Options{}, fmt.Errorf("decode bridge config: %w", err)
 	}
-	// Bridges are the box's only inbounds, and nothing else may listen.
-	opts.Inbounds, opts.Experimental = nil, nil
+	// Bridges are the box's only inbounds, and nothing else may listen:
+	// services and endpoints can bind listeners too.
+	opts.Inbounds, opts.Endpoints, opts.Services, opts.Experimental = nil, nil, nil, nil
 	// A bridge's traffic must leave from the helper's own connection, not
 	// through the VPN tunnel.
 	opts.Route.AutoDetectInterface = true
