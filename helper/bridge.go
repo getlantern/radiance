@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -62,6 +63,7 @@ type BridgeClient struct {
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	runCtx context.Context
 	// done closes when the last started run has closed its box.
 	done chan struct{}
 
@@ -84,6 +86,11 @@ type bridgeState struct {
 	bridgesDirty bool
 	backoff      time.Duration
 	lastSkips    routeSkips
+	// polled is the volunteer pairings the last routes call asked for.
+	polled []string
+	// apiNotBefore holds off routes calls while lantern-cloud is busy or has
+	// the feature disabled.
+	apiNotBefore time.Time
 }
 
 // routeSkips counts the routes a poll could not use, by reason.
@@ -124,8 +131,8 @@ func BridgeTag(pairingID string) string {
 }
 
 // SetRunning starts or stops polling and the bridges, returning at once. A run
-// ends when ctx does. Stopping closes the box in the background; a later start
-// waits for that.
+// ends when ctx does, and a later start begins a new one. Stopping closes the
+// box in the background; a later start waits for that.
 func (b *BridgeClient) SetRunning(ctx context.Context, running bool) {
 	if b.cfg.API == nil || b.cfg.Keys == nil || b.cfg.NewBox == nil {
 		return
@@ -140,11 +147,14 @@ func (b *BridgeClient) SetRunning(ctx context.Context, running bool) {
 		return
 	}
 	if b.cancel != nil {
-		return
+		if b.runCtx.Err() == nil {
+			return
+		}
+		b.cancel()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	prev, done := b.done, make(chan struct{})
-	b.cancel, b.done = cancel, done
+	b.cancel, b.runCtx, b.done = cancel, runCtx, done
 	go b.run(runCtx, prev, done)
 }
 
@@ -179,7 +189,12 @@ func (b *BridgeClient) run(ctx context.Context, prev <-chan struct{}, done chan 
 				timer.Stop()
 				return
 			case <-b.kick:
-				b.dropRevoked(b.volunteerIDs())
+				ids := b.volunteerIDs()
+				b.dropRevoked(ids)
+				if b.hasUnpolled(ids) {
+					timer.Stop()
+					break wait
+				}
 			case <-timer.C:
 				break wait
 			}
@@ -189,6 +204,16 @@ func (b *BridgeClient) run(ctx context.Context, prev <-chan struct{}, done chan 
 
 func (b *BridgeClient) volunteerIDs() []string {
 	return b.cfg.Keys.IDs(string(helperticket.RoleVolunteer))
+}
+
+// hasUnpolled reports whether ids holds a pairing the last routes call did not
+// ask for, and routes calls are not held off.
+func (b *BridgeClient) hasUnpolled(ids []string) bool {
+	s := &b.st
+	if b.cfg.Now().Before(s.apiNotBefore) {
+		return false
+	}
+	return slices.ContainsFunc(ids, func(id string) bool { return !slices.Contains(s.polled, id) })
 }
 
 // dropRevoked removes the bridges of pairings not in ids, or whose key is
@@ -239,6 +264,7 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 	// Only a device with volunteer pairings has routes to fetch.
 	if len(ids) == 0 {
 		b.closeBox()
+		s.polled = nil
 		return b.cfg.PollInterval
 	}
 	callCtx, release := b.pairing.Watch(ctx, snapshot)
@@ -250,9 +276,10 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 			// The pairings changed: drop the revoked and poll again.
 			return 0
 		}
+		s.polled = ids
 		return b.routesFailed(ctx, err)
 	}
-	s.backoff = 0
+	s.backoff, s.apiNotBefore, s.polled = 0, time.Time{}, ids
 	bridges := b.bridgesFor(resp.Routes, ids, b.cfg.Now())
 	// Without the config's egress rules a bridge would reach anything the
 	// helper's network can, so none runs.
@@ -346,11 +373,13 @@ func (b *BridgeClient) routesFailed(ctx context.Context, err error) time.Duratio
 	case errors.Is(err, ErrReverseDisabled):
 		b.cfg.Logger.Info("bridge: reverse routes disabled by lantern-cloud")
 		b.closeBox()
+		s.apiNotBefore = b.cfg.Now().Add(bridgeDisabledWait)
 		return bridgeDisabledWait
 	case errors.As(err, &apiErr) &&
 		(apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable):
 		s.backoff = min(2*max(s.backoff, b.cfg.PollInterval), maxBridgeBackoff)
 		b.cfg.Logger.Info("bridge: lantern-cloud is busy, backing off", "wait", s.backoff)
+		s.apiNotBefore = b.cfg.Now().Add(s.backoff)
 		return s.backoff
 	}
 	b.cfg.Logger.Warn("bridge: could not fetch reverse routes", "err", err)

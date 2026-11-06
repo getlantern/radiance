@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -435,6 +436,64 @@ func TestBridgeSetRunningFollowsTheWidget(t *testing.T) {
 	defer cancel()
 	h.client.Stop(ctx)
 	assert.True(t, h.allBoxes()[1].isClosed(), "Stop waits for the box to close")
+}
+
+// A run whose context ended does not keep a later start from running.
+func TestBridgeRestartsAfterItsContextEnds(t *testing.T) {
+	h := newBridgeHarness(t)
+	h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, testRoute(h.clock()))}, BridgeConfig: bridgeConfig1})
+	ctx, cancel := context.WithCancel(context.Background())
+	h.client.SetRunning(ctx, true)
+	require.Eventually(t, func() bool { return len(h.allBoxes()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	cancel()
+	require.Eventually(t, func() bool { return h.allBoxes()[0].isClosed() }, 5*time.Second, 5*time.Millisecond)
+
+	h.client.SetRunning(context.Background(), true)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.client.Stop(ctx)
+	})
+	require.Eventually(t, func() bool { return len(h.allBoxes()) == 2 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// A volunteer pairing added between polls is polled for at once, unless
+// lantern-cloud asked the client to back off.
+func TestBridgePollsForANewPairingAtOnce(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%v", busy), func(t *testing.T) {
+			h := newBridgeHarness(t)
+			h.revoke(bridgePairingB)
+			r := testRoute(h.clock())
+			if busy {
+				h.api.set(http.StatusServiceUnavailable, ReverseRoutesResponse{})
+			} else {
+				h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, r)}, BridgeConfig: bridgeConfig1})
+			}
+			h.client.SetRunning(context.Background(), true)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				h.client.Stop(ctx)
+			})
+			require.Eventually(t, func() bool { return h.api.calls.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+
+			h.keys.mu.Lock()
+			h.keys.keys[bridgePairingB] = volunteerKey(2)
+			h.keys.mu.Unlock()
+			h.client.PairingsChanged()
+			if busy {
+				time.Sleep(100 * time.Millisecond)
+				assert.Equal(t, int32(1), h.api.calls.Load(), "a backed-off client waits")
+				return
+			}
+			require.Eventually(t, func() bool { return h.api.calls.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
+
+			h.client.PairingsChanged()
+			time.Sleep(100 * time.Millisecond)
+			assert.Equal(t, int32(2), h.api.calls.Load(), "pairings already polled for wait for the next poll")
+		})
+	}
 }
 
 func TestBridgeSetRunningNeverBlocksOnTheAPI(t *testing.T) {
