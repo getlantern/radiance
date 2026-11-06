@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,60 +167,102 @@ func TestReverseDoesNotStartWhileConnecting(t *testing.T) {
 	assert.Never(t, fake.running.Load, reverseSettle, 10*time.Millisecond)
 }
 
-// A friend reachable only by its reverse outbound stays selected while the VPN
-// is down, and is reachable again once the reconnected client restores the
-// outbound. Only the friend's pairing ending clears the selection.
-func TestReverseKeepsASelectionAcrossAVPNDisconnect(t *testing.T) {
-	r, fake := newUnstartedReverseTestBackend(t, t.TempDir(), false)
-	box := reverseBox{r: r}
-	fake.box, fake.tags = box, []string{lbA.ReverseHelperTag(ppFriendB)}
-	r.startReverse()
-	friend := vpn.PersonalProxySelection(ppFriendB)
+const reversePairing = "pairing-b"
 
+func inviterKey(t *testing.T, r *LocalBackend, pairingIDs ...string) {
+	t.Helper()
+	keys := map[string]helper.PairingKey{}
+	for _, id := range pairingIDs {
+		keys[id] = helper.PairingKey{Key: bytes.Repeat([]byte{7}, 32), Role: string(helperticket.RoleInviter)}
+	}
+	r.SetHelperPairingKeys(keys)
+}
+
+// newReverseFriendBackend is a backend whose fake reverse client, once
+// started, publishes ppFriendB's reverse outbound for reversePairing, with
+// ppFriendB selected.
+func newReverseFriendBackend(t *testing.T, dataDir string) (*LocalBackend, *fakeReverse) {
+	t.Helper()
+	r, fake := newUnstartedReverseTestBackend(t, dataDir, false)
+	r.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
+	inviterKey(t, r, reversePairing)
+	r.reverseFriends.setTags(map[string]string{reversePairing: ppFriendB})
+	fake.box, fake.tags = reverseBox{r: r}, []string{lbA.ReverseHelperTag(ppFriendB)}
+	r.startSelectionFallbackListener()
+	r.startReverse()
 	emitReverseFeature(true)
 	emitVPNStatus(vpn.Connected)
 	require.Eventually(t, fake.running.Load, time.Second, 5*time.Millisecond)
-	r.persistSelection(friend)
+	r.persistSelection(vpn.PersonalProxySelection(ppFriendB))
+	return r, fake
+}
+
+// While the VPN is down a reverse-only friend has no outbound, and the paths
+// that clear a missing selection run: the Disconnected listener and a config
+// update. The friend's pairing has not ended, so the selection stands.
+func TestReverseKeepsASelectionWhileTheVPNIsDown(t *testing.T) {
+	r, fake := newReverseFriendBackend(t, t.TempDir())
+	friend := vpn.PersonalProxySelection(ppFriendB)
 
 	emitVPNStatus(vpn.Disconnected)
 	require.Eventually(t, notRunning(fake), time.Second, 5*time.Millisecond)
 	assert.Empty(t, r.reverseOutbounds())
+	r.applyConfig(cachedConfig(), true)
+	r.clearSelectedIfMissing()
 	assert.Equal(t, friend, selectedTag(t))
+	assert.NoError(t, r.checkConnectSelection(friend))
 
 	emitVPNStatus(vpn.Connected)
 	require.Eventually(t, fake.running.Load, time.Second, 5*time.Millisecond)
 	assert.Equal(t, friend, selectedTag(t))
-	assert.NoError(t, r.checkConnectSelection(friend))
-
-	require.NoError(t, box.SetReversePortal(nil, ""), "the last inviter pairing ended")
-	assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
 }
 
-func TestReverseBoxClearsASelectionWhenItsPairingEnds(t *testing.T) {
-	r := newPersonalProxiesBackend(t)
-	box := reverseBox{r: r}
-	friend := vpn.PersonalProxySelection(ppFriendB)
+func TestReverseKeepsASelectionAcrossALaunch(t *testing.T) {
+	dataDir := t.TempDir()
+	r, _ := newReverseFriendBackend(t, dataDir)
+	r.stopReverse()
+	require.Empty(t, r.reverseOutbounds())
 
-	require.NoError(t, box.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendA), lbA.ReverseHelperTag(ppFriendB)}))
-	r.persistSelection(friend)
-	require.NoError(t, box.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendA)}))
-	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t), "the group remains")
-
-	require.NoError(t, box.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
-	r.persistSelection(friend)
-	require.NoError(t, box.SetReversePortal(nil, ""))
-	assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
+	next := newPersonalProxiesBackendIn(t, dataDir)
+	next.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
+	next.clearSelectedIfMissing()
+	assert.Equal(t, vpn.PersonalProxySelection(ppFriendB), selectedTag(t))
 }
 
-// An empty set means the client has nothing to offer for now, such as no
-// address to reach it at, not that a pairing ended.
-func TestReverseBoxKeepsASelectionThroughAnEmptySet(t *testing.T) {
-	r := newPersonalProxiesBackend(t)
-	box := reverseBox{r: r}
-	friend := vpn.PersonalProxySelection(ppFriendB)
+func TestReverseClearsASelectionWhenItsPairingEnds(t *testing.T) {
+	r, fake := newReverseFriendBackend(t, t.TempDir())
+	emitVPNStatus(vpn.Disconnected)
+	require.Eventually(t, notRunning(fake), time.Second, 5*time.Millisecond)
 
-	require.NoError(t, box.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
-	r.persistSelection(friend)
+	inviterKey(t, r, "pairing-other")
+	require.Eventually(t, func() bool { return selectedTag(t) == vpn.AutoSelectTag }, time.Second, 5*time.Millisecond)
+	assert.False(t, r.reverseFriends.has(ppFriendB))
+}
+
+// lantern-cloud's kill switch, and an address loss, take the portal and
+// outbounds down while the pairing goes on.
+func TestReverseKeepsASelectionThroughAWithdrawal(t *testing.T) {
+	r, _ := newReverseFriendBackend(t, t.TempDir())
+	box := reverseBox{r: r}
 	require.NoError(t, box.SetReverseOutbounds(nil))
-	assert.Equal(t, friend, selectedTag(t))
+	require.NoError(t, box.SetReversePortal(nil, ""))
+	r.applyConfig(cachedConfig(), true)
+	assert.Equal(t, vpn.PersonalProxySelection(ppFriendB), selectedTag(t))
+}
+
+// A tunnel that came up while the friend had no outbound runs on a fallback
+// until the outbound returns.
+func TestReverseBoxRestoresTheSavedFriendInTheTunnel(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tunnel := &fakeHelperTunnel{live: map[string]string{}, selected: vpn.AutoSelectTag}
+	tunnel.attach(r)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	friend := vpn.PersonalProxySelection(ppFriendB)
+	r.persistSelection(friend)
+	require.Equal(t, friend, selectedTag(t))
+
+	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendA)}))
+	assert.Equal(t, vpn.AutoSelectTag, tunnel.current(), "another friend's outbound")
+	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
+	assert.Equal(t, friend, tunnel.current())
 }

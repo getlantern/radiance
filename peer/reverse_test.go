@@ -881,3 +881,23 @@ func TestReverseNeverLogsTheManualPort(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestReverseReportsTagsBeforeTheBox(t *testing.T) {
+	e := newRevEnv(t)
+	var got []map[string]string
+	var outboundsAtReport [][]string
+	e.c.cfg.OnTags = func(tags map[string]string) {
+		got = append(got, tags)
+		outboundsAtReport = append(outboundsAtReport, e.box.lastOutbounds())
+	}
+	e.keys.set("p1")
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7", tags: map[string]string{"p1": revTag("p1")}})
+	e.cycle(t)
+	require.Equal(t, []map[string]string{{"p1": revTag("p1")}}, got)
+	assert.Empty(t, outboundsAtReport[0])
+	assert.Equal(t, []string{lbA.ReverseHelperTag(revTag("p1"))}, e.box.lastOutbounds())
+
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Len(t, got, 1, "an unchanged map is not reported again")
+}

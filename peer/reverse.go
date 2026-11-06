@@ -55,10 +55,14 @@ type PairingKeySource interface {
 // ReverseConfig plumbs in a ReverseClient's dependencies. Zero durations and a
 // nil Now or NewForwarder fall back to production defaults.
 type ReverseConfig struct {
-	API              *helper.ReverseAPI
-	Keys             PairingKeySource
-	Box              ReverseBox
-	NewForwarder     func(ctx context.Context) (portForwarder, error)
+	API          *helper.ReverseAPI
+	Keys         PairingKeySource
+	Box          ReverseBox
+	NewForwarder func(ctx context.Context) (portForwarder, error)
+	// OnTags, if set, is given a copy of the pairing ID to helper tag map each
+	// time a register changes it, on the client's goroutine before the box
+	// hears of the change. It must not block.
+	OnTags           func(tags map[string]string)
 	Now              func() time.Time
 	RegisterInterval time.Duration
 	RotateInterval   time.Duration
@@ -502,7 +506,13 @@ func (c *ReverseClient) updateTags(blobs []helper.ReverseBlob, tags map[string]s
 			delete(s.tags, b.PairingID)
 		}
 	}
-	return !maps.Equal(before, s.tags)
+	if maps.Equal(before, s.tags) {
+		return false
+	}
+	if c.cfg.OnTags != nil {
+		c.cfg.OnTags(maps.Clone(s.tags))
+	}
+	return true
 }
 
 // applyBox brings the portal and reverse outbounds in line with the current

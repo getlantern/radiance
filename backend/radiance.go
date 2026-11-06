@@ -149,9 +149,9 @@ type LocalBackend struct {
 	// while reverseGate runs it. Nil where reverseUnsupported.
 	reverseClient reverseController
 	reverseGate   atomic.Pointer[reverseGate]
-	// reverseStopping is set from a stop of the reverse client until its next
-	// start (see reverseGate.stopping).
-	reverseStopping atomic.Bool
+	// reverseFriends keeps the selections of friends reachable by reverse
+	// outbound while those outbounds are down.
+	reverseFriends *reverseFriends
 }
 
 type Options struct {
@@ -268,8 +268,9 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	}
 	r.helperUsage = &helper.Usage{}
 	r.helperPairingKeys = &helper.PairingKeys{}
+	r.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
 	if !reverseUnsupported() {
-		r.useReverseClient(newReverseClient(platformDeviceID, r.helperPairingKeys, reverseBox{r: r}))
+		r.useReverseClient(r.newReverseClient(platformDeviceID))
 	}
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
@@ -621,6 +622,10 @@ func (r *LocalBackend) startVPNStatusListeners() {
 			kindling.SetNetworkPaused(r.ctx, false)
 		}
 	})
+	r.startSelectionFallbackListener()
+}
+
+func (r *LocalBackend) startSelectionFallbackListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		switch evt.Status {
 		case vpn.Disconnected, vpn.ErrorStatus, vpn.Restarting:
