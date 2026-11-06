@@ -351,7 +351,7 @@ func (r *LocalBackend) restoreSavedSelection() {
 // it had none, or that lost its last member, fell back from it. The caller
 // must hold r.selectionMu.
 func (r *LocalBackend) restoreSavedSelectionLocked() {
-	if r.selectionClosed || settings.GetBool(settings.AutoConnectKey) {
+	if r.selectionClosed || r.connectPending || settings.GetBool(settings.AutoConnectKey) {
 		return
 	}
 	var saved servers.Server

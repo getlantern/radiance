@@ -110,6 +110,10 @@ type LocalBackend struct {
 	// selectionClosed is set by Close; a ticket-change reconcile then does
 	// nothing. Guarded by selectionMu.
 	selectionClosed bool
+	// connectPending says a connect has built, or is building, a tunnel whose
+	// selection it has not persisted yet. Until it has, the saved selection
+	// is not restored over the requested one. Guarded by selectionMu.
+	connectPending bool
 
 	deviceID string
 
@@ -1302,20 +1306,21 @@ func (r *LocalBackend) startHelperReconcileListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		switch evt.Status {
 		case vpn.Connected:
+			r.tunnelConnected()
 		case vpn.Disconnected, vpn.ErrorStatus:
 			r.setSelectionRestoreTicker(false)
-			return
-		default:
-			return
 		}
-		r.selectionMu.Lock()
-		if err := r.reconcileLiveHelpersLocked(); err != nil {
-			slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
-		}
-		r.restoreSavedSelectionLocked()
-		r.selectionMu.Unlock()
-		r.setSelectionRestoreTicker(true)
 	})
+}
+
+func (r *LocalBackend) tunnelConnected() {
+	r.selectionMu.Lock()
+	if err := r.reconcileLiveHelpersLocked(); err != nil {
+		slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
+	}
+	r.restoreSavedSelectionLocked()
+	r.selectionMu.Unlock()
+	r.setSelectionRestoreTicker(true)
 }
 
 // selectionRestoreInterval is how often a connected tunnel's saved selection
@@ -1676,11 +1681,19 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = r.startSelection(tag)
+	r.setConnectPending(true)
 	if err := r.liveTunnel().Connect(ctx, bOptions); err != nil {
+		r.setConnectPending(false)
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
 	r.persistConnectedSelection(tag)
 	return nil
+}
+
+func (r *LocalBackend) setConnectPending(pending bool) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	r.connectPending = pending
 }
 
 // persistConnectedSelection persists the tag a connect selected. A config
@@ -1690,6 +1703,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 func (r *LocalBackend) persistConnectedSelection(tag string) {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
+	r.connectPending = false
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.serverByTag(tag); !found {
 			slog.Info("Connected server was withdrawn during the connect, falling back", "tag", tag)
@@ -1701,8 +1715,23 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 		return
 	}
 	r.persistSelection(tag)
+	if _, friend := vpn.ParsePersonalProxySelection(tag); !friend {
+		r.ensureSelectedLocked(r.startSelection(tag))
+	}
 	// Members may have arrived since the tunnel was built without them.
 	r.restoreSavedSelectionLocked()
+}
+
+// ensureSelectedLocked has the tunnel select tag unless it already has. Auto-
+// select cannot be told apart from the server it chose, so it is selected
+// again. The caller must hold r.selectionMu.
+func (r *LocalBackend) ensureSelectedLocked(tag string) {
+	if current, err := r.liveTunnel().CurrentSelectedServer(); err == nil && current == tag && tag != vpn.AutoSelectTag {
+		return
+	}
+	if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		slog.Warn("Failed to apply the connected selection", "tag", tag, "error", err)
+	}
 }
 
 // settleFriendLocked moves a running tunnel that is not on tag's friend, as

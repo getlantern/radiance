@@ -1862,6 +1862,11 @@ type fakeHelperTunnel struct {
 	onSelect func() // if set, runs as each selection is applied
 	// onRestart, if set, runs as a restart begins, before it rebuilds.
 	onRestart func()
+	// onConnect, if set, runs once a connect is up, before it returns, as
+	// the VPN client's Connected event does.
+	onConnect func()
+	// connectErr, if set, fails every connect.
+	connectErr error
 	// selected is the selection the tunnel last applied.
 	selected string
 	// friend is the friend whose group the tunnel has selected, or "".
@@ -1890,12 +1895,19 @@ func (f *fakeHelperTunnel) startOn(initial string) {
 
 func (f *fakeHelperTunnel) Connect(_ context.Context, boxOptions vpn.BoxOptions) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "connect:"+boxOptions.InitialServer)
+	if f.connectErr != nil {
+		f.mu.Unlock()
+		return f.connectErr
+	}
 	if f.live == nil {
 		f.live = make(map[string]string)
 	}
 	f.startOn(boxOptions.InitialServer)
+	f.mu.Unlock()
+	if f.onConnect != nil {
+		f.onConnect()
+	}
 	return nil
 }
 

@@ -677,3 +677,51 @@ func TestSelectionRestoreTickerCatchesAMissedMember(t *testing.T) {
 	n = selectCalls(tunnel)
 	assert.Never(t, func() bool { return selectCalls(tunnel) != n }, 50*time.Millisecond, 5*time.Millisecond, "stopped")
 }
+
+// The VPN client reports Connected before Connect returns. A restore it, or a
+// tick, runs then must not put back the previous selection over the one the
+// connect requested.
+func TestConnectSelectionWinsOverARestoreBeforeItIsSaved(t *testing.T) {
+	for _, requested := range []string{"lantern-1", vpn.AutoSelectTag} {
+		t.Run(requested, func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			require.NoError(t, r.srvManager.AddServers(directServers("lantern-1", ppFriendB), false))
+			friend := vpn.PersonalProxySelection(ppFriendB)
+			r.persistSelection(friend)
+			tunnel := &fakeHelperTunnel{}
+			tunnel.attach(r)
+			t.Cleanup(func() { r.setSelectionRestoreTicker(false) })
+			restored := 0
+			tunnel.onConnect = func() {
+				r.tunnelConnected()
+				r.restoreSavedSelection()
+				restored++
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, r.ConnectVPN(ctx, requested))
+			require.Equal(t, 1, restored)
+			assert.Equal(t, requested, tunnel.current())
+			assert.Equal(t, requested, selectedTag(t))
+			assert.Empty(t, tunnel.SelectedPersonalProxy())
+
+			// Once saved, the restore follows the new selection.
+			r.restoreSavedSelection()
+			assert.Equal(t, requested, tunnel.current())
+		})
+	}
+}
+
+// A failed connect leaves nothing pending, so restores resume.
+func TestFailedConnectDoesNotBlockRestores(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1", ppFriendB), false))
+	tunnel := &fakeHelperTunnel{connectErr: errors.New("tun busy")}
+	tunnel.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.Error(t, r.ConnectVPN(ctx, "lantern-1"))
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	assert.False(t, r.connectPending)
+}
