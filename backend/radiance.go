@@ -1938,8 +1938,8 @@ func (r *LocalBackend) RestartVPN() error {
 		r.settleFriendLocked(tag)
 		return nil
 	}
-	if r.startSelection(tag) != bOptions.InitialServer {
-		if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if start := r.startSelection(tag); start != bOptions.InitialServer {
+		if err := r.liveTunnel().SelectServer(start); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("apply the selection saved during the restart: %w", err)
 		}
 	}

@@ -1877,6 +1877,8 @@ type fakeHelperTunnel struct {
 	// personal proxies group, as a tunnel built while the friend had no
 	// member does; refuseFriend refuses every selection of a friend.
 	friendless, refuseFriend bool
+	// refuseGroup refuses a selection of the personal proxies group.
+	refuseGroup bool
 	// rebuild makes a restart hold only the outbounds in its options, and a
 	// selection of a friend require the friend's outbound.
 	rebuild bool
@@ -1995,6 +1997,9 @@ func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	friend, isFriend := vpn.ParsePersonalProxySelection(tag)
 	if isFriend && f.refuseFriend {
 		return vpn.ErrPersonalProxyUnavailable
+	}
+	if tag == vpn.PersonalProxiesTag && f.refuseGroup {
+		return vpn.ErrPersonalProxiesUnavailable
 	}
 	if _, held := f.live[friend]; isFriend && f.rebuild && !held {
 		return vpn.ErrPersonalProxyUnavailable

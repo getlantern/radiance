@@ -589,6 +589,25 @@ func TestRestartAppliesASelectionSavedDuringIt(t *testing.T) {
 	assert.Equal(t, "lantern-2", tun.current(), "the rebuilt tunnel carries the stale selection")
 }
 
+// A personal proxies group saved during a restart while it has no member is
+// applied as auto-select, which the rebuilt tunnel can carry, and stays saved.
+func TestRestartAppliesAnEmptyGroupSavedDuringItAsAuto(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	tun := &fakeHelperTunnel{refuseGroup: true}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	tun.onRestart = func() {
+		tun.onRestart = nil
+		r.persistSelection(vpn.PersonalProxiesTag)
+	}
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, vpn.AutoSelectTag, tun.current())
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
+}
+
 // A tunnel built while the selected friend had no member starts on the
 // personal proxies group. If the friend is reachable once the tunnel is up,
 // the connect or restart switches to it; if not, it commits the fallback, so
