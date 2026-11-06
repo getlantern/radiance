@@ -26,10 +26,10 @@ import (
 // reverse outbounds on Start and tears the box down on Stop, as the client's
 // first cycle and teardown do.
 type fakeReverse struct {
-	starts, stops, networks, pairings atomic.Int32
-	running                           atomic.Bool
-	box                               peer.ReverseBox
-	tags                              []string
+	starts, stops, networks, pairings, peerShares atomic.Int32
+	running                                       atomic.Bool
+	box                                           peer.ReverseBox
+	tags                                          []string
 }
 
 func (f *fakeReverse) Start(context.Context) error {
@@ -51,8 +51,9 @@ func (f *fakeReverse) Stop(context.Context) {
 	f.running.Store(false)
 }
 
-func (f *fakeReverse) NetworkChanged()  { f.networks.Add(1) }
-func (f *fakeReverse) PairingsChanged() { f.pairings.Add(1) }
+func (f *fakeReverse) NetworkChanged()   { f.networks.Add(1) }
+func (f *fakeReverse) PairingsChanged()  { f.pairings.Add(1) }
+func (f *fakeReverse) PeerShareChanged() { f.peerShares.Add(1) }
 
 const reverseSettle = 150 * time.Millisecond
 
@@ -291,4 +292,21 @@ func TestReverseConnectKeepsTheFriendUntilItsOutboundIsUp(t *testing.T) {
 	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
 	assert.Equal(t, friend, tun.current())
 	assert.Equal(t, friend, selectedTag(t))
+}
+
+// The reverse client reads peerShareOn to leave the manual port to peer
+// sharing, and is told to look again before peer sharing starts.
+func TestReverseHearsPeerShareTurnOn(t *testing.T) {
+	peerFake := &fakePeerController{}
+	r := newPeerTestBackend(t, peerFake)
+	fake := &fakeReverse{}
+	r.reverseClient = fake
+	assert.False(t, peerShareOn())
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.True(t, peerShareOn())
+	assert.Equal(t, int32(1), fake.peerShares.Load())
+
+	require.NoError(t, r.applyPeerShare(false))
+	assert.False(t, peerShareOn())
 }

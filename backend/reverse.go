@@ -42,14 +42,16 @@ type reverseController interface {
 	Stop(ctx context.Context)
 	NetworkChanged()
 	PairingsChanged()
+	PeerShareChanged()
 }
 
 func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
 	return peer.NewReverseClient(peer.ReverseConfig{
-		API:    helper.NewReverseAPI(kindling.HTTPClient(), common.GetBaseURL(), deviceID),
-		Keys:   r.helperPairingKeys,
-		Box:    reverseBox{r: r},
-		OnTags: r.reverseFriends.setTags,
+		API:             helper.NewReverseAPI(kindling.HTTPClient(), common.GetBaseURL(), deviceID),
+		Keys:            r.helperPairingKeys,
+		Box:             reverseBox{r: r},
+		OnTags:          r.reverseFriends.setTags,
+		PeerShareActive: peerShareOn,
 	})
 }
 
@@ -135,6 +137,17 @@ func (r *LocalBackend) startReverseWith(vpnStatus func() vpn.VPNStatus) {
 func (r *LocalBackend) stopReverse() {
 	if g := r.reverseGate.Swap(nil); g != nil {
 		g.stop()
+	}
+}
+
+// peerShareOn reports whether peer sharing is on. The setting turns on before
+// peer sharing starts, so the reverse client leaves the manual port before
+// peer sharing binds it.
+func peerShareOn() bool { return settings.GetBool(settings.PeerShareEnabledKey) }
+
+func (r *LocalBackend) reversePeerShareChanged() {
+	if r.reverseClient != nil {
+		r.reverseClient.PeerShareChanged()
 	}
 }
 

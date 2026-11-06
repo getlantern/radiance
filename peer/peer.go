@@ -1656,9 +1656,14 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 	return newForwarder(ctx, pickManualForwarder())
 }
 
-// newQuietForwarder is newDefaultForwarder without the manual port in the log.
-func newQuietForwarder(ctx context.Context) (portForwarder, error) {
-	return newForwarder(ctx, chooseManualForwarder(false))
+// reverseManualForwarder is the manual forwarder the reverse client may use,
+// without the port in the log. It is nil while peer sharing is active, since
+// peer sharing's listener binds the manual port.
+func reverseManualForwarder(peerShareActive func() bool) portForwarder {
+	if peerShareActive != nil && peerShareActive() {
+		return nil
+	}
+	return chooseManualForwarder(false)
 }
 
 func newForwarder(ctx context.Context, manual portForwarder) (portForwarder, error) {

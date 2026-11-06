@@ -63,7 +63,10 @@ type ReverseConfig struct {
 	// OnTags, if set, is given a copy of the pairing ID to helper tag map each
 	// time a register changes it, on the client's goroutine before the box
 	// hears of the change. It must not block.
-	OnTags           func(tags map[string]string)
+	OnTags func(tags map[string]string)
+	// PeerShareActive, if set, reports whether peer sharing is on. While it
+	// is, the client maps a port of its own rather than the manual port.
+	PeerShareActive  func() bool
 	Now              func() time.Time
 	RegisterInterval time.Duration
 	RotateInterval   time.Duration
@@ -124,7 +127,10 @@ type reverseState struct {
 // NewReverseClient returns a stopped ReverseClient.
 func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = newQuietForwarder
+		peerShareActive := cfg.PeerShareActive
+		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			return newForwarder(ctx, reverseManualForwarder(peerShareActive))
+		}
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -197,6 +203,10 @@ func (c *ReverseClient) NetworkChanged() {
 // PairingsChanged registers at once for the current inviter pairings.
 func (c *ReverseClient) PairingsChanged() { c.wake() }
 
+// PeerShareChanged moves the client off the manual port at once if peer
+// sharing now needs it.
+func (c *ReverseClient) PeerShareChanged() { c.wake() }
+
 func (c *ReverseClient) wake() {
 	select {
 	case c.kick <- struct{}{}:
@@ -254,6 +264,18 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 			}
 		}
 		c.unmap(ctx)
+		gated = now.Before(s.apiNotBefore)
+	}
+	if _, manual := s.fwd.(*portforward.ManualForwarder); manual &&
+		c.cfg.PeerShareActive != nil && c.cfg.PeerShareActive() {
+		// Peer sharing's listener needs the port, and its routes stop
+		// reaching this portal.
+		c.clearBox()
+		if !gated {
+			c.deregister(ctx, now)
+		}
+		c.unmap(ctx)
+		s.lastPort = 0
 		gated = now.Before(s.apiNotBefore)
 	}
 	if len(ids) == 0 {

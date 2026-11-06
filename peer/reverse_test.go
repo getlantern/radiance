@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -944,4 +945,54 @@ func TestReverseNetworkChangedMarksThePublicIPStale(t *testing.T) {
 	require.False(t, common.PublicIPStale())
 	e.c.NetworkChanged()
 	assert.True(t, common.PublicIPStale())
+}
+
+func TestReverseManualPortIsPeerSharings(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
+
+	m, ok := reverseManualForwarder(nil).(*portforward.ManualForwarder)
+	require.True(t, ok)
+	assert.Equal(t, uint16(41234), m.Port())
+	m, ok = reverseManualForwarder(func() bool { return false }).(*portforward.ManualForwarder)
+	require.True(t, ok)
+	assert.Equal(t, uint16(41234), m.Port())
+	assert.Nil(t, reverseManualForwarder(func() bool { return true }))
+}
+
+// The reverse portal holds the manual port only until peer sharing, which
+// binds it too, turns on; then it moves to a mapped port of its own.
+func TestReverseYieldsTheManualPortToPeerSharing(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
+	var sharing atomic.Bool
+	e := newRevEnv(t)
+	e.c = NewReverseClient(ReverseConfig{
+		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
+		PeerShareActive: sharing.Load,
+		NewForwarder: func(context.Context) (portForwarder, error) {
+			if m := reverseManualForwarder(sharing.Load); m != nil {
+				return m, nil
+			}
+			return e.fwd, nil
+		},
+	})
+	e.keys.set("p1")
+	e.cycle(t)
+	require.Equal(t, uint16(41234), e.box.lastPortal().ListenPort)
+	e.log.take()
+
+	sharing.Store(true)
+	e.c.PeerShareChanged()
+	e.cycle(t)
+	assert.Equal(t, []string{"clear-portal", "deregister", "register:0", "map", "portal", "outbounds:1", "register:1"}, e.log.take())
+	port := e.box.lastPortal().ListenPort
+	assert.NotEqual(t, uint16(41234), port)
+	assert.Equal(t, []uint16{port}, e.fwd.mappedPorts())
+
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:1"}, e.log.take(), "a port of its own stays put")
 }
