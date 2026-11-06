@@ -1656,14 +1656,13 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 	return newForwarder(ctx, pickManualForwarder())
 }
 
-// reverseManualForwarder is the manual forwarder the reverse client may use,
-// without the port in the log. It is nil while peer sharing is active, since
-// peer sharing's listener binds the manual port.
-func reverseManualForwarder(peerShareActive func() bool) portForwarder {
-	if peerShareActive != nil && peerShareActive() {
-		return nil
+// reverseManualPort is the configured manual port, or 0, found without the
+// port in the log.
+func reverseManualPort() uint16 {
+	if m, ok := chooseManualForwarder(false).(*portforward.ManualForwarder); ok {
+		return m.Port()
 	}
-	return chooseManualForwarder(false)
+	return 0
 }
 
 // discoverForwarder is portforward.NewForwarder, a var so tests can see the
@@ -1690,6 +1689,23 @@ func newForwarder(ctx context.Context, manual portForwarder, opts ...portforward
 
 func pickInternalPort() uint16 {
 	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
+}
+
+// pickInternalPortExcept is pickInternalPort, never returning avoid.
+func pickInternalPortExcept(avoid uint16) uint16 {
+	if int(avoid) < internalPortMin || int(avoid) >= internalPortMax {
+		return pickInternalPort()
+	}
+	return internalPortSkipping(rand.IntN(internalPortMax-internalPortMin-1), avoid)
+}
+
+// internalPortSkipping is the i-th port of the internal range without avoid,
+// which must be in the range.
+func internalPortSkipping(i int, avoid uint16) uint16 {
+	if port := uint16(internalPortMin + i); port < avoid {
+		return port
+	}
+	return uint16(internalPortMin + i + 1)
 }
 
 // servePool returns nil when this peer also serves the general pool, so the

@@ -509,9 +509,14 @@ type fakePeerController struct {
 	// reregisterFn, when set, answers Reregister; it gets the call's number,
 	// from 1.
 	reregisterFn atomic.Pointer[func(context.Context, int64) error]
+	// onStart, if set, runs at the top of each Start.
+	onStart func()
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
+	if f.onStart != nil {
+		f.onStart()
+	}
 	if f.startCalls.Add(1) == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}

@@ -57,16 +57,19 @@ type PairingKeySource interface {
 // ReverseConfig plumbs in a ReverseClient's dependencies. Zero durations and a
 // nil Now or NewForwarder fall back to production defaults.
 type ReverseConfig struct {
-	API          *helper.ReverseAPI
-	Keys         PairingKeySource
-	Box          ReverseBox
+	API  *helper.ReverseAPI
+	Keys PairingKeySource
+	Box  ReverseBox
+	// NewForwarder returns a forwarder that discovers the gateway. It is not
+	// used while the client maps the manual port.
 	NewForwarder func(ctx context.Context) (portForwarder, error)
 	// OnTags, if set, is given a copy of the pairing ID to helper tag map each
 	// time a register changes it, on the client's goroutine before the box
 	// hears of the change. It must not block.
 	OnTags func(tags map[string]string)
-	// PeerShareActive, if set, reports whether peer sharing is on. While it
-	// is, the client maps a port of its own rather than the manual port.
+	// PeerShareActive, if set, reports whether peer sharing is on. Start
+	// reads it once: a run started while it is on maps a port of its own
+	// rather than the manual port, which peer sharing binds.
 	PeerShareActive func() bool
 	// LocalIPControl, if set, returns the socket control that keeps a UPnP
 	// mapping's LAN address lookup off the VPN tunnel, or nil with no tunnel.
@@ -93,9 +96,9 @@ type ReverseClient struct {
 	cancel context.CancelFunc
 	// done closes when the last started run has torn down.
 	done chan struct{}
-	// releases are ReleaseManualPort's waiters, each closed once a cycle that
-	// began after it was added sees the portal off the manual port.
-	releases []chan struct{}
+	// yielded says the running client skipped the manual port for peer
+	// sharing.
+	yielded bool
 
 	// st is owned by the run goroutine; a run starts only after the previous
 	// one's done closes.
@@ -110,6 +113,10 @@ type observedAddr struct {
 type reverseState struct {
 	fwd     portForwarder
 	mapping *portforward.Mapping
+	// manualPort is the manual port configured when the run started, or 0.
+	// The run maps it unless yielded, and never maps it automatically.
+	manualPort uint16
+	yielded    bool
 	// lastPort is the internal port of the last mapping, tried again on a
 	// remap so the portal keeps its listener.
 	lastPort uint16
@@ -124,7 +131,6 @@ type reverseState struct {
 	boxSet         bool
 	portal         *samizdatreverse.PortalConfig
 	portalCreds    *reverseCreds
-	portalManual   bool
 	outbounds      []string
 	outboundsKnown bool
 	apiNotBefore   time.Time
@@ -135,9 +141,8 @@ type reverseState struct {
 // NewReverseClient returns a stopped ReverseClient.
 func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.NewForwarder == nil {
-		peerShareActive := cfg.PeerShareActive
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			return newForwarder(ctx, reverseManualForwarder(peerShareActive), portforward.QuietLogs())
+			return newForwarder(ctx, nil, portforward.QuietLogs())
 		}
 	}
 	if cfg.Now == nil {
@@ -162,6 +167,9 @@ func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 // Start starts serving in the background and returns at once; it does no
 // network I/O itself. Starting a started client does nothing. It returns an
 // error only when API, Keys or Box is nil.
+//
+// The run keeps the forwarding chosen here: the manual port if one is
+// configured and peer sharing is off, and a mapped port otherwise.
 func (c *ReverseClient) Start(context.Context) error {
 	if c.cfg.API == nil || c.cfg.Keys == nil || c.cfg.Box == nil {
 		return errors.New("peer: ReverseConfig needs API, Keys and Box")
@@ -171,11 +179,24 @@ func (c *ReverseClient) Start(context.Context) error {
 	if c.cancel != nil {
 		return nil
 	}
+	manual := reverseManualPort()
+	yielded := manual != 0 && c.cfg.PeerShareActive != nil && c.cfg.PeerShareActive()
+	if yielded {
+		slog.Info("reverse: peer sharing holds the manual port, mapping another")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	prev, done := c.done, make(chan struct{})
-	c.cancel, c.done = cancel, done
-	go c.run(ctx, prev, done)
+	c.cancel, c.done, c.yielded = cancel, done, yielded
+	go c.run(ctx, prev, done, manual, yielded)
 	return nil
+}
+
+// YieldedManualPort reports whether the running client maps a port of its own
+// because peer sharing was on when it started.
+func (c *ReverseClient) YieldedManualPort() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancel != nil && c.yielded
 }
 
 // Stop deregisters this device's routes, removes the portal and its reverse
@@ -211,29 +232,6 @@ func (c *ReverseClient) NetworkChanged() {
 // PairingsChanged registers at once for the current inviter pairings.
 func (c *ReverseClient) PairingsChanged() { c.wake() }
 
-// ReleaseManualPort moves the client off the manual port at once if peer
-// sharing, which must already be on, needs it. It waits until the portal no
-// longer listens on the manual port, the client stops, or ctx ends, and then
-// returns ctx's error. It returns nil at once when the client is not running.
-func (c *ReverseClient) ReleaseManualPort(ctx context.Context) error {
-	c.mu.Lock()
-	if c.cancel == nil {
-		c.mu.Unlock()
-		return nil
-	}
-	released, done := make(chan struct{}), c.done
-	c.releases = append(c.releases, released)
-	c.mu.Unlock()
-	c.wake()
-	select {
-	case <-released:
-	case <-done:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return nil
-}
-
 func (c *ReverseClient) wake() {
 	select {
 	case c.kick <- struct{}{}:
@@ -241,11 +239,13 @@ func (c *ReverseClient) wake() {
 	}
 }
 
-func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done chan struct{}) {
+func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done chan struct{}, manual uint16, yielded bool) {
 	defer close(done)
 	if prev != nil {
 		<-prev
 	}
+	// The last run's port may be the manual port this run must not map.
+	c.st.manualPort, c.st.yielded, c.st.lastPort = manual, yielded, 0
 	defer c.teardown()
 	for {
 		wait := c.cycle(ctx)
@@ -276,13 +276,6 @@ func (c *ReverseClient) teardown() {
 // cycle does one round of work and returns how long to wait before the next.
 func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 	s := &c.st
-	// Taken before PeerShareActive is read, so each waiter's peer sharing
-	// is seen as on.
-	c.mu.Lock()
-	releases := c.releases
-	c.releases = nil
-	c.mu.Unlock()
-	defer func() { c.settleReleases(releases) }()
 	now := c.cfg.Now()
 	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
 	c.dropRevoked(ids)
@@ -300,19 +293,6 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		c.unmap(ctx)
 		gated = now.Before(s.apiNotBefore)
 	}
-	if _, manual := s.fwd.(*portforward.ManualForwarder); manual &&
-		c.cfg.PeerShareActive != nil && c.cfg.PeerShareActive() {
-		// Peer sharing's listener needs the port, and its routes stop
-		// reaching this portal.
-		c.clearBox()
-		if !gated {
-			c.deregister(ctx, now)
-		}
-		c.unmap(ctx)
-		s.lastPort = 0
-		gated = now.Before(s.apiNotBefore)
-	}
-	releases = c.closeIfReleased(releases)
 	if len(ids) == 0 {
 		if !gated {
 			c.deregister(ctx, now)
@@ -400,28 +380,6 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 	return c.cfg.RegisterInterval
 }
 
-// closeIfReleased closes the waiters in releases and returns nil once the
-// portal is off the manual port, and returns releases otherwise.
-func (c *ReverseClient) closeIfReleased(releases []chan struct{}) []chan struct{} {
-	if s := &c.st; len(releases) == 0 || (s.boxSet && s.portalManual) {
-		return releases
-	}
-	for _, ch := range releases {
-		close(ch)
-	}
-	return nil
-}
-
-// settleReleases is closeIfReleased, handing any waiters left to the next
-// cycle.
-func (c *ReverseClient) settleReleases(releases []chan struct{}) {
-	if releases = c.closeIfReleased(releases); len(releases) > 0 {
-		c.mu.Lock()
-		c.releases = append(c.releases, releases...)
-		c.mu.Unlock()
-	}
-}
-
 // dropRevoked takes the pairings not in ids, or whose key is gone, out of the
 // portal and reverse outbounds, so a revocation never waits on lantern-cloud.
 func (c *ReverseClient) dropRevoked(ids []string) {
@@ -485,12 +443,17 @@ type quietLogSetter interface {
 
 func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	s := &c.st
-	fwd, err := c.cfg.NewForwarder(ctx)
-	if err != nil {
-		// Gateway errors name local addresses.
-		slog.Info("reverse: no port forwarding",
-			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
-		return false
+	var fwd portForwarder
+	if s.manualPort != 0 && !s.yielded {
+		fwd = portforward.NewManualForwarder(s.manualPort)
+	} else {
+		var err error
+		if fwd, err = c.cfg.NewForwarder(ctx); err != nil {
+			// Gateway errors name local addresses.
+			slog.Info("reverse: no port forwarding",
+				"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
+			return false
+		}
 	}
 	// Its log lines would otherwise carry the mapped ports and LAN address.
 	if q, ok := fwd.(quietLogSetter); ok {
@@ -503,7 +466,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	}
 	port := s.lastPort
 	if port == 0 {
-		port = pickInternalPort()
+		port = pickInternalPortExcept(s.manualPort)
 	}
 	mapping, err := fwd.MapPort(ctx, portforward.TCP, port, reversePortDescription)
 	if err != nil {
@@ -567,7 +530,7 @@ func (c *ReverseClient) clearBox() {
 		return
 	}
 	s.boxSet = false
-	s.portal, s.portalCreds, s.portalManual = nil, nil, false
+	s.portal, s.portalCreds = nil, nil
 	s.outbounds, s.outboundsKnown = nil, true
 }
 
@@ -698,8 +661,7 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 			slog.Warn("reverse: could not configure the portal")
 			return
 		}
-		_, manual := s.fwd.(*portforward.ManualForwarder)
-		s.portal, s.portalCreds, s.portalManual = cfg, s.creds, manual
+		s.portal, s.portalCreds = cfg, s.creds
 	}
 	c.setOutbounds(tags)
 }

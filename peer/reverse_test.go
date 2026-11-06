@@ -959,8 +959,8 @@ func TestReverseNeverLogsTheManualPort(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	e := newRevEnv(t)
-	e.c.cfg.NewForwarder = nil
 	e.c = NewReverseClient(ReverseConfig{API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now})
+	e.c.st.manualPort = reverseManualPort()
 	e.keys.set("p1")
 	e.cycle(t)
 	e.c.NetworkChanged()
@@ -1040,131 +1040,91 @@ func TestReverseNetworkChangedMarksThePublicIPStale(t *testing.T) {
 	assert.True(t, common.PublicIPStale())
 }
 
-func TestReverseManualPortIsPeerSharings(t *testing.T) {
-	require.NoError(t, settings.InitSettings(t.TempDir()))
-	t.Cleanup(settings.Reset)
-	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
-
-	m, ok := reverseManualForwarder(nil).(*portforward.ManualForwarder)
-	require.True(t, ok)
-	assert.Equal(t, uint16(41234), m.Port())
-	m, ok = reverseManualForwarder(func() bool { return false }).(*portforward.ManualForwarder)
-	require.True(t, ok)
-	assert.Equal(t, uint16(41234), m.Port())
-	assert.Nil(t, reverseManualForwarder(func() bool { return true }))
-}
-
-// The reverse portal holds the manual port only until peer sharing, which
-// binds it too, turns on; then it moves to a mapped port of its own.
-func TestReverseYieldsTheManualPortToPeerSharing(t *testing.T) {
-	require.NoError(t, settings.InitSettings(t.TempDir()))
-	t.Cleanup(settings.Reset)
-	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
-	var sharing atomic.Bool
-	e := newRevEnv(t)
+func (e *revEnv) startManual(t *testing.T, sharing *atomic.Bool) {
+	t.Helper()
 	e.c = NewReverseClient(ReverseConfig{
 		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
 		PeerShareActive: sharing.Load,
 		NewForwarder: func(context.Context) (portForwarder, error) {
-			if m := reverseManualForwarder(sharing.Load); m != nil {
-				return m, nil
-			}
+			e.forwarders++
 			return e.fwd, nil
 		},
 	})
-	e.keys.set("p1")
-	e.cycle(t)
-	require.Equal(t, uint16(41234), e.box.lastPortal().ListenPort)
-	e.log.take()
-
-	sharing.Store(true)
-	e.cycle(t)
-	assert.Equal(t, []string{"clear-portal", "deregister", "register:0", "map", "portal", "outbounds:1", "register:1"}, e.log.take())
-	port := e.box.lastPortal().ListenPort
-	assert.NotEqual(t, uint16(41234), port)
-	assert.Equal(t, []uint16{port}, e.fwd.mappedPorts())
-
-	e.clock.Advance(defaultReverseRegisterInterval)
-	e.cycle(t)
-	assert.Equal(t, []string{"register:1"}, e.log.take(), "a port of its own stays put")
 }
 
-func TestReverseReleaseManualPortWaitsForThePortal(t *testing.T) {
+func (e *revEnv) portalOn(port uint16, manual bool) func() bool {
+	return func() bool {
+		p := e.box.lastPortal()
+		return p != nil && (p.ListenPort == port) == manual
+	}
+}
+
+// A run keeps the forwarding its Start chose: the manual port while peer
+// sharing is off, and a mapped port of its own, never the manual one, while
+// peer sharing holds it.
+func TestReverseChoosesItsForwardingAtStart(t *testing.T) {
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
 	var sharing atomic.Bool
 	e := newRevEnv(t)
-	fwd := e.fwd
-	e.c = NewReverseClient(ReverseConfig{
-		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
-		PeerShareActive: sharing.Load,
-		NewForwarder: func(context.Context) (portForwarder, error) {
-			if m := reverseManualForwarder(sharing.Load); m != nil {
-				return m, nil
-			}
-			return fwd, nil
-		},
-	})
-	require.NoError(t, e.c.ReleaseManualPort(context.Background()), "a stopped client holds no port")
-
+	e.startManual(t, &sharing)
 	e.keys.set("p1")
-	require.NoError(t, e.c.Start(context.Background()))
-	t.Cleanup(func() { e.c.Stop(context.Background()) })
-	onManual := func() bool {
-		p := e.box.lastPortal()
-		return p != nil && p.ListenPort == 41234
+	stop := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		e.c.Stop(ctx)
 	}
-	require.Eventually(t, onManual, 5*time.Second, 5*time.Millisecond)
+	t.Cleanup(stop)
 
+	require.NoError(t, e.c.Start(context.Background()))
+	require.Eventually(t, e.portalOn(41234, true), 5*time.Second, 5*time.Millisecond)
+	assert.False(t, e.c.YieldedManualPort())
+
+	// Peer sharing turning on mid-run changes nothing until a restart.
 	sharing.Store(true)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	require.NoError(t, e.c.ReleaseManualPort(ctx))
-	e.box.mu.Lock()
-	last := -1
-	for i, p := range e.box.portals {
-		if p != nil && p.ListenPort == 41234 {
-			last = i
+	e.c.PairingsChanged()
+	assert.Never(t, e.portalOn(41234, false), 100*time.Millisecond, 10*time.Millisecond)
+
+	stop()
+	assert.Nil(t, e.box.lastPortal(), "the portal is cleared on Stop")
+	assert.False(t, e.c.YieldedManualPort(), "a stopped client yields nothing")
+	require.NoError(t, e.c.Start(context.Background()))
+	require.Eventually(t, e.portalOn(41234, false), 5*time.Second, 5*time.Millisecond)
+	assert.True(t, e.c.YieldedManualPort())
+	port := e.box.lastPortal().ListenPort
+
+	// A network change remaps, still off the manual port.
+	e.c.NetworkChanged()
+	require.Eventually(t, func() bool { return len(e.fwd.mappedPorts()) == 2 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []uint16{port, port}, e.fwd.mappedPorts())
+
+	e.log.take()
+	stop()
+	assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take(), "Stop releases the mapped port")
+	sharing.Store(false)
+	e.c.NetworkChanged()
+	require.NoError(t, e.c.Start(context.Background()))
+	require.Eventually(t, e.portalOn(41234, true), 5*time.Second, 5*time.Millisecond)
+	assert.False(t, e.c.YieldedManualPort())
+}
+
+func TestReverseNeverMapsTheManualPortAutomatically(t *testing.T) {
+	for _, avoid := range []uint16{internalPortMin, internalPortMin + 1, 41234, internalPortMax - 1} {
+		seen := make(map[uint16]bool)
+		for i := range internalPortMax - internalPortMin - 1 {
+			port := internalPortSkipping(i, avoid)
+			require.NotEqual(t, avoid, port)
+			require.GreaterOrEqual(t, int(port), internalPortMin)
+			require.Less(t, int(port), internalPortMax)
+			seen[port] = true
+		}
+		assert.Len(t, seen, internalPortMax-internalPortMin-1, "every other port can be picked")
+		for range 1000 {
+			require.NotEqual(t, avoid, pickInternalPortExcept(avoid))
 		}
 	}
-	require.GreaterOrEqual(t, last, 0)
-	cleared := slices.Contains(e.box.portals[last+1:], nil)
-	e.box.mu.Unlock()
-	assert.True(t, cleared, "the portal left the manual port before the release returned")
-}
-
-func TestReverseReleaseManualPortTimesOutWhileThePortalHoldsIt(t *testing.T) {
-	require.NoError(t, settings.InitSettings(t.TempDir()))
-	t.Cleanup(settings.Reset)
-	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
-	var sharing atomic.Bool
-	e := newRevEnv(t)
-	fwd := e.fwd
-	e.c = NewReverseClient(ReverseConfig{
-		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
-		PeerShareActive: sharing.Load,
-		NewForwarder: func(context.Context) (portForwarder, error) {
-			if m := reverseManualForwarder(sharing.Load); m != nil {
-				return m, nil
-			}
-			return fwd, nil
-		},
-	})
-	e.keys.set("p1")
-	require.NoError(t, e.c.Start(context.Background()))
-	t.Cleanup(func() {
-		e.box.setErrs(nil, nil)
-		e.c.Stop(context.Background())
-	})
-	require.Eventually(t, func() bool {
-		p := e.box.lastPortal()
-		return p != nil && p.ListenPort == 41234
-	}, 5*time.Second, 5*time.Millisecond)
-
-	e.box.setErrs(errors.New("portal busy"), nil)
-	sharing.Store(true)
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	assert.ErrorIs(t, e.c.ReleaseManualPort(ctx), context.DeadlineExceeded)
+	p := pickInternalPortExcept(80)
+	assert.GreaterOrEqual(t, int(p), internalPortMin)
+	assert.Less(t, int(p), internalPortMax)
 }

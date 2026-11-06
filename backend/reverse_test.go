@@ -24,14 +24,15 @@ import (
 
 // fakeReverse stands in for the reverse client. With a box, it adds tags as
 // reverse outbounds on Start and tears the box down on Stop, as the client's
-// first cycle and teardown do.
+// first cycle and teardown do. It acts as if a manual port is configured, so
+// a Start while peer sharing is on yields it.
 type fakeReverse struct {
-	starts, stops, networks, pairings, peerShares atomic.Int32
-	running                                       atomic.Bool
-	box                                           peer.ReverseBox
-	tags                                          []string
-	// release, if set, answers ReleaseManualPort.
-	release func(context.Context) error
+	starts, stops, networks, pairings atomic.Int32
+	running, yielded                  atomic.Bool
+	box                               peer.ReverseBox
+	tags                              []string
+	// hang makes Stop wait for its ctx, as a teardown that overruns does.
+	hang atomic.Bool
 }
 
 func (f *fakeReverse) Start(context.Context) error {
@@ -41,12 +42,16 @@ func (f *fakeReverse) Start(context.Context) error {
 			return err
 		}
 	}
+	f.yielded.Store(peerShareOn())
 	f.running.Store(true)
 	return nil
 }
 
-func (f *fakeReverse) Stop(context.Context) {
+func (f *fakeReverse) Stop(ctx context.Context) {
 	f.stops.Add(1)
+	if f.hang.Load() {
+		<-ctx.Done()
+	}
 	if f.box != nil {
 		_ = f.box.SetReversePortal(nil, "")
 	}
@@ -55,12 +60,8 @@ func (f *fakeReverse) Stop(context.Context) {
 
 func (f *fakeReverse) NetworkChanged()  { f.networks.Add(1) }
 func (f *fakeReverse) PairingsChanged() { f.pairings.Add(1) }
-func (f *fakeReverse) ReleaseManualPort(ctx context.Context) error {
-	f.peerShares.Add(1)
-	if f.release != nil {
-		return f.release(ctx)
-	}
-	return nil
+func (f *fakeReverse) YieldedManualPort() bool {
+	return f.running.Load() && f.yielded.Load()
 }
 
 const reverseSettle = 150 * time.Millisecond
@@ -319,54 +320,103 @@ func TestReverseConnectKeepsTheFriendUntilItsOutboundIsUp(t *testing.T) {
 	assert.Equal(t, friend, selectedTag(t))
 }
 
-// The reverse client reads peerShareOn to leave the manual port to peer
-// sharing, and is told to look again before peer sharing starts.
-func TestReverseHearsPeerShareTurnOn(t *testing.T) {
+// newPeerShareReverseBackend is a backend whose reverse client runs, holding
+// the manual port, and whose peer client is fake.
+func newPeerShareReverseBackend(t *testing.T) (*LocalBackend, *fakeReverse, *fakePeerController) {
+	t.Helper()
+	r, fake := newReverseTestBackend(t, false)
 	peerFake := &fakePeerController{}
-	r := newPeerTestBackend(t, peerFake)
-	fake := &fakeReverse{}
-	r.reverseClient = fake
-	assert.False(t, peerShareOn())
-
-	require.NoError(t, r.applyPeerShare(true))
-	assert.True(t, peerShareOn())
-	assert.Equal(t, int32(1), fake.peerShares.Load())
-
-	require.NoError(t, r.applyPeerShare(false))
-	assert.False(t, peerShareOn())
+	r.peerClient = peerFake
+	emitReverseFeature(true)
+	emitVPNStatus(vpn.Connected)
+	require.Eventually(t, fake.running.Load, time.Second, 5*time.Millisecond)
+	require.False(t, fake.YieldedManualPort())
+	return r, fake, peerFake
 }
 
-// Peer sharing starts only once the reverse portal has left the manual port,
-// or the wait for that has timed out.
-func TestPeerShareStartsAfterTheReversePortalLeavesTheManualPort(t *testing.T) {
-	peerFake := &fakePeerController{}
-	r := newPeerTestBackend(t, peerFake)
-	fake := &fakeReverse{}
-	r.reverseClient = fake
-	fake.release = func(ctx context.Context) error {
-		assert.True(t, peerShareOn(), "the reverse client reads peer sharing as on")
-		select {
-		case <-time.After(50 * time.Millisecond):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		assert.Zero(t, peerFake.startCalls.Load(), "peer sharing waits for the release")
-		return nil
+func restartedOnOwnPort(f *fakeReverse, starts int32) func() bool {
+	return func() bool { return f.starts.Load() == starts && f.YieldedManualPort() }
+}
+
+// Peer sharing binds the manual port, so it starts only once the reverse
+// client has stopped, and the reverse client comes back on a port of its own.
+func TestPeerShareOnStopsTheReverseClientFirst(t *testing.T) {
+	r, fake, peerFake := newPeerShareReverseBackend(t)
+	peerFake.onStart = func() {
+		assert.False(t, fake.running.Load(), "the reverse client stopped before peer sharing started")
+		assert.Equal(t, int32(1), fake.stops.Load())
+		assert.True(t, peerShareOn())
 	}
 	require.NoError(t, r.applyPeerShare(true))
 	assert.Equal(t, int64(1), peerFake.startCalls.Load())
-	require.NoError(t, r.applyPeerShare(false))
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
 
-	prev := reverseReleaseTimeout
-	reverseReleaseTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { reverseReleaseTimeout = prev })
-	fake.release = func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
+	// Peer sharing off gives the manual port back.
+	require.NoError(t, r.applyPeerShare(false))
+	require.Eventually(t, func() bool {
+		return fake.starts.Load() == 3 && fake.running.Load() && !fake.YieldedManualPort()
+	}, time.Second, 5*time.Millisecond)
+	assert.Equal(t, int32(2), fake.stops.Load())
+
+	// A client already on the manual port stays put.
+	require.NoError(t, r.applyPeerShare(false))
+	assert.Never(t, func() bool { return fake.starts.Load() != 3 }, reverseSettle, 10*time.Millisecond)
+}
+
+func TestPeerShareRestartsTheReverseClientThroughANetworkChange(t *testing.T) {
+	r, fake, peerFake := newPeerShareReverseBackend(t)
+	peerFake.onStart = func() { r.ResetNetwork() }
+	require.NoError(t, r.applyPeerShare(true))
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
+	assert.Equal(t, int32(1), fake.networks.Load())
+
+	peerFake.onStart = nil
+	r.ResetNetwork()
+	require.NoError(t, r.applyPeerShare(false))
+	require.Eventually(t, func() bool {
+		return fake.starts.Load() == 3 && fake.running.Load() && !fake.YieldedManualPort()
+	}, time.Second, 5*time.Millisecond)
+}
+
+// The gate stays authoritative: a client paused for peer sharing does not
+// restart once the VPN went down meanwhile.
+func TestPeerShareDoesNotRestartTheReverseClientAgainstTheGate(t *testing.T) {
+	r, fake, peerFake := newPeerShareReverseBackend(t)
+	peerFake.onStart = func() {
+		emitVPNStatus(vpn.Disconnected)
+		g := r.reverseGate.Load()
+		require.Eventually(t, func() bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			return !g.vpnUp
+		}, time.Second, 5*time.Millisecond)
 	}
+	require.NoError(t, r.applyPeerShare(true))
+	assert.Never(t, fake.running.Load, reverseSettle, 10*time.Millisecond)
+	assert.Equal(t, int32(1), fake.starts.Load())
+
+	emitVPNStatus(vpn.Connected)
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
+}
+
+func TestPeerShareStartsWhenTheReverseTeardownOverruns(t *testing.T) {
+	prev := reverseStopTimeout
+	reverseStopTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { reverseStopTimeout = prev })
+	r, fake, peerFake := newPeerShareReverseBackend(t)
+	fake.hang.Store(true)
 	start := time.Now()
 	require.NoError(t, r.applyPeerShare(true))
 	assert.Less(t, time.Since(start), 5*time.Second)
-	assert.Equal(t, int64(2), peerFake.startCalls.Load(), "a timed-out release still starts peer sharing")
-	assert.Equal(t, int32(2), fake.peerShares.Load())
+	assert.Equal(t, int64(1), peerFake.startCalls.Load(), "an overrun teardown still starts peer sharing")
+	require.Eventually(t, restartedOnOwnPort(fake, 2), time.Second, 5*time.Millisecond)
+}
+
+func TestPeerShareOnWithoutAReverseGate(t *testing.T) {
+	peerFake := &fakePeerController{}
+	r := newPeerTestBackend(t, peerFake)
+	r.reverseClient = &fakeReverse{}
+	require.NoError(t, r.applyPeerShare(true))
+	require.NoError(t, r.applyPeerShare(false))
+	assert.Equal(t, int64(1), peerFake.startCalls.Load())
 }

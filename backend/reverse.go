@@ -28,8 +28,9 @@ import (
 const helperReverseFeature = "helper_reverse"
 
 // reverseStopTimeout bounds how long the gate waits for the reverse client's
-// teardown; the teardown runs to its own deadline either way.
-const reverseStopTimeout = 10 * time.Second
+// teardown; the teardown runs to its own deadline either way. A var so tests
+// can shorten it.
+var reverseStopTimeout = 10 * time.Second
 
 // reverseUnsupported reports whether this platform must never run the reverse
 // client. It is a var solely so tests can fake it.
@@ -42,7 +43,7 @@ type reverseController interface {
 	Stop(ctx context.Context)
 	NetworkChanged()
 	PairingsChanged()
-	ReleaseManualPort(ctx context.Context) error
+	YieldedManualPort() bool
 }
 
 func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
@@ -142,25 +143,26 @@ func (r *LocalBackend) stopReverse() {
 }
 
 // peerShareOn reports whether peer sharing is on. The setting turns on before
-// peer sharing starts, so the reverse client leaves the manual port before
-// peer sharing binds it.
+// pauseReverse, so the reverse client a resume starts leaves the manual port
+// to peer sharing.
 func peerShareOn() bool { return settings.GetBool(settings.PeerShareEnabledKey) }
 
-// reverseReleaseTimeout bounds how long turning peer sharing on waits for the
-// reverse portal to leave the manual port. A var so tests can shorten it.
-var reverseReleaseTimeout = 5 * time.Second
-
-// releaseReverseManualPort waits, at most reverseReleaseTimeout, for the
-// reverse portal to stop listening on the manual port peer sharing is about
-// to bind.
-func (r *LocalBackend) releaseReverseManualPort(ctx context.Context) {
-	if r.reverseClient == nil {
-		return
+// pauseReverse stops the reverse client, if it runs, and keeps it stopped
+// until resume is called. It returns once the client's teardown has finished
+// or timed out, or ctx ends. resume may be called more than once.
+func (r *LocalBackend) pauseReverse(ctx context.Context) (resume func()) {
+	g := r.reverseGate.Load()
+	if g == nil {
+		return func() {}
 	}
-	ctx, cancel := context.WithTimeout(ctx, reverseReleaseTimeout)
-	defer cancel()
-	if err := r.reverseClient.ReleaseManualPort(ctx); err != nil {
-		slog.Warn("Reverse portal still holds the manual port; starting peer share anyway")
+	return g.pause(ctx)
+}
+
+// restartYieldedReverse restarts the reverse client if it runs on a port of
+// its own only because peer sharing held the manual port.
+func (r *LocalBackend) restartYieldedReverse() {
+	if g := r.reverseGate.Load(); g != nil {
+		g.restartYielded()
 	}
 }
 
@@ -181,6 +183,11 @@ type reverseGate struct {
 	mu        sync.Mutex
 	vpnUp     bool
 	featureOn bool
+	// paused counts unresumed pauses, which keep the client stopped.
+	paused int
+	// pauseAcks close once the loop has acted on their pause.
+	pauseAcks    []chan struct{}
+	restartYield bool
 }
 
 func (g *reverseGate) setVPNStatus(s vpn.VPNStatus) {
@@ -201,16 +208,56 @@ func (g *reverseGate) set(field *bool, v bool) {
 	g.mu.Lock()
 	*field = v
 	g.mu.Unlock()
+	g.wake()
+}
+
+func (g *reverseGate) wake() {
 	select {
 	case g.kick <- struct{}{}:
 	default:
 	}
 }
 
-func (g *reverseGate) wanted() bool {
+func (g *reverseGate) pause(ctx context.Context) (resume func()) {
+	ack := make(chan struct{})
+	g.mu.Lock()
+	g.paused++
+	g.pauseAcks = append(g.pauseAcks, ack)
+	g.mu.Unlock()
+	g.wake()
+	select {
+	case <-ack:
+	case <-g.exited:
+	case <-ctx.Done():
+		slog.Warn("Gave up waiting for the reverse client to stop")
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			g.paused--
+			g.mu.Unlock()
+			g.wake()
+		})
+	}
+}
+
+func (g *reverseGate) restartYielded() {
+	g.mu.Lock()
+	g.restartYield = true
+	g.mu.Unlock()
+	g.wake()
+}
+
+// take returns whether the client should run, whether a restart for the
+// manual port was asked for, and the pauses seen, clearing both requests.
+func (g *reverseGate) take() (want, restart bool, acks []chan struct{}) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.vpnUp && g.featureOn
+	want = g.vpnUp && g.featureOn && g.paused == 0
+	restart, acks = g.restartYield, g.pauseAcks
+	g.restartYield, g.pauseAcks = false, nil
+	return want, restart, acks
 }
 
 func (g *reverseGate) run(ctx context.Context) {
@@ -225,17 +272,20 @@ func (g *reverseGate) run(ctx context.Context) {
 			return
 		case <-g.kick:
 		}
-		want := g.wanted()
-		switch {
-		case want && !running:
-			if err := g.client.Start(ctx); err != nil {
-				slog.Warn("Failed to start the reverse client", "error", err)
-				continue
-			}
-			running = true
-		case !want && running:
+		want, restart, acks := g.take()
+		if running && (!want || (restart && g.client.YieldedManualPort())) {
 			g.stopClient()
 			running = false
+		}
+		if want && !running {
+			if err := g.client.Start(ctx); err != nil {
+				slog.Warn("Failed to start the reverse client", "error", err)
+			} else {
+				running = true
+			}
+		}
+		for _, ack := range acks {
+			close(ack)
 		}
 	}
 }
@@ -244,6 +294,9 @@ func (g *reverseGate) stopClient() {
 	ctx, cancel := context.WithTimeout(context.Background(), reverseStopTimeout)
 	defer cancel()
 	g.client.Stop(ctx)
+	if ctx.Err() != nil {
+		slog.Warn("Reverse client teardown is still running")
+	}
 }
 
 func (g *reverseGate) stop() {
