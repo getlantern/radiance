@@ -264,11 +264,8 @@ func TestBridgeTagIsAStablePseudonym(t *testing.T) {
 
 func TestBridgeSkipsUnusableRoutesWithoutLoggingThem(t *testing.T) {
 	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
 	h := newBridgeHarness(t)
+	h.client.cfg.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	const unknown, inviter = "7a1c2b0e-0000-0000-0000-0000000000cc", "7a1c2b0e-0000-0000-0000-0000000000dd"
 	h.keys.keys[inviter] = PairingKey{Key: bytes.Repeat([]byte{4}, 32), Role: string(helperticket.RoleInviter)}
 	now := h.clock()

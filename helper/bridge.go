@@ -34,8 +34,8 @@ type BridgeBox interface {
 	SetBridges(bridges map[string]*lbO.SamizdatBridgeInboundOptions) error
 }
 
-// BridgeConfig plumbs in a BridgeClient's dependencies. A zero PollInterval
-// and a nil Now fall back to production defaults.
+// BridgeConfig plumbs in a BridgeClient's dependencies. A zero PollInterval,
+// a nil Now and a nil Logger fall back to production defaults.
 type BridgeConfig struct {
 	API  *ReverseAPI
 	Keys interface {
@@ -48,6 +48,7 @@ type BridgeConfig struct {
 	Usage        *Usage
 	Now          func() time.Time
 	PollInterval time.Duration
+	Logger       *slog.Logger
 }
 
 // BridgeClient serves this device's inviters while it volunteers: it polls
@@ -97,6 +98,9 @@ func NewBridgeClient(cfg BridgeConfig) *BridgeClient {
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = defaultBridgePollInterval
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
 	}
 	return &BridgeClient{cfg: cfg, kick: make(chan struct{}, 1), pairingByTag: make(map[string]string)}
 }
@@ -219,7 +223,7 @@ func (b *BridgeClient) setBridges(bridges map[string]*lbO.SamizdatBridgeInboundO
 	s.bridges = bridges
 	// The errors name tags.
 	if err := s.box.SetBridges(bridges); err != nil {
-		slog.Warn("bridge: could not apply every bridge")
+		b.cfg.Logger.Warn("bridge: could not apply every bridge")
 		s.bridgesDirty = true
 		return
 	}
@@ -262,12 +266,12 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 	if s.box == nil {
 		box, err := b.cfg.NewBox(ctx, resp.BridgeConfig, b.count)
 		if err != nil {
-			slog.Warn("bridge: could not build the box", "err", err)
+			b.cfg.Logger.Warn("bridge: could not build the box", "err", err)
 			return b.cfg.PollInterval
 		}
 		if err := box.Start(); err != nil {
-			slog.Warn("bridge: could not start the box", "err", err)
-			closeBridgeBox(box)
+			b.cfg.Logger.Warn("bridge: could not start the box", "err", err)
+			b.closeBridgeBox(box)
 			return b.cfg.PollInterval
 		}
 		s.box, s.boxConfig = box, resp.BridgeConfig
@@ -325,7 +329,7 @@ func (b *BridgeClient) bridgesFor(routes []ReverseBlob, volunteerIDs []string, n
 		b.tagsMu.Unlock()
 	}
 	if skips != b.st.lastSkips && skips != (routeSkips{}) {
-		slog.Info("bridge: skipped reverse routes", "no_key", skips.noKey, "bad", skips.bad,
+		b.cfg.Logger.Info("bridge: skipped reverse routes", "no_key", skips.noKey, "bad", skips.bad,
 			"stale", skips.stale, "future", skips.future, "other", skips.other)
 	}
 	b.st.lastSkips = skips
@@ -340,16 +344,16 @@ func (b *BridgeClient) routesFailed(ctx context.Context, err error) time.Duratio
 	var apiErr *ReverseAPIError
 	switch {
 	case errors.Is(err, ErrReverseDisabled):
-		slog.Info("bridge: reverse routes disabled by lantern-cloud")
+		b.cfg.Logger.Info("bridge: reverse routes disabled by lantern-cloud")
 		b.closeBox()
 		return bridgeDisabledWait
 	case errors.As(err, &apiErr) &&
 		(apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable):
 		s.backoff = min(2*max(s.backoff, b.cfg.PollInterval), maxBridgeBackoff)
-		slog.Info("bridge: lantern-cloud is busy, backing off", "wait", s.backoff)
+		b.cfg.Logger.Info("bridge: lantern-cloud is busy, backing off", "wait", s.backoff)
 		return s.backoff
 	}
-	slog.Warn("bridge: could not fetch reverse routes", "err", err)
+	b.cfg.Logger.Warn("bridge: could not fetch reverse routes", "err", err)
 	return b.cfg.PollInterval
 }
 
@@ -369,24 +373,24 @@ func (b *BridgeClient) closeBox() {
 	if s.box == nil {
 		return
 	}
-	closeBridgeBox(s.box)
+	b.closeBridgeBox(s.box)
 	s.box, s.boxConfig = nil, ""
 	s.bridges, s.bridgesDirty = nil, false
 }
 
 // closeBridgeBox closes box, waiting at most bridgeCloseTimeout for it to
 // drain its connections.
-func closeBridgeBox(box BridgeBox) {
+func (b *BridgeClient) closeBridgeBox(box BridgeBox) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		if err := box.Close(); err != nil {
-			slog.Warn("bridge: could not close the box")
+			b.cfg.Logger.Warn("bridge: could not close the box")
 		}
 	}()
 	select {
 	case <-done:
 	case <-time.After(bridgeCloseTimeout):
-		slog.Warn("bridge: box close still draining connections; continuing")
+		b.cfg.Logger.Warn("bridge: box close still draining connections; continuing")
 	}
 }

@@ -55,7 +55,7 @@ type PairingKeySource interface {
 }
 
 // ReverseConfig plumbs in a ReverseClient's dependencies. Zero durations and a
-// nil Now or NewForwarder fall back to production defaults.
+// nil Now, NewForwarder or Logger fall back to production defaults.
 type ReverseConfig struct {
 	API  *helper.ReverseAPI
 	Keys PairingKeySource
@@ -80,6 +80,7 @@ type ReverseConfig struct {
 	// AddrMemory is how long an observed address of one family is kept
 	// without being observed again.
 	AddrMemory time.Duration
+	Logger     *slog.Logger
 }
 
 // ReverseClient lets this device's paired helpers reach it as an inviter: it
@@ -162,6 +163,9 @@ func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.AddrMemory == 0 {
 		cfg.AddrMemory = defaultReverseAddrMemory
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	return &ReverseClient{
 		cfg:         cfg,
 		coverDomain: pickReverseCoverDomain(),
@@ -184,10 +188,10 @@ func (c *ReverseClient) Start(context.Context) error {
 	if c.cancel != nil {
 		return nil
 	}
-	manual := reverseManualPort()
+	manual := reverseManualPort(c.cfg.Logger)
 	yielded := manual != 0 && c.cfg.PeerShareActive != nil && c.cfg.PeerShareActive()
 	if yielded {
-		slog.Info("reverse: peer sharing holds the manual port, mapping another")
+		c.cfg.Logger.Info("reverse: peer sharing holds the manual port, mapping another")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	prev, done, released := c.done, make(chan struct{}), make(chan struct{})
@@ -317,7 +321,7 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 		}
 		if s.boxSet {
 			if err := c.cfg.Box.RebindReversePortal(); err != nil {
-				slog.Warn("reverse: could not rebind the portal")
+				c.cfg.Logger.Warn("reverse: could not rebind the portal")
 			}
 		}
 		c.unmap(ctx)
@@ -337,7 +341,7 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 	}
 	if len(ids) > maxReverseRoutes && !s.warnedRouteCap {
 		s.warnedRouteCap = true
-		slog.Info("reverse: more inviter pairings than routes allowed, registering a subset",
+		c.cfg.Logger.Info("reverse: more inviter pairings than routes allowed, registering a subset",
 			"pairings", len(ids), "routes", maxReverseRoutes)
 	}
 	if len(ids) > maxReverseRoutes {
@@ -369,7 +373,7 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 	if s.creds == nil || now.Sub(s.credsAt) >= c.cfg.RotateInterval {
 		creds, err := newReverseCreds(c.coverDomain)
 		if err != nil {
-			slog.Error("reverse: could not make listener credentials", "err", err)
+			c.cfg.Logger.Error("reverse: could not make listener credentials", "err", err)
 			return c.cfg.RegisterInterval
 		}
 		s.creds, s.credsAt = &creds, now
@@ -440,7 +444,7 @@ func (c *ReverseClient) dropRevoked(ids []string) {
 			cfg := *s.portal
 			cfg.Pairings = pairings
 			if err := c.cfg.Box.SetReversePortal(&cfg, c.coverDomain); err != nil {
-				slog.Warn("reverse: could not configure the portal")
+				c.cfg.Logger.Warn("reverse: could not configure the portal")
 			} else {
 				s.portal = &cfg
 			}
@@ -480,7 +484,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 		var err error
 		if fwd, err = c.cfg.NewForwarder(ctx); err != nil {
 			// Gateway errors name local addresses.
-			slog.Info("reverse: no port forwarding",
+			c.cfg.Logger.Info("reverse: no port forwarding",
 				"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
 			return false
 		}
@@ -500,7 +504,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	}
 	mapping, err := fwd.MapPort(ctx, portforward.TCP, port, reversePortDescription)
 	if err != nil {
-		slog.Info("reverse: could not map a port",
+		c.cfg.Logger.Info("reverse: could not map a port",
 			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding),
 			"no_local_ip", errors.Is(err, portforward.ErrNoLocalIP))
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
@@ -523,7 +527,7 @@ func (c *ReverseClient) unmap(ctx context.Context) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), peerCleanupTimeout)
 	defer cancel()
 	if err := s.fwd.UnmapPort(cleanupCtx); err != nil {
-		slog.Info("reverse: could not unmap the port")
+		c.cfg.Logger.Info("reverse: could not unmap the port")
 	}
 	s.fwd, s.mapping = nil, nil
 }
@@ -557,7 +561,7 @@ func (c *ReverseClient) clearBox() {
 		return
 	}
 	if err := c.cfg.Box.SetReversePortal(nil, ""); err != nil {
-		slog.Warn("reverse: could not remove the portal")
+		c.cfg.Logger.Warn("reverse: could not remove the portal")
 		return
 	}
 	s.boxSet = false
@@ -573,7 +577,7 @@ func (c *ReverseClient) apiFailed(ctx context.Context, err error, now time.Time)
 	var apiErr *helper.ReverseAPIError
 	switch {
 	case errors.Is(err, helper.ErrReverseDisabled):
-		slog.Info("reverse: routes disabled by lantern-cloud")
+		c.cfg.Logger.Info("reverse: routes disabled by lantern-cloud")
 		s.apiNotBefore = now.Add(reverseDisabledWait)
 		// A disabled server serves no routes, and the rows it holds expire.
 		s.registered, s.registeredIDs = false, nil
@@ -584,11 +588,11 @@ func (c *ReverseClient) apiFailed(ctx context.Context, err error, now time.Time)
 	case errors.As(err, &apiErr) &&
 		(apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable):
 		s.backoff = min(2*max(s.backoff, c.cfg.RegisterInterval), maxReverseBackoff)
-		slog.Info("reverse: lantern-cloud is busy, backing off", "wait", s.backoff)
+		c.cfg.Logger.Info("reverse: lantern-cloud is busy, backing off", "wait", s.backoff)
 		s.apiNotBefore = now.Add(s.backoff)
 		return s.backoff
 	}
-	slog.Warn("reverse: lantern-cloud call failed", "err", err)
+	c.cfg.Logger.Warn("reverse: lantern-cloud call failed", "err", err)
 	return c.cfg.RegisterInterval
 }
 
@@ -625,7 +629,7 @@ func (c *ReverseClient) seal(ids []string, now time.Time) []helper.ReverseBlob {
 		blobs = append(blobs, helper.ReverseBlob{PairingID: id, Blob: blob, Version: reverse.BlobVersion})
 	}
 	if failed > 0 {
-		slog.Error("reverse: could not seal routes", "failed", failed)
+		c.cfg.Logger.Error("reverse: could not seal routes", "failed", failed)
 	}
 	return blobs
 }
@@ -689,7 +693,7 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 		s.boxSet = true
 		if err := c.cfg.Box.SetReversePortal(cfg, c.coverDomain); err != nil {
 			// The error can name the port or a tag.
-			slog.Warn("reverse: could not configure the portal")
+			c.cfg.Logger.Warn("reverse: could not configure the portal")
 			// Another socket holds the port the client picked, so the next
 			// cycle maps a different one.
 			if s.portal == nil && !s.mapsManualPort() && portInUse(err) {
@@ -710,7 +714,7 @@ func (c *ReverseClient) setOutbounds(tags []string) {
 	}
 	if err := c.cfg.Box.SetReverseOutbounds(tags); err != nil {
 		// The error can name a tag.
-		slog.Warn("reverse: could not set the reverse outbounds")
+		c.cfg.Logger.Warn("reverse: could not set the reverse outbounds")
 		s.outboundsKnown = false
 		return
 	}

@@ -1616,11 +1616,11 @@ func ensurePeerOutboundsBypassVPN(options string) (string, error) {
 // doesn't listen on (or, worse, one it does listen on for another
 // service). Out-of-range / unparseable values are logged at Warn and
 // the resolution falls through to the next source as if unset.
-func pickManualForwarder() portForwarder { return chooseManualForwarder(true) }
+func pickManualForwarder() portForwarder { return chooseManualForwarder(slog.Default(), true) }
 
-// chooseManualForwarder is pickManualForwarder; with logPort false its log
-// lines carry neither the port nor a rejected value.
-func chooseManualForwarder(logPort bool) portForwarder {
+// chooseManualForwarder is pickManualForwarder logging to log; with logPort
+// false its log lines carry neither the port nor a rejected value.
+func chooseManualForwarder(log *slog.Logger, logPort bool) portForwarder {
 	attr := func(key string, value any) []any {
 		if !logPort {
 			return nil
@@ -1629,11 +1629,11 @@ func chooseManualForwarder(logPort bool) portForwarder {
 	}
 	if raw := settings.GetInt(settings.PeerManualPortKey); raw != 0 {
 		if raw < 1 || raw > 65535 {
-			slog.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
+			log.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
 				attr("value", raw)...)
 		} else {
 			port := uint16(raw)
-			slog.Info("peer client using manual port forward",
+			log.Info("peer client using manual port forward",
 				append(attr("port", port), "source", "setting")...)
 			return portforward.NewManualForwarder(port)
 		}
@@ -1641,10 +1641,10 @@ func chooseManualForwarder(logPort bool) portForwarder {
 	if raw := env.GetString(env.PeerExternalPort); raw != "" {
 		port, err := portforward.ParseManualPort(raw)
 		if err != nil {
-			slog.Warn("ignoring invalid "+env.PeerExternalPort.String(),
+			log.Warn("ignoring invalid "+env.PeerExternalPort.String(),
 				append(attr("value", raw), attr("err", err)...)...)
 		} else {
-			slog.Info("peer client using manual port forward",
+			log.Info("peer client using manual port forward",
 				append(attr("port", port), "source", env.PeerExternalPort.String())...)
 			return portforward.NewManualForwarder(port)
 		}
@@ -1658,8 +1658,8 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 
 // reverseManualPort is the configured manual port, or 0, found without the
 // port in the log.
-func reverseManualPort() uint16 {
-	if m, ok := chooseManualForwarder(false).(*portforward.ManualForwarder); ok {
+func reverseManualPort(log *slog.Logger) uint16 {
+	if m, ok := chooseManualForwarder(log, false).(*portforward.ManualForwarder); ok {
 		return m.Port()
 	}
 	return 0

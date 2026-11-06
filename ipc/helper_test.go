@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
-	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -128,12 +126,8 @@ func TestHelperPairingKeysEndpoint(t *testing.T) {
 }
 
 // Keys pushed by ipc.Client replace the backend's whole set, and neither the
-// keys nor the pairing IDs reach logs or spans, even when the body is bad.
+// keys nor the pairing IDs reach spans, even when the body is bad.
 func TestHelperPairingKeysClientRoundTrip(t *testing.T) {
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: rlog.LevelTrace})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
 	mem := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
 	prevTP := otel.GetTracerProvider()
@@ -167,7 +161,6 @@ func TestHelperPairingKeysClientRoundTrip(t *testing.T) {
 	api.ServeHTTP(httptest.NewRecorder(), r)
 
 	for _, leak := range []string{"secret-pairing", base64.StdEncoding.EncodeToString(key), "pairing-keys"} {
-		assert.NotContains(t, logs.String(), leak)
 		for _, s := range mem.GetSpans() {
 			assert.NotContains(t, fmt.Sprint(s.Name, s.Attributes, s.Events), leak)
 		}

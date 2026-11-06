@@ -955,17 +955,15 @@ func TestReverseNeverLogsTheManualPort(t *testing.T) {
 	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
 	var buf strings.Builder
 	var bufMu sync.Mutex
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+	logger := slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
 		bufMu.Lock()
 		defer bufMu.Unlock()
 		return buf.Write(p)
-	}), &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	}), &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	e := newRevEnv(t)
-	e.c = NewReverseClient(ReverseConfig{API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now})
-	e.c.st.manualPort = reverseManualPort()
+	e.c = NewReverseClient(ReverseConfig{API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now, Logger: logger})
+	e.c.st.manualPort = reverseManualPort(logger)
 	e.keys.set("p1")
 	e.cycle(t)
 	e.c.NetworkChanged()
