@@ -1926,6 +1926,12 @@ func (f *fakeHelperTunnel) SelectedPersonalProxy() string {
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
 
+func (f *fakeHelperTunnel) CurrentAutoSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.autoChoice, nil
+}
+
 func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

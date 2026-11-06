@@ -17,6 +17,7 @@ import (
 
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
@@ -768,4 +769,56 @@ func TestConnectPinsAServerAutoHappensToBeOn(t *testing.T) {
 	assert.True(t, ok, "manual mode")
 	assert.Equal(t, "lantern-1", manual)
 	assert.Equal(t, "lantern-1", selectedTag(t))
+}
+
+// The tunnel can report a reverse outbound as its auto or current selection.
+// It resolves to its friend's helper server, or to the friend's personal
+// proxy when the manager has none, for both selected-server responses.
+func TestReverseOutboundResolvesAsTheSelectedServer(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	tun.up()
+	direct := helperWithPort(ppFriendA, 1080)
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{direct}}, false))
+	revA, revB := lbA.ReverseHelperTag(ppFriendA), lbA.ReverseHelperTag(ppFriendB)
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{revA, revB}))
+
+	// GET /server/auto-selected: CurrentAutoSelectedServer, then GetServerByTag.
+	autoSelected := func() (*servers.Server, bool) {
+		tag, err := r.CurrentAutoSelectedServer()
+		require.NoError(t, err)
+		return r.GetServerByTag(tag)
+	}
+	for _, tc := range []struct{ rev, want string }{
+		{revA, ppFriendA},
+		{revB, vpn.PersonalProxySelection(ppFriendB)},
+	} {
+		tun.mu.Lock()
+		tun.autoChoice, tun.selected = tc.rev, tc.rev
+		tun.mu.Unlock()
+
+		srv, found := autoSelected()
+		require.True(t, found)
+		assert.Equal(t, tc.want, srv.Tag)
+
+		// GET /server/selected in auto mode.
+		require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+		srv, found, err := r.SelectedServer()
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, tc.want, srv.Tag)
+
+		// GET /server/selected with no saved selection: the tunnel's current one.
+		require.NoError(t, settings.Set(settings.AutoConnectKey, false))
+		require.NoError(t, settings.Clear(settings.SelectedServerKey))
+		srv, found, err = r.SelectedServer()
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, tc.want, srv.Tag)
+	}
+
+	require.NoError(t, r.vpnClient.SetReverseOutbounds(nil))
+	_, found := autoSelected()
+	assert.False(t, found, "a reverse outbound that is not live resolves to nothing")
 }

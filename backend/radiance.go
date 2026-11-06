@@ -1037,7 +1037,20 @@ func (r *LocalBackend) AllServers() []*servers.Server {
 	return r.srvManager.AllServers()
 }
 
+// GetServerByTag returns the server tag names. A live reverse outbound, which
+// the tunnel can report as its auto or current selection but the manager
+// never holds, resolves to its friend's helper server, or to the friend's
+// personal proxy when the manager has no helper server for it.
 func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
+	if friend, ok := lbA.HelperTagOfReverse(tag); ok {
+		if !slices.Contains(r.reverseOutbounds(), tag) {
+			return nil, false
+		}
+		if srv, found := r.srvManager.GetServerByTag(friend); found {
+			return srv, true
+		}
+		return r.personalProxyServer(friend)
+	}
 	return r.serverByTag(tag)
 }
 
@@ -1166,6 +1179,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // tunnel through.
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
+	CurrentAutoSelectedServer() (string, error)
 	CurrentSelectedServer() (string, error)
 	ManualSelection() (string, bool)
 	SelectedPersonalProxy() string
@@ -2094,22 +2108,22 @@ func (r *LocalBackend) VPNThroughput() (vpn.ThroughputSnapshot, error) {
 // The server may no longer be available if it was removed from the manager since it was selected.
 func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 	if settings.GetBool(settings.AutoConnectKey) {
-		tag, err := r.vpnClient.CurrentAutoSelectedServer()
+		tag, err := r.liveTunnel().CurrentAutoSelectedServer()
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
 		}
-		server, found := r.serverByTag(tag)
+		server, found := r.GetServerByTag(tag)
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
-		tag, err := r.vpnClient.CurrentSelectedServer()
+		tag, err := r.liveTunnel().CurrentSelectedServer()
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current selected server: %w", err)
 		}
 		if tag == "" {
 			return nil, false, fmt.Errorf("no selected server")
 		}
-		server, found := r.serverByTag(tag)
+		server, found := r.GetServerByTag(tag)
 		return server, found, nil
 	}
 	var selected servers.Server
@@ -2127,7 +2141,7 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 // CurrentAutoSelectedServer returns the tag of the server that is currently auto-selected by the
 // VPN client.
 func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
-	return r.vpnClient.CurrentAutoSelectedServer()
+	return r.liveTunnel().CurrentAutoSelectedServer()
 }
 
 func (r *LocalBackend) startSessionAutoSelectListener() {
