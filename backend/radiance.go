@@ -1046,19 +1046,35 @@ func (r *LocalBackend) serverByTag(tag string) (*servers.Server, bool) {
 }
 
 // personalProxiesServer stands in for the tunnel's group over helper
-// outbounds. Like the group, it exists while a helper or reverse outbound
-// does.
+// outbounds. It exists while the group does, and while a reverse friend's
+// pairing lasts, so a selection of the group stands while the friend's
+// reverse outbound is down.
 func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
-	group := &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}
+	if !r.personalProxiesLive() && len(r.reverseFriends.friends()) == 0 {
+		return nil, false
+	}
+	return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
+}
+
+// personalProxiesLive reports whether the tunnel's group exists: whether a
+// helper or reverse outbound does.
+func (r *LocalBackend) personalProxiesLive() bool {
 	for _, srv := range r.srvManager.AllServers() {
 		if lbA.IsHelperTag(srv.Tag) {
-			return group, true
+			return true
 		}
 	}
-	if len(r.reverseOutbounds()) > 0 {
-		return group, true
+	return len(r.reverseOutbounds()) > 0
+}
+
+// startSelection is the selection a tunnel built now starts on for tag. A
+// personal proxies group with no member yet starts on auto-select, which is
+// not saved, until restoreReverseSelection selects the group.
+func (r *LocalBackend) startSelection(tag string) string {
+	if tag == vpn.PersonalProxiesTag && !r.personalProxiesLive() {
+		return vpn.AutoSelectTag
 	}
-	return nil, false
+	return tag
 }
 
 func (r *LocalBackend) RemoveServers(tags []string) error {
@@ -1609,7 +1625,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 		return err
 	}
 	bOptions := r.getBoxOptions()
-	bOptions.InitialServer = tag
+	bOptions.InitialServer = r.startSelection(tag)
 	if err := r.liveTunnel().Connect(ctx, bOptions); err != nil {
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
@@ -1848,7 +1864,7 @@ func (r *LocalBackend) RestartVPN() error {
 		r.settleFriendLocked(tag)
 		return nil
 	}
-	if tag != bOptions.InitialServer {
+	if r.startSelection(tag) != bOptions.InitialServer {
 		if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("apply the selection saved during the restart: %w", err)
 		}
@@ -1866,7 +1882,7 @@ func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
 	if r.beforeRestartSelection != nil {
 		r.beforeRestartSelection()
 	}
-	bOptions.InitialServer = r.savedSelectionTag()
+	bOptions.InitialServer = r.startSelection(r.savedSelectionTag())
 	return bOptions
 }
 

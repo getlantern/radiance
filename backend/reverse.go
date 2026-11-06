@@ -87,7 +87,8 @@ func (r *LocalBackend) pairingKeysChanged() {
 // pruneReverseFriends forgets the reverse friends whose inviter pairing ended,
 // and with them a selection that only they kept.
 func (r *LocalBackend) pruneReverseFriends() {
-	if !r.reverseFriends.prune(r.helperPairingKeys.IDs(string(helperticket.RoleInviter))) {
+	inviters := func() []string { return r.helperPairingKeys.IDs(string(helperticket.RoleInviter)) }
+	if !r.reverseFriends.prune(inviters) {
 		return
 	}
 	r.selectionMu.Lock()
@@ -127,11 +128,15 @@ func (r *LocalBackend) startReverseWith(vpnStatus func() vpn.VPNStatus) {
 			g.setFeature(evt.New.Features[helperReverseFeature])
 		}
 	})
-	// Seeded after subscribing, so a change in between is not lost.
-	g.setVPNStatus(vpnStatus())
+	// Seeded after subscribing, and read and applied under the lock the
+	// callbacks take, so neither a change in between nor a later one is lost.
+	g.mu.Lock()
+	g.applyVPNStatusLocked(vpnStatus())
 	if cfg, err := r.confHandler.GetConfig(); err == nil && cfg != nil {
-		g.setFeature(cfg.Features[helperReverseFeature])
+		g.featureOn = cfg.Features[helperReverseFeature]
 	}
+	g.mu.Unlock()
+	g.wake()
 	go g.run(ctx)
 }
 
@@ -190,14 +195,21 @@ type reverseGate struct {
 }
 
 func (g *reverseGate) setVPNStatus(s vpn.VPNStatus) {
+	g.mu.Lock()
+	g.applyVPNStatusLocked(s)
+	g.mu.Unlock()
+	g.wake()
+}
+
+func (g *reverseGate) applyVPNStatusLocked(s vpn.VPNStatus) {
 	switch s {
 	case vpn.Connected:
-		g.set(&g.vpnUp, true)
+		g.vpnUp = true
 	case vpn.Connecting, vpn.Restarting:
 		// A restart keeps the client: the new tunnel restores its portal and
 		// outbounds. Every other way out of Connected already set the VPN down.
 	default:
-		g.set(&g.vpnUp, false)
+		g.vpnUp = false
 	}
 }
 

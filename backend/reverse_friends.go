@@ -104,18 +104,20 @@ func (f *reverseFriends) record(reverseTags []string) {
 	}
 }
 
-// prune drops every friend whose pairing is not in pairingIDs and reports
-// whether any was dropped.
-func (f *reverseFriends) prune(pairingIDs []string) bool {
+// prune drops every friend whose pairing is not in pairingIDs() and reports
+// whether any was dropped. pairingIDs is read under the lock record takes, so
+// a friend recorded for a pairing it does not yet list is never dropped.
+func (f *reverseFriends) prune(pairingIDs func() []string) bool {
 	if f == nil {
 		return false
 	}
-	keep := make(map[string]bool, len(pairingIDs))
-	for _, id := range pairingIDs {
-		keep[pairingHash(id)] = true
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	ids := pairingIDs()
+	keep := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		keep[pairingHash(id)] = true
+	}
 	n := len(f.byPairing)
 	maps.DeleteFunc(f.byPairing, func(h, _ string) bool { return !keep[h] })
 	if len(f.byPairing) == n {

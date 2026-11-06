@@ -467,3 +467,89 @@ func TestPeerSharePauseRestoresTheSavedPersonalProxiesGroup(t *testing.T) {
 	assert.Equal(t, vpn.PersonalProxiesTag, tunnel.current())
 	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
 }
+
+// A saved personal proxies group whose only members are reverse outbounds
+// stands while they are down, as a saved reverse friend does: through a
+// config refresh, and across a launch, where the tunnel starts on
+// auto-select without saving it.
+func TestReverseKeepsASavedPersonalProxiesGroupWhileItsMembersAreDown(t *testing.T) {
+	dataDir := t.TempDir()
+	r, fake := newReverseFriendBackend(t, dataDir)
+	r.persistSelection(vpn.PersonalProxiesTag)
+	emitVPNStatus(vpn.Disconnected)
+	require.Eventually(t, notRunning(fake), time.Second, 5*time.Millisecond)
+	require.NoError(t, reverseBox{r: r}.SetReversePortal(nil, ""))
+	require.Empty(t, r.reverseOutbounds())
+
+	r.applyConfig(cachedConfig(), true)
+	r.clearSelectedIfMissing()
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
+	assert.Equal(t, vpn.AutoSelectTag, r.fallbackFor(vpn.PersonalProxySelection(ppFriendB)),
+		"a friend does not fall back to a group with no member")
+	r.stopReverse()
+
+	next := newPersonalProxiesBackendIn(t, dataDir)
+	next.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
+	next.clearSelectedIfMissing()
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
+	tunnel := &fakeHelperTunnel{}
+	tunnel.attach(next)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, next.ConnectVPN(ctx, vpn.PersonalProxiesTag))
+	assert.Equal(t, vpn.AutoSelectTag, tunnel.current(), "the tunnel starts without the group")
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t), "which stays saved")
+	assert.Equal(t, vpn.AutoSelectTag, next.restartBoxOptions().InitialServer)
+
+	require.NoError(t, reverseBox{r: next}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
+	assert.Equal(t, vpn.PersonalProxiesTag, tunnel.current())
+}
+
+// A prune that read the pairings before a friend was recorded must not drop
+// it: the pairings are read under the lock record takes.
+func TestReverseFriendsPruneDoesNotDropALaterRecord(t *testing.T) {
+	f := &reverseFriends{byPairing: map[string]string{pairingHash("pairing-a"): ppFriendA}}
+	f.setTags(map[string]string{"pairing-b": ppFriendB})
+	recorded := make(chan struct{})
+	f.prune(func() []string {
+		go func() {
+			f.record([]string{lbA.ReverseHelperTag(ppFriendB)})
+			close(recorded)
+		}()
+		select {
+		case <-recorded:
+			t.Error("record ran inside the prune")
+		case <-time.After(100 * time.Millisecond):
+		}
+		return []string{"pairing-a"}
+	})
+	<-recorded
+	assert.True(t, f.has(ppFriendA))
+	assert.True(t, f.has(ppFriendB))
+}
+
+// A status change that lands while the gate seeds its state is applied after
+// the seed, not overwritten by it.
+func TestReverseGateSeedDoesNotOverwriteANewerStatus(t *testing.T) {
+	dataDir := t.TempDir()
+	writeCachedConfig(t, dataDir, &config.Config{Features: map[string]bool{helperReverseFeature: true}})
+	r, fake := newUnstartedReverseTestBackend(t, dataDir, false)
+	r.startReverseWith(func() vpn.VPNStatus {
+		g := r.reverseGate.Load()
+		applied := make(chan struct{})
+		go func() {
+			g.setVPNStatus(vpn.Disconnected)
+			close(applied)
+		}()
+		select {
+		case <-applied:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return vpn.Connected
+	})
+	assert.Never(t, fake.running.Load, reverseSettle, 10*time.Millisecond)
+	g := r.reverseGate.Load()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	assert.False(t, g.vpnUp)
+}

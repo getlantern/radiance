@@ -138,10 +138,8 @@ func (r *LocalBackend) reverseOutbounds() []string {
 // offers it: a friend's personal proxy falls back to the personal proxies
 // group while it exists, and everything else to auto-select.
 func (r *LocalBackend) fallbackFor(tag string) string {
-	if _, ok := vpn.ParsePersonalProxySelection(tag); ok {
-		if _, found := r.personalProxiesServer(); found {
-			return vpn.PersonalProxiesTag
-		}
+	if _, ok := vpn.ParsePersonalProxySelection(tag); ok && r.personalProxiesLive() {
+		return vpn.PersonalProxiesTag
 	}
 	return vpn.AutoSelectTag
 }
