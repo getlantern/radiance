@@ -1109,21 +1109,6 @@ func TestClient_StatusEventOnStartError(t *testing.T) {
 var _ portForwarder = (*fakeForwarder)(nil)
 var _ boxService = (*fakeBoxService)(nil)
 
-// TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
-// for the "missing inbound fields registry in context" failure that bit
-// us live: the peer box was built from a ctx that didn't have the
-// lantern-box protocol registries (samizdat, reflex, …) plumbed in, so the
-// JSON decoder couldn't resolve inbounds[0].type="samizdat" → the build
-// failed → applyPeerShare rolled the toggle back. The integration tests
-// stub BuildBoxService entirely, so the samizdat decode path was never
-// exercised in CI.
-//
-// Calling defaultBuildBoxService directly with a minimal samizdat-inbound
-// options JSON walks the actual decode path. If the registries are missing
-// from the ctx it produces, the decode fails with the "missing inbound
-// fields registry" error and this test fails before any of the runtime
-// cycle (rebuild, redeploy, toggle UI, dial-back) — what used to take a
-// 5-minute round-trip is now a 0.1s test failure.
 // samizdatInboundJSON is a minimal but complete samizdat inbound: every field
 // option.SamizdatInboundOptions's json tags require to round-trip. Values are
 // placeholders; the box is never started.
@@ -1139,6 +1124,21 @@ const samizdatInboundJSON = `{
 	"masquerade_domain": "example.com"
 }`
 
+// TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
+// for the "missing inbound fields registry in context" failure that bit
+// us live: the peer box was built from a ctx that didn't have the
+// lantern-box protocol registries (samizdat, reflex, …) plumbed in, so the
+// JSON decoder couldn't resolve inbounds[0].type="samizdat" → the build
+// failed → applyPeerShare rolled the toggle back. The integration tests
+// stub BuildBoxService entirely, so the samizdat decode path was never
+// exercised in CI.
+//
+// Calling defaultBuildBoxService directly with a minimal samizdat-inbound
+// options JSON walks the actual decode path. If the registries are missing
+// from the ctx it produces, the decode fails with the "missing inbound
+// fields registry" error and this test fails before any of the runtime
+// cycle (rebuild, redeploy, toggle UI, dial-back) — what used to take a
+// 5-minute round-trip is now a 0.1s test failure.
 func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
 	bs, err := defaultBuildBoxService(context.Background(), `{"inbounds":[`+samizdatInboundJSON+`]}`)
 	require.NoError(t, err, "defaultBuildBoxService must decode a samizdat inbound — "+
