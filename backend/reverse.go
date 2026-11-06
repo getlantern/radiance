@@ -53,6 +53,15 @@ func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
 	})
 }
 
+func (r *LocalBackend) newBridgeClient(deviceID string) *helper.BridgeClient {
+	return helper.NewBridgeClient(helper.BridgeConfig{
+		API:    helper.NewReverseAPI(kindling.HTTPClient(), common.GetBaseURL(), deviceID),
+		Keys:   r.helperPairingKeys,
+		NewBox: peer.NewBridgeBox,
+		Usage:  r.helperUsage,
+	})
+}
+
 // useReverseClient makes c the backend's reverse client and points pairing key
 // changes at it.
 func (r *LocalBackend) useReverseClient(c reverseController) {

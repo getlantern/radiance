@@ -2121,7 +2121,12 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // box.Context installs, so the peer and the main tunnel coexist without
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
+	return newBoxContextLoggingTo(ctx, slog.Default().Handler())
+}
+
+// newBoxContextLoggingTo is newPeerBoxContext with the box logging to h.
+func newBoxContextLoggingTo(ctx context.Context, h slog.Handler) context.Context {
 	ctx = box.Context(ctx)
-	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(slog.Default().Handler())))
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(h)))
 	return ctx
 }

@@ -222,6 +222,8 @@ type unboundedManager struct {
 	// usage receives the bytes relayed for each helper pairing. Nil counts
 	// nothing.
 	usage *helper.Usage
+	// runHook hears each start and stop of the worker, under mu.
+	runHook func(running bool)
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -347,6 +349,23 @@ func SetPairedUsage(u *helper.Usage) {
 	manager.usage = u
 	manager.mu.Unlock()
 	u.SetFlush(manager.foldPending)
+}
+
+// SetRunHook sets f to hear true when the widget's worker starts and false
+// when it is stopped or fails to build the widget. f runs with the manager's
+// lock held, so it must not block or call into this package.
+func SetRunHook(f func(running bool)) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.runHook = f
+}
+
+// fireRunLocked tells the run hook, if any, whether the worker runs. Caller
+// must hold m.mu.
+func (m *unboundedManager) fireRunLocked(running bool) {
+	if m.runHook != nil {
+		m.runHook(running)
+	}
 }
 
 // SetVPNStatus sets where the widget reads the VPN tunnel's state, which it
@@ -728,6 +747,7 @@ func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
+	m.fireRunLocked(false)
 	m.releaseAllPeers()
 	m.peers = nil
 	m.mu.Unlock()
@@ -797,6 +817,7 @@ func (m *unboundedManager) startLocked() {
 	m.peers = make(map[int]string)
 	slots := &slotTable{}
 	m.slots = slots
+	m.fireRunLocked(true)
 	m.mu.Unlock()
 
 	go func() {
@@ -919,6 +940,7 @@ func (m *unboundedManager) startLocked() {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
 			cancel()
 			m.mu.Lock()
+			m.fireRunLocked(false)
 			m.cancel = nil
 			m.done = nil
 			m.runningCfg = nil

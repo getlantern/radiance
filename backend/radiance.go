@@ -152,6 +152,9 @@ type LocalBackend struct {
 	// reverseFriends keeps the selections of friends reachable by reverse
 	// outbound while those outbounds are down.
 	reverseFriends *reverseFriends
+	// bridgeClient serves this device's inviters over reverse routes while
+	// the widget runs.
+	bridgeClient *helper.BridgeClient
 }
 
 type Options struct {
@@ -272,6 +275,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if !reverseUnsupported() {
 		r.useReverseClient(r.newReverseClient(platformDeviceID))
 	}
+	r.bridgeClient = r.newBridgeClient(platformDeviceID)
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
@@ -414,6 +418,11 @@ func (r *LocalBackend) Start() {
 	if r.helperTickets != nil {
 		unbounded.SetTicketSource(r.helperTickets)
 		unbounded.SetPairedUsage(r.helperUsage)
+	}
+	// The bridges run while the widget does; on iOS that is only in the
+	// foreground.
+	if r.bridgeClient != nil {
+		unbounded.SetRunHook(func(running bool) { r.bridgeClient.SetRunning(r.ctx, running) })
 	}
 	// The widget reports the tunnel's state with its STUN preflights, so
 	// freddie can tell whether STUN failures follow the VPN.
@@ -580,6 +589,9 @@ func (r *LocalBackend) Close() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := unbounded.Stop(stopCtx); err != nil {
 			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		if r.bridgeClient != nil {
+			r.bridgeClient.Stop(stopCtx)
 		}
 		cancel()
 		// vpnClient is always set in production via NewLocalBackend, but

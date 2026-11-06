@@ -2,9 +2,11 @@ package unbounded
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -924,4 +926,47 @@ func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tuning change did not restart donor")
 	}
+}
+
+func TestRunHookFollowsTheWorker(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		heard []bool
+	)
+	hook := func(running bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		heard = append(heard, running)
+	}
+	heardSoFar := func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(heard)
+	}
+
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return &fakeWidget{}, nil
+	})
+	SetRunHook(hook)
+	primeManager(t, nil)
+	manager.start()
+	waitForRunning(t, manager, true, time.Second)
+	manager.start()
+	manager.stop()
+	waitForRunning(t, manager, false, time.Second)
+	manager.stop()
+	assert.Equal(t, []bool{true, false}, heardSoFar())
+
+	// A widget that fails to build stops the hook too.
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return nil, errors.New("no widget")
+	})
+	SetRunHook(hook)
+	primeManager(t, nil)
+	mu.Lock()
+	heard = nil
+	mu.Unlock()
+	manager.start()
+	require.Eventually(t, func() bool { return len(heardSoFar()) == 2 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []bool{true, false}, heardSoFar())
 }
