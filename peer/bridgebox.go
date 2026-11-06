@@ -31,7 +31,8 @@ import (
 const bridgeLogName = "inbound/helper[" + lbC.TypeSamizdatBridge + "]"
 
 // NewBridgeBox builds a stopped sing-box instance, outside the VPN tunnel, for
-// a helper's bridges, from lantern-cloud's bridge config. Its dials bind to
+// a helper's bridges, from lantern-cloud's bridge config. It refuses a config
+// without direct mode's abuse rules (validateAbuseRules). Its dials bind to
 // the physical interface, it logs only warnings and errors, and it calls count
 // with a bridge's tag for the bytes each of its connections relays.
 func NewBridgeBox(ctx context.Context, bridgeConfig string, count func(tag string, n int64)) (helper.BridgeBox, error) {
@@ -55,15 +56,16 @@ func NewBridgeBox(ctx context.Context, bridgeConfig string, count func(tag strin
 }
 
 func bridgeBoxOptions(ctx context.Context, bridgeConfig string) (option.Options, error) {
+	// A bridge exits like a direct-mode peer, under the same abuse rules.
+	if err := validateAbuseRules(bridgeConfig); err != nil {
+		return option.Options{}, fmt.Errorf("bridge config: %w", err)
+	}
 	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(bridgeConfig))
 	if err != nil {
 		return option.Options{}, fmt.Errorf("decode bridge config: %w", err)
 	}
 	// Bridges are the box's only inbounds, and nothing else may listen.
 	opts.Inbounds, opts.Experimental = nil, nil
-	if opts.Route == nil {
-		opts.Route = &option.RouteOptions{}
-	}
 	// A bridge's traffic must leave from the helper's own connection, not
 	// through the VPN tunnel.
 	opts.Route.AutoDetectInterface = true

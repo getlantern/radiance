@@ -16,10 +16,25 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 )
 
+// testBridgeConfig passes validateAbuseRules with inline rule sets, so a box
+// built from it starts without downloading any.
 const testBridgeConfig = `{
 	"inbounds": [{"type": "mixed", "tag": "stray", "listen": "127.0.0.1", "listen_port": 0}],
 	"outbounds": [{"type": "direct", "tag": "direct"}],
-	"route": {"final": "direct"}
+	"route": {
+		"final": "direct",
+		"rule_set": [
+			{"type": "inline", "tag": "geosite-malware", "rules": [{"domain": ["malware.invalid"]}]},
+			{"type": "inline", "tag": "geoip-malware", "rules": [{"ip_cidr": ["192.0.2.1/32"]}]},
+			{"type": "inline", "tag": "geosite-phishing", "rules": [{"domain": ["phishing.invalid"]}]},
+			{"type": "inline", "tag": "geosite-cryptominers", "rules": [{"domain": ["miner.invalid"]}]}
+		],
+		"rules": [
+			{"action": "reject", "rule_set": ["geosite-malware", "geoip-malware", "geosite-phishing", "geosite-cryptominers"]},
+			{"action": "reject", "ip_cidr": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]},
+			{"action": "reject", "port": [25, 465, 587]}
+		]
+	}
 }`
 
 func testBridgeOptions(shortID string) *lbO.SamizdatBridgeInboundOptions {
@@ -41,12 +56,17 @@ func TestBridgeBoxOptionsBypassTheVPNAndListenNowhere(t *testing.T) {
 	assert.True(t, opts.Route.AutoDetectInterface)
 	assert.Equal(t, "direct", opts.Route.Final)
 
-	opts, err = bridgeBoxOptions(box.Context(context.Background()), `{}`)
-	require.NoError(t, err)
-	assert.True(t, opts.Route.AutoDetectInterface)
-
 	_, err = bridgeBoxOptions(box.Context(context.Background()), `{"route":`)
 	assert.Error(t, err)
+}
+
+// A config without direct mode's abuse rules builds no box, so no bridge can
+// reach the helper's LAN or abuse destinations.
+func TestBridgeBoxRefusesAConfigWithoutAbuseRules(t *testing.T) {
+	for _, cfg := range []string{`{}`, `{"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`} {
+		_, err := NewBridgeBox(context.Background(), cfg, func(string, int64) {})
+		assert.Error(t, err)
+	}
 }
 
 func TestBridgeBoxAddsReplacesAndRemovesBridges(t *testing.T) {
