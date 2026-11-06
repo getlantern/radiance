@@ -1167,6 +1167,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
 	CurrentSelectedServer() (string, error)
+	ManualSelection() (string, bool)
 	SelectedPersonalProxy() string
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
@@ -1715,23 +1716,15 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 		return
 	}
 	r.persistSelection(tag)
+	// Reapplied even when the tunnel seems on it: auto mode reports the
+	// server it chose, which can be the one just pinned.
 	if _, friend := vpn.ParsePersonalProxySelection(tag); !friend {
-		r.ensureSelectedLocked(r.startSelection(tag))
+		if err := r.liveTunnel().SelectServer(r.startSelection(tag)); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			slog.Warn("Failed to apply the connected selection", "tag", tag, "error", err)
+		}
 	}
 	// Members may have arrived since the tunnel was built without them.
 	r.restoreSavedSelectionLocked()
-}
-
-// ensureSelectedLocked has the tunnel select tag unless it already has. Auto-
-// select cannot be told apart from the server it chose, so it is selected
-// again. The caller must hold r.selectionMu.
-func (r *LocalBackend) ensureSelectedLocked(tag string) {
-	if current, err := r.liveTunnel().CurrentSelectedServer(); err == nil && current == tag && tag != vpn.AutoSelectTag {
-		return
-	}
-	if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		slog.Warn("Failed to apply the connected selection", "tag", tag, "error", err)
-	}
 }
 
 // settleFriendLocked moves a running tunnel that is not on tag's friend, as

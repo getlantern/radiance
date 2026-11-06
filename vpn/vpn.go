@@ -809,6 +809,24 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
+// ManualSelection returns the manual selector's choice and true while the
+// tunnel is in manual mode, and "" and false in auto mode or with no tunnel.
+func (c *VPNClient) ManualSelection() (string, bool) {
+	if !c.isOpen() {
+		return "", false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.tunnel.clashServer.selectedMode() != ManualSelectTag {
+		return "", false
+	}
+	outbound, loaded := c.tunnel.outboundMgr.Outbound(ManualSelectTag)
+	if !loaded {
+		return "", false
+	}
+	return outbound.(adapter.OutboundGroup).Now(), true
+}
+
 const (
 	rapidPollInterval  = 500 * time.Millisecond
 	rapidPollWindow    = 15 * time.Second

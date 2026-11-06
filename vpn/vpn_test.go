@@ -457,3 +457,24 @@ func TestSelectedPersonalProxy(t *testing.T) {
 	c.tunnel.personalProxy.Store(nil)
 	assert.Empty(t, c.SelectedPersonalProxy())
 }
+
+func TestManualSelectionIsModeAware(t *testing.T) {
+	_, ok := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil).ManualSelection()
+	assert.False(t, ok, "no tunnel")
+
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
+		AutoSelectTag:   stubGroup{now: "srv-a"},
+		ManualSelectTag: stubGroup{now: "srv-a"},
+	}}
+	c := &VPNClient{tunnel: tun}
+	c.status.Store(Connected)
+	_, ok = c.ManualSelection()
+	assert.False(t, ok, "auto mode on srv-a is not a pin of srv-a")
+
+	_, err := tun.clashServer.SetMode(ManualSelectTag)
+	require.NoError(t, err)
+	tag, ok := c.ManualSelection()
+	assert.True(t, ok)
+	assert.Equal(t, "srv-a", tag)
+}

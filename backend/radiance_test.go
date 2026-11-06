@@ -1867,6 +1867,8 @@ type fakeHelperTunnel struct {
 	onConnect func()
 	// connectErr, if set, fails every connect.
 	connectErr error
+	// autoChoice is the server auto mode reports having chosen.
+	autoChoice string
 	// selected is the selection the tunnel last applied.
 	selected string
 	// friend is the friend whose group the tunnel has selected, or "".
@@ -1928,7 +1930,19 @@ func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {
 	if f.live == nil {
 		return "", nil
 	}
+	if f.selected == vpn.AutoSelectTag && f.autoChoice != "" {
+		return f.autoChoice, nil
+	}
 	return f.selected, nil
+}
+
+func (f *fakeHelperTunnel) ManualSelection() (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil || f.selected == "" || f.selected == vpn.AutoSelectTag {
+		return "", false
+	}
+	return f.selected, true
 }
 
 func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }

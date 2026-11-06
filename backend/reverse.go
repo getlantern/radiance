@@ -365,7 +365,7 @@ func (r *LocalBackend) restoreSavedSelectionLocked() {
 		return
 	}
 	if saved.Tag == vpn.PersonalProxiesTag {
-		if current == vpn.PersonalProxiesTag || !r.personalProxiesLive() {
+		if manual, ok := r.liveTunnel().ManualSelection(); (ok && manual == vpn.PersonalProxiesTag) || !r.personalProxiesLive() {
 			return
 		}
 	} else {

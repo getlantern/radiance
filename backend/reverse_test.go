@@ -725,3 +725,24 @@ func TestFailedConnectDoesNotBlockRestores(t *testing.T) {
 	defer r.selectionMu.Unlock()
 	assert.False(t, r.connectPending)
 }
+
+// Auto mode can report the very server a connect pins. The pin is applied
+// anyway, so the tunnel ends in manual mode on it.
+func TestConnectPinsAServerAutoHappensToBeOn(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	tunnel := &fakeHelperTunnel{}
+	tunnel.attach(r)
+	tunnel.onConnect = func() {
+		tunnel.mu.Lock()
+		tunnel.selected, tunnel.autoChoice = vpn.AutoSelectTag, "lantern-1"
+		tunnel.mu.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, "lantern-1"))
+	manual, ok := tunnel.ManualSelection()
+	assert.True(t, ok, "manual mode")
+	assert.Equal(t, "lantern-1", manual)
+	assert.Equal(t, "lantern-1", selectedTag(t))
+}
