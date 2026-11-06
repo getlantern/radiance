@@ -36,13 +36,14 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261104021032-cb53ceff4301
-	github.com/getlantern/common v1.2.1-0.20261103194836-0116c50c68ff
+	github.com/getlantern/broflake v0.0.0-20261105225934-93b5d37705d3
+	github.com/getlantern/common v1.2.1-0.20261106182817-20711ecb945f
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261026211804-dac6d561f52e
-	github.com/getlantern/lantern-box v0.0.200-0.20261105224216-5b44eecba604
+	github.com/getlantern/lantern-box v0.0.210-0.20261106214419-02f7a86406bd
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
+	github.com/getlantern/samizdat v0.0.3-0.20261105225205-38715c2d5ab6
 	github.com/getlantern/semconv v0.0.0-20261103162524-c0c2ac0e0a3e
 	github.com/getlantern/soar v0.2.4
 	github.com/goccy/go-yaml v1.19.0
@@ -136,7 +137,6 @@ require (
 	github.com/getlantern/algeneva v0.0.0-20260731172949-952f13725b7b // indirect
 	github.com/getlantern/keepcurrent v0.0.0-20261009194109-22f33eaeac6e // indirect
 	github.com/getlantern/lantern-water v0.0.0-20260520145825-958775d51395 // indirect
-	github.com/getlantern/samizdat v0.0.3-0.20261031023545-1248df926631 // indirect
 	github.com/getlantern/twiddle v0.0.0-20260914204124-f698a0d67d2f // indirect
 	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.6 // indirect

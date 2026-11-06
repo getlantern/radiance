@@ -308,6 +308,34 @@ func TestWidgetReportsTheVPNStatus(t *testing.T) {
 	assert.Equal(t, "connected", opts(0).VPNStatus())
 }
 
+// The widget reports to the netstated server lantern-cloud names, and to none
+// when it names none.
+func TestWidgetNetstatedFromConfig(t *testing.T) {
+	for name, netstated := range map[string]string{"set": "https://netstated.example/exec", "unset": ""} {
+		t.Run(name, func(t *testing.T) {
+			got := make(chan string, 1)
+			resetManager(t, func(bf *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+				select {
+				case got <- bf.Netstated:
+				default:
+				}
+				return &fakeWidget{}, nil
+			})
+			t.Cleanup(func() { manager.stop() })
+			cfg := testCfg()
+			cfg.Netstated = netstated
+			primeManager(t, cfg)
+			manager.start()
+			select {
+			case v := <-got:
+				assert.Equal(t, netstated, v)
+			case <-time.After(2 * time.Second):
+				t.Fatal("the widget was never built")
+			}
+		})
+	}
+}
+
 func TestWidgetReportsTheAppVolunteerKind(t *testing.T) {
 	count, opts, _ := recordingWidgets(t)
 	primeManager(t, nil)

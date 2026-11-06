@@ -25,6 +25,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/otel"
 
@@ -182,6 +183,10 @@ func (s *Server) CheckHostAccess() error {
 type ServerList struct {
 	Servers      []*Server         `json:"servers"`
 	URLOverrides map[string]string `json:"url_overrides,omitempty"`
+	// AutoSelectOptions, when set, carries a Lantern config's auto-select
+	// options, and the tunnel applies their probe timeouts. Nil, as on
+	// user-added servers, leaves the current probe timeouts in place.
+	AutoSelectOptions *lbO.MutableAutoSelectOutboundOptions `json:"auto_select_options,omitempty"`
 }
 
 func (sl ServerList) Tags() []string {

@@ -1,0 +1,1 @@
+{"version":3,"rules":[{"type":"logical","mode":"and","rules":[{"type":"logical","mode":"and","rules":[{"domain":"disable.rule"},{"domain":"disable.rule","invert":true}]}]}]}

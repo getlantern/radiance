@@ -11,16 +11,50 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// publicIP holds the most recently detected public IP address.
-var publicIP atomic.Value // string
+// publicIP holds the most recently detected public IP address and the
+// network it was looked up on, read and written together.
+var publicIP atomic.Pointer[publicIPSnapshot]
 
-func init() {
-	publicIP.Store("") // ensure publicIP is type string
+type publicIPSnapshot struct {
+	ip      string
+	network uint64
 }
 
+func init() {
+	publicIP.Store(&publicIPSnapshot{})
+}
+
+// publicIPNetwork counts network changes.
+var publicIPNetwork atomic.Uint64
+
 // SetPublicIP stores the detected public IP for inclusion in API requests.
-func SetPublicIP(ip string) {
-	publicIP.Store(ip)
+func SetPublicIP(ip string) { SetPublicIPFrom(ip, PublicIPNetwork()) }
+
+// PublicIPNetwork returns a value that changes with each MarkPublicIPStale.
+func PublicIPNetwork() uint64 { return publicIPNetwork.Load() }
+
+// SetPublicIPFrom is SetPublicIP for an IP looked up while PublicIPNetwork
+// returned network: if the network changed since, the IP is stored stale.
+func SetPublicIPFrom(ip string, network uint64) {
+	publicIP.Store(&publicIPSnapshot{ip: ip, network: network})
+}
+
+// MarkPublicIPStale records that the network changed since the public IP was
+// looked up, until an IP looked up after this call is set.
+func MarkPublicIPStale() { publicIPNetwork.Add(1) }
+
+// PublicIPStale reports whether the network changed since the public IP was
+// looked up.
+func PublicIPStale() bool { return publicIP.Load().network != publicIPNetwork.Load() }
+
+// FreshPublicIP returns the public IP if it was looked up on the current
+// network, or "".
+func FreshPublicIP() string {
+	snap := publicIP.Load()
+	if snap.network != publicIPNetwork.Load() {
+		return ""
+	}
+	return snap.ip
 }
 
 const (
@@ -67,7 +101,7 @@ func NewRequestWithHeaders(ctx context.Context, method, url string, body io.Read
 	if tz := LocalTimeZone(); tz != "" {
 		req.Header.Set(TimeZoneHeader, tz)
 	}
-	if ip := publicIP.Load().(string); ip != "" {
+	if ip := publicIP.Load().ip; ip != "" {
 		req.Header.Set(ClientIPHeader, ip)
 	}
 	return req, nil
