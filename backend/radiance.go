@@ -1069,7 +1069,7 @@ func (r *LocalBackend) personalProxiesLive() bool {
 
 // startSelection is the selection a tunnel built now starts on for tag. A
 // personal proxies group with no member yet starts on auto-select, which is
-// not saved, until restoreReverseSelection selects the group.
+// not saved, until restoreSavedSelectionLocked selects the group.
 func (r *LocalBackend) startSelection(tag string) string {
 	if tag == vpn.PersonalProxiesTag && !r.personalProxiesLive() {
 		return vpn.AutoSelectTag
@@ -1190,6 +1190,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	defer func() {
 		r.clearSelectedIfMissingLocked()
 		err = errors.Join(err, r.reconcileLiveHelpersLocked())
+		r.restoreSavedSelectionLocked()
 	}()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
@@ -1651,13 +1652,15 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 		return
 	}
 	r.persistSelection(tag)
+	// Members may have arrived since the tunnel was built without them.
+	r.restoreSavedSelectionLocked()
 }
 
 // settleFriendLocked moves a running tunnel that is not on tag's friend, as
 // one built while the friend had no member is not, onto it. It returns false
 // only if the tunnel refused and tag's fallback was committed instead. A
 // reverse friend whose outbound is not up yet is not committed away from:
-// the tunnel runs on the fallback until restoreReverseSelection.
+// the tunnel runs on the fallback until restoreSavedSelectionLocked.
 // The caller must hold r.selectionMu.
 func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)

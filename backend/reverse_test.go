@@ -20,6 +20,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
 )
 
@@ -513,7 +514,7 @@ func TestReverseFriendsPruneDoesNotDropALaterRecord(t *testing.T) {
 	recorded := make(chan struct{})
 	f.prune(func() []string {
 		go func() {
-			f.record([]string{lbA.ReverseHelperTag(ppFriendB)})
+			f.record([]string{lbA.ReverseHelperTag(ppFriendB)}, func() []string { return []string{"pairing-a", "pairing-b"} })
 			close(recorded)
 		}()
 		select {
@@ -552,4 +553,41 @@ func TestReverseGateSeedDoesNotOverwriteANewerStatus(t *testing.T) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	assert.False(t, g.vpnUp)
+}
+
+// A pairing revoked after the reverse client took its tags, and pruned before
+// they were recorded, is not recorded back.
+func TestReverseFriendsRecordSkipsARevokedPairing(t *testing.T) {
+	f := &reverseFriends{byPairing: map[string]string{}}
+	f.setTags(map[string]string{"pairing-b": ppFriendB})
+	none := func() []string { return nil }
+	f.prune(none)
+	f.record([]string{lbA.ReverseHelperTag(ppFriendB)}, none)
+	assert.False(t, f.has(ppFriendB))
+
+	f.record([]string{lbA.ReverseHelperTag(ppFriendB)}, func() []string { return []string{"pairing-b"} })
+	assert.True(t, f.has(ppFriendB))
+}
+
+// A saved group that started empty is selected once a config brings it a
+// direct helper, while its reverse members are still down.
+func TestReverseSavedGroupIsSelectedWhenAConfigAddsAHelper(t *testing.T) {
+	dataDir := t.TempDir()
+	r, fake := newReverseFriendBackend(t, dataDir)
+	r.persistSelection(vpn.PersonalProxiesTag)
+	emitVPNStatus(vpn.Disconnected)
+	require.Eventually(t, notRunning(fake), time.Second, 5*time.Millisecond)
+	require.NoError(t, reverseBox{r: r}.SetReversePortal(nil, ""))
+	r.stopReverse()
+
+	tunnel := &fakeHelperTunnel{}
+	tunnel.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, vpn.PersonalProxiesTag))
+	require.Equal(t, vpn.AutoSelectTag, tunnel.current())
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(ppFriendA, 1080)}}, true))
+	assert.Equal(t, vpn.PersonalProxiesTag, tunnel.current())
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
 }

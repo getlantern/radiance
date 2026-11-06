@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
-	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	"github.com/getlantern/radiance/common"
@@ -84,11 +82,14 @@ func (r *LocalBackend) pairingKeysChanged() {
 	}
 }
 
+func (r *LocalBackend) inviterPairingIDs() []string {
+	return r.helperPairingKeys.IDs(string(helperticket.RoleInviter))
+}
+
 // pruneReverseFriends forgets the reverse friends whose inviter pairing ended,
 // and with them a selection that only they kept.
 func (r *LocalBackend) pruneReverseFriends() {
-	inviters := func() []string { return r.helperPairingKeys.IDs(string(helperticket.RoleInviter)) }
-	if !r.reverseFriends.prune(inviters) {
+	if !r.reverseFriends.prune(r.inviterPairingIDs) {
 		return
 	}
 	r.selectionMu.Lock()
@@ -329,21 +330,27 @@ func (b reverseBox) SetReverseOutbounds(tags []string) error {
 		return err
 	}
 	if len(tags) > 0 {
-		b.r.reverseFriends.record(tags)
-		b.r.restoreReverseSelection(tags)
+		b.r.reverseFriends.record(tags, b.r.inviterPairingIDs)
+		b.r.restoreSavedSelection()
 	}
 	return nil
 }
 
 func (b reverseBox) RebindReversePortal() error { return b.r.vpnClient.RebindReversePortal() }
 
-// restoreReverseSelection has the tunnel select the saved friend once one of
-// reverseTags is that friend's, or the saved personal proxies group: a tunnel
-// that came up without the friend's outbound, or lost the group's last
-// members, fell back from it.
-func (r *LocalBackend) restoreReverseSelection(reverseTags []string) {
+// restoreSavedSelection is restoreSavedSelectionLocked for a caller not
+// holding r.selectionMu.
+func (r *LocalBackend) restoreSavedSelection() {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
+	r.restoreSavedSelectionLocked()
+}
+
+// restoreSavedSelectionLocked has the tunnel select the saved personal
+// proxies group, or saved friend, once it has a member: a tunnel built while
+// it had none, or that lost its last member, fell back from it. The caller
+// must hold r.selectionMu.
+func (r *LocalBackend) restoreSavedSelectionLocked() {
 	if r.selectionClosed || settings.GetBool(settings.AutoConnectKey) {
 		return
 	}
@@ -351,15 +358,21 @@ func (r *LocalBackend) restoreReverseSelection(reverseTags []string) {
 	if err := settings.GetStruct(settings.SelectedServerKey, &saved); err != nil {
 		return
 	}
-	if saved.Tag != vpn.PersonalProxiesTag {
+	if saved.Tag == vpn.PersonalProxiesTag {
+		if !r.personalProxiesLive() {
+			return
+		}
+	} else {
 		friend, ok := vpn.ParsePersonalProxySelection(saved.Tag)
-		if !ok || !slices.Contains(reverseTags, lbA.ReverseHelperTag(friend)) ||
-			r.liveTunnel().SelectedPersonalProxy() == friend {
+		if !ok || r.liveTunnel().SelectedPersonalProxy() == friend {
+			return
+		}
+		if reach := r.friendReach(friend); !reach.direct && !reach.reverse {
 			return
 		}
 	}
 	if err := r.liveTunnel().SelectServer(saved.Tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		// The error can name the friend.
-		slog.Warn("Failed to restore the saved selection once its reverse outbound returned")
+		slog.Warn("Failed to restore the saved selection once it had a member")
 	}
 }

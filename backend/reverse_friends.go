@@ -78,16 +78,18 @@ func (f *reverseFriends) setTags(tags map[string]string) {
 }
 
 // record adds the friend of each reverse tag whose pairing the client's tags
-// name.
-func (f *reverseFriends) record(reverseTags []string) {
+// name and pairingIDs() still lists. pairingIDs is read under the lock prune
+// takes, so a pairing revoked after its tags were taken is not recorded again.
+func (f *reverseFriends) record(reverseTags []string, pairingIDs func() []string) {
 	if f == nil {
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	ids := pairingIDs()
 	changed := false
 	for id, friend := range f.tags {
-		if !slices.Contains(reverseTags, lbA.ReverseHelperTag(friend)) {
+		if !slices.Contains(reverseTags, lbA.ReverseHelperTag(friend)) || !slices.Contains(ids, id) {
 			continue
 		}
 		h := pairingHash(id)
