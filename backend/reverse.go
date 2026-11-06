@@ -52,6 +52,7 @@ func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
 		Box:             reverseBox{r: r},
 		OnTags:          r.reverseFriends.setTags,
 		PeerShareActive: peerShareOn,
+		LocalIPControl:  r.vpnClient.PhysicalInterfaceControl,
 	})
 }
 

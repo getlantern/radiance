@@ -18,9 +18,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing/common/control"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -665,6 +667,61 @@ func TestReverseMapFailureRetriesNextTick(t *testing.T) {
 	e.fwd.mapErr = nil
 	e.cycle(t)
 	assert.Contains(t, e.log.take(), "register:1")
+}
+
+// controlForwarder is a revForwarder that takes a local IP control, as
+// *portforward.Forwarder does, and fails MapPort with ErrNoLocalIP while
+// noLocalIP is set.
+type controlForwarder struct {
+	*revForwarder
+	control   control.Func
+	noLocalIP bool
+}
+
+func (f *controlForwarder) SetLocalIPControl(fn control.Func) { f.control = fn }
+
+func (f *controlForwarder) MapPort(ctx context.Context, protocol string, internalPort uint16, desc string) (*portforward.Mapping, error) {
+	if f.noLocalIP {
+		f.log.add("map-failed")
+		return nil, fmt.Errorf("determine local ip: %w", portforward.ErrNoLocalIP)
+	}
+	return f.revForwarder.MapPort(ctx, protocol, internalPort, desc)
+}
+
+func TestReverseMapsThroughTheTunnelBypass(t *testing.T) {
+	e := newRevEnv(t)
+	fwd := &controlForwarder{revForwarder: e.fwd}
+	var bound atomic.Bool
+	tunnelUp := true
+	e.c.cfg.NewForwarder = func(context.Context) (portForwarder, error) { return fwd, nil }
+	e.c.cfg.LocalIPControl = func() control.Func {
+		if !tunnelUp {
+			return nil
+		}
+		return func(string, string, syscall.RawConn) error {
+			bound.Store(true)
+			return nil
+		}
+	}
+	e.keys.set("p1")
+
+	fwd.noLocalIP = true
+	assert.Equal(t, defaultReverseRegisterInterval, e.cycle(t))
+	assert.Equal(t, []string{"register:0", "map-failed", "unmap"}, e.log.take())
+	assert.Nil(t, e.box.lastPortal(), "no portal without a mapping")
+	require.NotNil(t, fwd.control)
+	require.NoError(t, fwd.control("udp", "", nil))
+	assert.True(t, bound.Load())
+
+	fwd.noLocalIP = false
+	e.cycle(t)
+	assert.Contains(t, e.log.take(), "register:1")
+
+	tunnelUp = false
+	fwd.control = nil
+	e.c.NetworkChanged()
+	e.cycle(t)
+	assert.Nil(t, fwd.control, "no control is set with no tunnel")
 }
 
 func TestReverseBoxErrorsRetryNextTick(t *testing.T) {

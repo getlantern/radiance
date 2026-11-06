@@ -22,6 +22,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -600,6 +601,22 @@ func (c *VPNClient) RebindReversePortal() error {
 		return nil
 	}
 	return c.tunnel.rebindReversePortal()
+}
+
+// PhysicalInterfaceControl returns a socket control that binds a dial to the
+// running tunnel's underlying default interface, so the dial bypasses the
+// tunnel. It is nil with no tunnel running or no interface monitor to bind by.
+func (c *VPNClient) PhysicalInterfaceControl() control.Func {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	nm := service.FromContext[adapter.NetworkManager](c.tunnel.ctx)
+	if nm == nil {
+		return nil
+	}
+	return nm.AutoDetectInterfaceFunc()
 }
 
 // restoreReverseLocked gives the tunnel the kept reverse direct state. The

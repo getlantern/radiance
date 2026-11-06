@@ -282,3 +282,15 @@ func TestLogsNeverNameReverseTags(t *testing.T) {
 	assert.Equal(t, []string{"lantern-1", testHelper1, "reverse"}, loggableTags([]string{"lantern-1", testHelper1, rev}))
 	assert.NotContains(t, fmt.Sprint(loggableError(rev, errors.New("outbound/x["+rev+"]: failed"))), rev)
 }
+
+func TestPhysicalInterfaceControlNeedsATunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.Nil(t, c.PhysicalInterfaceControl())
+
+	tun := startPersonalProxiesTestTunnel(t)
+	c.mu.Lock()
+	c.tunnel = tun
+	c.mu.Unlock()
+	t.Cleanup(func() { _ = tun.close() })
+	assert.NotPanics(t, func() { _ = c.PhysicalInterfaceControl() })
+}

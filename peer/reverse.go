@@ -16,6 +16,7 @@ import (
 	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
+	"github.com/sagernet/sing/common/control"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/helper"
@@ -66,7 +67,10 @@ type ReverseConfig struct {
 	OnTags func(tags map[string]string)
 	// PeerShareActive, if set, reports whether peer sharing is on. While it
 	// is, the client maps a port of its own rather than the manual port.
-	PeerShareActive  func() bool
+	PeerShareActive func() bool
+	// LocalIPControl, if set, returns the socket control that keeps a UPnP
+	// mapping's LAN address lookup off the VPN tunnel, or nil with no tunnel.
+	LocalIPControl   func() control.Func
 	Now              func() time.Time
 	RegisterInterval time.Duration
 	RotateInterval   time.Duration
@@ -418,6 +422,10 @@ func (c *ReverseClient) untilNextCycle(now time.Time) time.Duration {
 	return c.cfg.RegisterInterval
 }
 
+type localIPControlSetter interface {
+	SetLocalIPControl(control.Func)
+}
+
 func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	s := &c.st
 	fwd, err := c.cfg.NewForwarder(ctx)
@@ -427,6 +435,11 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
 		return false
 	}
+	if lf, ok := fwd.(localIPControlSetter); ok && c.cfg.LocalIPControl != nil {
+		if fn := c.cfg.LocalIPControl(); fn != nil {
+			lf.SetLocalIPControl(fn)
+		}
+	}
 	port := s.lastPort
 	if port == 0 {
 		port = pickInternalPort()
@@ -434,7 +447,8 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	mapping, err := fwd.MapPort(ctx, portforward.TCP, port, reversePortDescription)
 	if err != nil {
 		slog.Info("reverse: could not map a port",
-			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
+			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding),
+			"no_local_ip", errors.Is(err, portforward.ErrNoLocalIP))
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), peerCleanupTimeout)
 		_ = fwd.UnmapPort(cleanupCtx)
 		cancel()
