@@ -318,24 +318,39 @@ func (g *reverseGate) stop() {
 
 // reverseBox is the VPN client as the reverse client's box. It records the
 // friends of each reverse outbound set it publishes in r.reverseFriends.
+//
+// A revoked pairing's friend is pruned at once, but its outbound goes only
+// when the reverse client next cycles, and until then it keeps a selection of
+// the friend standing. So each withdrawal checks the selection again.
 type reverseBox struct{ r *LocalBackend }
 
 func (b reverseBox) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
-	return b.r.vpnClient.SetReversePortal(cfg, masqueradeDomain)
+	err := b.r.vpnClient.SetReversePortal(cfg, masqueradeDomain)
+	if cfg == nil {
+		// Removing the portal removes the outbounds, even on an error.
+		b.r.selectionMu.Lock()
+		defer b.r.selectionMu.Unlock()
+		if !b.r.selectionClosed {
+			b.r.clearSelectedIfMissingLocked()
+		}
+	}
+	return err
 }
 
 func (b reverseBox) SetReverseOutbounds(tags []string) error {
 	if err := b.r.vpnClient.SetReverseOutbounds(tags); err != nil {
 		return err
 	}
-	if len(tags) > 0 {
-		b.r.selectionMu.Lock()
-		defer b.r.selectionMu.Unlock()
-		if !b.r.selectionClosed {
-			b.r.reverseFriends.record(tags, b.r.inviterPairingIDs)
-			b.r.restoreSavedSelectionLocked()
-		}
+	b.r.selectionMu.Lock()
+	defer b.r.selectionMu.Unlock()
+	if b.r.selectionClosed {
+		return nil
 	}
+	if len(tags) > 0 {
+		b.r.reverseFriends.record(tags, b.r.inviterPairingIDs)
+		b.r.restoreSavedSelectionLocked()
+	}
+	b.r.clearSelectedIfMissingLocked()
 	return nil
 }
 

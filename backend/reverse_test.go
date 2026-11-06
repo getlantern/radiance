@@ -279,6 +279,33 @@ func TestReverseClearsASelectionWhenItsPairingEnds(t *testing.T) {
 	assert.False(t, r.reverseFriends.has(ppFriendB))
 }
 
+// A pairing revoked while its friend's reverse outbound is up is pruned at
+// once, but the selection stands on the outbound until the reverse client
+// withdraws it, which must then clear the selection.
+func TestReverseClearsASelectionWhenItsPairingEndsWhileConnected(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		selected string
+		withdraw func(reverseBox) error
+	}{
+		{"friend, other pairings left", vpn.PersonalProxySelection(ppFriendB), func(b reverseBox) error { return b.SetReverseOutbounds(nil) }},
+		{"friend, last pairing", vpn.PersonalProxySelection(ppFriendB), func(b reverseBox) error { return b.SetReversePortal(nil, "") }},
+		{"group, last pairing", vpn.PersonalProxiesTag, func(b reverseBox) error { return b.SetReversePortal(nil, "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := newReverseFriendBackend(t, t.TempDir())
+			r.persistSelection(tc.selected)
+			inviterKey(t, r, "pairing-other")
+			require.Eventually(t, func() bool { return !r.reverseFriends.has(ppFriendB) }, time.Second, 5*time.Millisecond)
+			r.clearSelectedIfMissing()
+			require.Equal(t, tc.selected, selectedTag(t), "the outbound is still up")
+
+			require.NoError(t, tc.withdraw(reverseBox{r: r}))
+			assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
+		})
+	}
+}
+
 // lantern-cloud's kill switch, and an address loss, take the portal and
 // outbounds down while the pairing goes on.
 func TestReverseKeepsASelectionThroughAWithdrawal(t *testing.T) {
