@@ -409,8 +409,8 @@ func TestBridgeBacksOffWhileBusyAndIdlesWhileDisabled(t *testing.T) {
 	assert.Equal(t, 2*testPoll, h.cycle(), "a success resets the backoff")
 }
 
-// Restarting the client, as the widget does, does not cut short the wait
-// lantern-cloud asked for.
+// Restarting the client, as the widget does, does not cut short its
+// hold-off on lantern-cloud.
 func TestBridgeRestartKeepsTheHoldOff(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

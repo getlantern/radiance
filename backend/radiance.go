@@ -1037,11 +1037,14 @@ func (r *LocalBackend) AllServers() []*servers.Server {
 	return r.srvManager.AllServers()
 }
 
-// GetServerByTag returns the server tag names. A live reverse outbound, which
-// the tunnel can report as its auto or current selection but the manager
-// never holds, resolves to its friend's helper server, or to the friend's
-// personal proxy when the manager has no helper server for it.
+// GetServerByTag returns the server with the given tag, an exact match first.
+// Otherwise a live reverse outbound, which the manager never holds, resolves
+// to its friend's helper server, or to the friend's personal proxy when the
+// manager has none; one that is not live resolves to nothing.
 func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
+	if srv, found := r.serverByTag(tag); found {
+		return srv, true
+	}
 	if friend, ok := lbA.HelperTagOfReverse(tag); ok {
 		if !slices.Contains(r.reverseOutbounds(), tag) {
 			return nil, false

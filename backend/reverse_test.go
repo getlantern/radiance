@@ -12,6 +12,7 @@ import (
 
 	C "github.com/getlantern/common"
 	lbA "github.com/getlantern/lantern-box/adapter"
+	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -821,4 +822,23 @@ func TestReverseOutboundResolvesAsTheSelectedServer(t *testing.T) {
 	require.NoError(t, r.vpnClient.SetReverseOutbounds(nil))
 	_, found := autoSelected()
 	assert.False(t, found, "a reverse outbound that is not live resolves to nothing")
+}
+
+// A managed server whose tag looks like a reverse outbound's is found by its
+// own tag, live alias or not.
+func TestGetServerByTagPrefersAnExactMatch(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	rev := lbA.ReverseHelperTag(ppFriendA)
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{
+		helperWithPort(ppFriendA, 1080),
+		{Tag: rev, Type: "socks", Options: option.Outbound{Tag: rev, Type: "socks", Options: &option.SOCKSOutboundOptions{
+			ServerOptions: option.ServerOptions{Server: "203.0.113.8", ServerPort: 1081},
+		}}},
+	}}, false))
+	for _, live := range [][]string{nil, {rev}} {
+		require.NoError(t, r.vpnClient.SetReverseOutbounds(live))
+		srv, found := r.GetServerByTag(rev)
+		require.True(t, found)
+		assert.Equal(t, rev, srv.Tag)
+	}
 }
