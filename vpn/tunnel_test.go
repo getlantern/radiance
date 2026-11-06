@@ -545,4 +545,10 @@ func TestUpdateOutboundsWithAutoSelectOptions(t *testing.T) {
 		Servers:           []*servers.Server{directServer("lantern-1")},
 		AutoSelectOptions: DecodeAutoSelectOptions([]byte(`{"probe_timeouts_ms": {"hysteria2x": 3000}}`)),
 	}))
+	members := selectorMembers(t, tun, AutoSelectTag)
+
+	// A config with no servers still reaches the setter, and leaves the
+	// members alone.
+	require.NoError(t, tun.updateOutbounds(servers.ServerList{AutoSelectOptions: DecodeAutoSelectOptions(nil)}))
+	assert.Equal(t, members, selectorMembers(t, tun, AutoSelectTag))
 }
