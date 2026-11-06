@@ -479,6 +479,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 			initial = AutoSelectTag
 		}
 	}
+	// The last helper can go, a reverse one asynchronously, between the
+	// caller picking the group and these options being built. The tunnel
+	// then starts on auto-select, as with no member at all.
+	if initial == PersonalProxiesTag && len(helpers) == 0 {
+		initial = AutoSelectTag
+	}
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
 	} else {

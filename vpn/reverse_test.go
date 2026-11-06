@@ -254,6 +254,25 @@ func TestReversePortalListeningAfterAFailedRestore(t *testing.T) {
 	assert.False(t, c.ReversePortalListening())
 }
 
+// A withdrawal of the last reverse outbound after the caller picked the
+// personal proxies group, and before the tunnel's options are built, starts
+// the tunnel on auto-select instead of failing.
+func TestBuildOptionsAfterTheLastReverseOutboundGoes(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	require.NoError(t, c.SetReverseOutbounds([]string{lbA.ReverseHelperTag(friendA)}))
+	initial := PersonalProxiesTag // what the caller saw while the outbound was live
+	require.NoError(t, c.SetReverseOutbounds(nil))
+
+	options, _ := testBoxOptions(t)
+	c.mu.Lock()
+	boxOptions := c.withReverse(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: initial})
+	c.mu.Unlock()
+	opts, err := buildOptions(boxOptions)
+	require.NoError(t, err)
+	assert.Equal(t, AutoSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+	assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag))
+}
+
 // The kept config owns its buffers, so a caller reusing them after the call
 // cannot change what the next tunnel restores.
 func TestSetReversePortalKeepsItsOwnCopy(t *testing.T) {
