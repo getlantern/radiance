@@ -90,6 +90,23 @@ func TestDetectPublicIPDiscardsResultIfTunnelCameUp(t *testing.T) {
 	assert.Empty(t, recordedPublicIP(t), "a result that may be the VPN exit must not be recorded")
 }
 
+// A lookup that began before a network change leaves the IP stale, so
+// requests leave it out.
+func TestDetectPublicIPFromAnOldNetworkStaysStale(t *testing.T) {
+	common.SetPublicIP("")
+	t.Cleanup(func() { common.SetPublicIP("") })
+	lookup := func(context.Context) (*publicip.DetectResult, error) {
+		common.MarkPublicIPStale()
+		return &publicip.DetectResult{IP: net.ParseIP("198.51.100.9")}, nil
+	}
+	runDetect(t, 5*time.Second, func() bool { return true }, lookup)
+	assert.True(t, common.PublicIPStale())
+
+	var calls atomic.Int32
+	runDetect(t, 5*time.Second, func() bool { return true }, fixedLookup("203.0.113.7", &calls))
+	assert.False(t, common.PublicIPStale())
+}
+
 func TestDetectPublicIPRetriesAfterFailure(t *testing.T) {
 	common.SetPublicIP("")
 	var calls atomic.Int32

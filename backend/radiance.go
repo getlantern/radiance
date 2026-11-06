@@ -2580,6 +2580,7 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 		if !waitForDirect(ctx, direct) {
 			return nil
 		}
+		network := common.PublicIPNetwork()
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := lookup(attemptCtx)
 		cancel()
@@ -2590,7 +2591,7 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 			slog.Debug("Discarded public IP looked up while the VPN came up", "attempt", attempt)
 			continue
 		default:
-			common.SetPublicIP(result.IP.String())
+			common.SetPublicIPFrom(result.IP.String(), network)
 			// IP intentionally omitted — Lantern users in censored regions
 			// can't safely have their public IP in routinely-collected
 			// client logs. Confidence + sources are enough for operator

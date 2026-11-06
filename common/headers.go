@@ -18,22 +18,30 @@ func init() {
 	publicIP.Store("") // ensure publicIP is type string
 }
 
-// publicIPStale is set when the network changed after publicIP was detected.
-var publicIPStale atomic.Bool
+// publicIPNetwork counts network changes, and publicIPFrom is the count the
+// stored publicIP was looked up at.
+var publicIPNetwork, publicIPFrom atomic.Uint64
 
 // SetPublicIP stores the detected public IP for inclusion in API requests.
-func SetPublicIP(ip string) {
+func SetPublicIP(ip string) { SetPublicIPFrom(ip, PublicIPNetwork()) }
+
+// PublicIPNetwork returns a value that changes with each MarkPublicIPStale.
+func PublicIPNetwork() uint64 { return publicIPNetwork.Load() }
+
+// SetPublicIPFrom is SetPublicIP for an IP looked up while PublicIPNetwork
+// returned network: if the network changed since, the IP is stored stale.
+func SetPublicIPFrom(ip string, network uint64) {
 	publicIP.Store(ip)
-	publicIPStale.Store(false)
+	publicIPFrom.Store(network)
 }
 
 // MarkPublicIPStale records that the network changed since the public IP was
-// last set, until the next SetPublicIP.
-func MarkPublicIPStale() { publicIPStale.Store(true) }
+// looked up, until an IP looked up after this call is set.
+func MarkPublicIPStale() { publicIPNetwork.Add(1) }
 
 // PublicIPStale reports whether the network changed since the public IP was
-// last set.
-func PublicIPStale() bool { return publicIPStale.Load() }
+// looked up.
+func PublicIPStale() bool { return publicIPFrom.Load() != publicIPNetwork.Load() }
 
 const (
 	// Common Lantern headers. All are request headers sent to the proxy server
