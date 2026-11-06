@@ -126,7 +126,11 @@ type LocalBackend struct {
 
 	stopSelectionHistoryListener context.CancelFunc
 	selectionHistoryMu           sync.Mutex
-	selectionReporter            *selectionReporter
+	// stopSelectionRestore ends the periodic restoreSavedSelection of the
+	// connected tunnel. Guarded by selectionRestoreMu.
+	stopSelectionRestore context.CancelFunc
+	selectionRestoreMu   sync.Mutex
+	selectionReporter    *selectionReporter
 
 	exhaustionGate exhaustionGate
 
@@ -1101,7 +1105,9 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	if rmErr := r.liveTunnel().RemoveOutbounds(gone); rmErr != nil && !errors.Is(rmErr, vpn.ErrTunnelNotConnected) {
 		err = errors.Join(err, fmt.Errorf("failed to remove outbounds: %w", rmErr))
 	}
-	return errors.Join(err, r.reconcileLiveHelpersLocked())
+	err = errors.Join(err, r.reconcileLiveHelpersLocked())
+	r.restoreSavedSelectionLocked()
+	return err
 }
 
 // AddServers adds user-supplied servers, clearing IsLantern on each.
@@ -1156,6 +1162,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // tunnel through.
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
+	CurrentSelectedServer() (string, error)
 	SelectedPersonalProxy() string
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
@@ -1285,21 +1292,63 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 }
 
 // startHelperReconcileListener reconciles each tunnel that comes up with the
-// helpers the server manager holds. A connect or restart builds its tunnel
-// from options captured before it took the VPN lock, so a config update in
-// between, which found no tunnel or the previous one, may have ended, added
-// or rotated a helper the new tunnel does not reflect.
+// helpers the server manager holds, and restores the saved selection on it.
+// A connect or restart builds its tunnel from options captured before it took
+// the VPN lock, so a config update in between, which found no tunnel or the
+// previous one, may have ended, added or rotated a helper the new tunnel does
+// not reflect. While connected, the restore also runs every
+// selectionRestoreInterval.
 func (r *LocalBackend) startHelperReconcileListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
-		if evt.Status != vpn.Connected {
+		switch evt.Status {
+		case vpn.Connected:
+		case vpn.Disconnected, vpn.ErrorStatus:
+			r.setSelectionRestoreTicker(false)
+			return
+		default:
 			return
 		}
 		r.selectionMu.Lock()
-		defer r.selectionMu.Unlock()
 		if err := r.reconcileLiveHelpersLocked(); err != nil {
 			slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
 		}
+		r.restoreSavedSelectionLocked()
+		r.selectionMu.Unlock()
+		r.setSelectionRestoreTicker(true)
 	})
+}
+
+// selectionRestoreInterval is how often a connected tunnel's saved selection
+// is restored, catching a member that arrived by a path that did not restore
+// it. A var so tests can shorten it.
+var selectionRestoreInterval = 30 * time.Second
+
+// setSelectionRestoreTicker starts, or restarts, or stops the periodic
+// restoreSavedSelection. It ends with r.ctx either way.
+func (r *LocalBackend) setSelectionRestoreTicker(on bool) {
+	r.selectionRestoreMu.Lock()
+	defer r.selectionRestoreMu.Unlock()
+	if r.stopSelectionRestore != nil {
+		r.stopSelectionRestore()
+		r.stopSelectionRestore = nil
+	}
+	if !on {
+		return
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	r.stopSelectionRestore = cancel
+	go func() {
+		ticker := time.NewTicker(selectionRestoreInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				r.restoreSavedSelection()
+			}
+		}
+	}()
 }
 
 // reconcileLiveHelpersLocked makes the tunnel's helpers the ones the server

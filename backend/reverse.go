@@ -358,16 +358,19 @@ func (r *LocalBackend) restoreSavedSelectionLocked() {
 	if err := settings.GetStruct(settings.SelectedServerKey, &saved); err != nil {
 		return
 	}
+	// With no tunnel up there is nothing to restore, and the next connect
+	// starts on the saved selection.
+	current, err := r.liveTunnel().CurrentSelectedServer()
+	if err != nil || current == "" {
+		return
+	}
 	if saved.Tag == vpn.PersonalProxiesTag {
-		if !r.personalProxiesLive() {
+		if current == vpn.PersonalProxiesTag || !r.personalProxiesLive() {
 			return
 		}
 	} else {
 		friend, ok := vpn.ParsePersonalProxySelection(saved.Tag)
-		if !ok || r.liveTunnel().SelectedPersonalProxy() == friend {
-			return
-		}
-		if reach := r.friendReach(friend); !reach.direct && !reach.reverse {
+		if !ok || r.liveTunnel().SelectedPersonalProxy() == friend || !r.friendReach(friend).routable() {
 			return
 		}
 	}

@@ -1910,6 +1910,15 @@ func (f *fakeHelperTunnel) SelectedPersonalProxy() string {
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
 
+func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil {
+		return "", nil
+	}
+	return f.selected, nil
+}
+
 func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }
 
 func fingerprint(srv *servers.Server) string {

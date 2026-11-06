@@ -31,8 +31,13 @@ type friendReach struct {
 // live reports whether a selection of the friend stands. Before the ticket
 // source is first answered a consumer counts, so a selection persisted across
 // a restart is not dropped before its tickets can arrive.
-func (f friendReach) live() bool {
-	return f.direct || f.reverse || f.reverseKnown || (f.consumer && (f.tickets || !f.answered))
+func (f friendReach) live() bool { return f.routable() || f.reverseKnown }
+
+// routable reports whether the tunnel's group for the friend has a member:
+// the friend's direct or reverse outbound, or a rooms consumer the tunnel
+// admits, by the rule of vpn's roomsReachable.
+func (f friendReach) routable() bool {
+	return f.direct || f.reverse || (f.consumer && (f.tickets || !f.answered))
 }
 
 // selectable reports whether the friend may be newly selected.
@@ -172,4 +177,5 @@ func (r *LocalBackend) reconcilePersonalProxy() {
 	if err := r.reconcileLiveHelpersLocked(); err != nil {
 		slog.Warn("Failed to reconcile helpers after the inviter tickets changed", "error", err)
 	}
+	r.restoreSavedSelectionLocked()
 }

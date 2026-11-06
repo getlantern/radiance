@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -590,4 +591,89 @@ func TestReverseSavedGroupIsSelectedWhenAConfigAddsAHelper(t *testing.T) {
 	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(ppFriendA, 1080)}}, true))
 	assert.Equal(t, vpn.PersonalProxiesTag, tunnel.current())
 	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
+}
+
+// newSavedFriendTunnel is a backend with ppFriendB's selection saved and kept
+// as a reverse friend, a rooms consumer, no tickets for it, and a connected
+// tunnel on auto-select.
+func newSavedFriendTunnel(t *testing.T) (*LocalBackend, *fakeHelperTunnel, *fakeTickets) {
+	t.Helper()
+	r := newPersonalProxiesBackend(t)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(ppPairingB): ppFriendB}}
+	tickets := withTickets(t, r, nil)
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	r.persistSelection(vpn.PersonalProxySelection(ppFriendB))
+	tunnel := &fakeHelperTunnel{live: map[string]string{}, selected: vpn.AutoSelectTag}
+	tunnel.attach(r)
+	return r, tunnel, tickets
+}
+
+// A saved friend reached only by rooms is restored once its tickets arrive.
+func TestSavedFriendIsRestoredWhenItsRoomsTicketsArrive(t *testing.T) {
+	r, tunnel, tickets := newSavedFriendTunnel(t)
+	r.restoreSavedSelection()
+	require.Equal(t, vpn.AutoSelectTag, tunnel.current(), "no member without a ticket")
+
+	tickets.reissue(t, r, map[string]string{ppFriendB: ppPairingB})
+	assert.Equal(t, vpn.PersonalProxySelection(ppFriendB), tunnel.current())
+}
+
+// A helper added while a connect waited reaches the new tunnel only through
+// the Connected reconcile, which then restores the saved group.
+func TestConnectedReconcileRestoresTheSavedGroup(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	r.startHelperReconcileListener()
+	r.persistSelection(vpn.PersonalProxiesTag)
+	tunnel := &fakeHelperTunnel{}
+	tunnel.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, vpn.PersonalProxiesTag))
+	require.Equal(t, vpn.AutoSelectTag, tunnel.current())
+
+	require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA), false))
+	emitVPNStatus(vpn.Connected)
+	require.Eventually(t, func() bool { return tunnel.current() == vpn.PersonalProxiesTag }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
+}
+
+func selectCalls(f *fakeHelperTunnel) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "select:") {
+			n++
+		}
+	}
+	return n
+}
+
+// While connected the restore runs periodically, so a member that arrived by
+// a path that restored nothing is still taken up; once the tunnel matches the
+// saved selection it selects nothing more.
+func TestSelectionRestoreTickerCatchesAMissedMember(t *testing.T) {
+	prev := selectionRestoreInterval
+	selectionRestoreInterval = 10 * time.Millisecond
+	t.Cleanup(func() { selectionRestoreInterval = prev })
+	r := newPersonalProxiesBackend(t)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	r.persistSelection(vpn.PersonalProxiesTag)
+	tunnel := &fakeHelperTunnel{live: map[string]string{}, selected: vpn.AutoSelectTag}
+	tunnel.attach(r)
+	r.setSelectionRestoreTicker(true)
+	t.Cleanup(func() { r.setSelectionRestoreTicker(false) })
+
+	assert.Never(t, func() bool { return selectCalls(tunnel) > 0 }, 50*time.Millisecond, 5*time.Millisecond, "no member yet")
+	require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA), false))
+	require.Eventually(t, func() bool { return tunnel.current() == vpn.PersonalProxiesTag }, time.Second, 5*time.Millisecond)
+	n := selectCalls(tunnel)
+	assert.Never(t, func() bool { return selectCalls(tunnel) != n }, 100*time.Millisecond, 5*time.Millisecond,
+		"a tunnel on the saved selection is left alone")
+
+	r.setSelectionRestoreTicker(false)
+	require.NoError(t, tunnel.SelectServer(vpn.AutoSelectTag))
+	n = selectCalls(tunnel)
+	assert.Never(t, func() bool { return selectCalls(tunnel) != n }, 50*time.Millisecond, 5*time.Millisecond, "stopped")
 }
