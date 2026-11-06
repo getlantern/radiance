@@ -188,10 +188,12 @@ func Open(kPair []byte, pairingID string, blob []byte, now time.Time) (Route, er
 	if err != nil {
 		return Route{}, fmt.Errorf("%w: %w", ErrBlob, err)
 	}
-	if age := now.Sub(r.IssuedAt); age > MaxBlobAge {
+	// Compare times rather than negate now.Sub: Sub saturates for an issue
+	// time centuries ahead, and negating the minimum Duration stays negative.
+	if r.IssuedAt.After(now.Add(MaxBlobFuture)) {
+		return Route{}, fmt.Errorf("%w: issued %s ahead", ErrFuture, r.IssuedAt.Sub(now))
+	} else if age := now.Sub(r.IssuedAt); age > MaxBlobAge {
 		return Route{}, fmt.Errorf("%w: issued %s ago", ErrStale, age)
-	} else if -age > MaxBlobFuture {
-		return Route{}, fmt.Errorf("%w: issued %s ahead", ErrFuture, -age)
 	}
 	return r, nil
 }

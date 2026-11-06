@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"math"
 	"net/netip"
 	"slices"
 	"strings"
@@ -100,6 +101,10 @@ func TestOpenRejects(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStale)
 	_, err = Open(k, "p1", blob, now.Add(-MaxBlobFuture-time.Second))
 	assert.ErrorIs(t, err, ErrFuture)
+	// An issue time centuries ahead saturates now.Sub at the minimum Duration.
+	far, _ := Seal(k, "p1", testRoute(time.Unix(math.MaxInt64/2, 0)))
+	_, err = Open(k, "p1", far, now)
+	assert.ErrorIs(t, err, ErrFuture, "far future")
 }
 
 func TestOpenRejectsLength(t *testing.T) {
