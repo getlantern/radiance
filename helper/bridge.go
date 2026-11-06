@@ -72,6 +72,9 @@ type BridgeClient struct {
 	// still credited. It holds one entry per pairing seen.
 	pairingByTag map[string]string
 
+	// cycled, when set by a test before SetRunning, runs after each cycle.
+	cycled func()
+
 	// st is owned by the run goroutine; a run starts only after the previous
 	// one's done closes.
 	st bridgeState
@@ -182,6 +185,9 @@ func (b *BridgeClient) run(ctx context.Context, prev <-chan struct{}, done chan 
 	defer b.closeBox()
 	for {
 		timer := time.NewTimer(b.cycle(ctx))
+		if b.cycled != nil {
+			b.cycled()
+		}
 	wait:
 		for {
 			select {

@@ -505,13 +505,31 @@ func TestBridgePollsForANewPairingAtOnce(t *testing.T) {
 			} else {
 				h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, r)}, BridgeConfig: bridgeConfig1})
 			}
+			// Each PairingsChanged waits for the poll before it to finish, so
+			// it never interrupts one in flight, which is retried at once.
+			cycled := make(chan struct{}, 8)
+			h.client.cycled = func() {
+				select {
+				case cycled <- struct{}{}:
+				default:
+				}
+			}
+			waitCycle := func() {
+				t.Helper()
+				select {
+				case <-cycled:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the client never finished a poll")
+				}
+			}
 			h.client.SetRunning(context.Background(), true)
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				h.client.Stop(ctx)
 			})
-			require.Eventually(t, func() bool { return h.api.calls.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+			waitCycle()
+			require.Equal(t, int32(1), h.api.calls.Load())
 
 			h.keys.mu.Lock()
 			h.keys.keys[bridgePairingB] = volunteerKey(2)
@@ -522,7 +540,8 @@ func TestBridgePollsForANewPairingAtOnce(t *testing.T) {
 				assert.Equal(t, int32(1), h.api.calls.Load(), "a backed-off client waits")
 				return
 			}
-			require.Eventually(t, func() bool { return h.api.calls.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
+			waitCycle()
+			require.Equal(t, int32(2), h.api.calls.Load())
 
 			h.client.PairingsChanged()
 			time.Sleep(100 * time.Millisecond)
