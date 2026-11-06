@@ -201,3 +201,20 @@ func TestReverseOmitsAStalePublicIP(t *testing.T) {
 	assert.Empty(t, (*calls)[1].clientIP, "after a network change")
 	assert.Equal(t, "203.0.113.9", (*calls)[2].clientIP, "once detected again")
 }
+
+// A lookup that lands between building a request and setting its address
+// leaves the request with the fresh address, never the stale one it copied.
+func TestReverseOmitsAStalePublicIPReplacedMidRequest(t *testing.T) {
+	common.SetPublicIP("198.51.100.9")
+	common.MarkPublicIPStale()
+	t.Cleanup(func() { common.SetPublicIP("") })
+	reverseRequestBuilt = func() { common.SetPublicIP("203.0.113.9") }
+	t.Cleanup(func() { reverseRequestBuilt = nil })
+	srv, calls := reverseServer(t, http.StatusOK, `{}`)
+	api := NewReverseAPI(srv.Client(), srv.URL+"/v1", testReverseDevice)
+
+	_, err := api.Routes(context.Background())
+	require.NoError(t, err)
+	require.Len(t, *calls, 1)
+	assert.Equal(t, "203.0.113.9", (*calls)[0].clientIP)
+}

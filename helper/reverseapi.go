@@ -120,6 +120,9 @@ func (a *ReverseAPI) Routes(ctx context.Context) (*ReverseRoutesResponse, error)
 	return &resp, nil
 }
 
+// reverseRequestBuilt, when set by a test, runs after a request is built.
+var reverseRequestBuilt func()
+
 func (a *ReverseAPI) do(ctx context.Context, path string, body, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -135,10 +138,16 @@ func (a *ReverseAPI) do(ctx context.Context, path string, body, out any) error {
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set(common.DeviceIDHeader, a.deviceID)
+	if reverseRequestBuilt != nil {
+		reverseRequestBuilt()
+	}
 	// A stale address would make lantern-cloud advertise routes to the old
-	// network; without it, lantern-cloud uses the address it sees.
-	if common.PublicIPStale() {
-		r.Header.Del(common.ClientIPHeader)
+	// network; without it, lantern-cloud uses the address it sees. The
+	// address and its network are read together, so a lookup landing after
+	// the request was built cannot pass off the copied address as fresh.
+	r.Header.Del(common.ClientIPHeader)
+	if ip := common.FreshPublicIP(); ip != "" {
+		r.Header.Set(common.ClientIPHeader, ip)
 	}
 	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
 		r.Header.Set("X-Lantern-Feature-Override", val)
