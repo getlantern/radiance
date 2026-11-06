@@ -86,7 +86,7 @@ type bridgeState struct {
 	bridgesDirty bool
 	backoff      time.Duration
 	lastSkips    routeSkips
-	// polled is the volunteer pairings the last routes call asked for.
+	// polled is the volunteer pairings held at the last routes call.
 	polled []string
 	// apiNotBefore holds off routes calls while lantern-cloud is busy or has
 	// the feature disabled.
@@ -206,8 +206,8 @@ func (b *BridgeClient) volunteerIDs() []string {
 	return b.cfg.Keys.IDs(string(helperticket.RoleVolunteer))
 }
 
-// hasUnpolled reports whether ids holds a pairing the last routes call did not
-// ask for, and routes calls are not held off.
+// hasUnpolled reports whether ids holds a pairing not held at the last
+// routes call, and routes calls are not held off.
 func (b *BridgeClient) hasUnpolled(ids []string) bool {
 	s := &b.st
 	if b.cfg.Now().Before(s.apiNotBefore) {
