@@ -960,6 +960,13 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		slog.Debug("Added servers", "added", added)
 		return errors.Join(errs...)
 	}
+	// Before the URL overrides, so the probe cycle they trigger uses the new
+	// timeouts.
+	if list.AutoSelectOptions != nil {
+		if err := t.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, list.AutoSelectOptions.ProbeTimeoutsMs); err != nil {
+			slog.Warn("Failed to set probe timeouts", "error", err)
+		}
+	}
 	if len(list.URLOverrides) > 0 {
 		slog.Info("Applying bandit URL overrides to auto-select group",
 			"override_count", len(list.URLOverrides),
@@ -1217,8 +1224,9 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", loggableTags(dropped))
 	}
 	return servers.ServerList{
-		Servers:      deduped,
-		URLOverrides: list.URLOverrides,
+		Servers:           deduped,
+		URLOverrides:      list.URLOverrides,
+		AutoSelectOptions: list.AutoSelectOptions,
 	}
 }
 

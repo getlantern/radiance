@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
@@ -53,7 +54,7 @@ func TestBuildOptions(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			urlTest := urlTestOutbound(AutoSelectTag, tags, nil)
+			urlTest := urlTestOutbound(AutoSelectTag, tags, nil, nil)
 			assert.Contains(t, opts.Outbounds, urlTest, "options should contain auto-select URL test outbound")
 			selector := selectorOutbound(ManualSelectTag, tags)
 			assert.Contains(t, opts.Outbounds, selector, "options should contain manual-select selector outbound")
@@ -606,4 +607,45 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 	t.Run("is reserved", func(t *testing.T) {
 		assert.Contains(t, ReservedTags(), PersonalProxiesTag)
 	})
+}
+
+func TestDecodeAutoSelectOptions(t *testing.T) {
+	assert.Equal(t, &lbO.MutableAutoSelectOutboundOptions{}, DecodeAutoSelectOptions(nil),
+		"an absent field gives empty options, so a refresh clears earlier timeouts")
+	assert.Equal(t, &lbO.MutableAutoSelectOutboundOptions{},
+		DecodeAutoSelectOptions([]byte(`{"background_interval_seconds": "x", "probe_timeouts_ms": {"hysteria2x": 3000}}`)),
+		"an object that doesn't decode is ignored whole")
+
+	got := DecodeAutoSelectOptions([]byte(`{"probe_timeouts_ms": {"hysteria2x": 3000, "vless": -1}, "switch_tolerance_percent": 150, "probe_concurrency": 4}`))
+	assert.Equal(t, lbO.ProbeTimeoutsMs{"hysteria2x": 3000}, got.ProbeTimeoutsMs, "a bad entry costs only itself")
+	assert.Nil(t, got.SwitchTolerancePercent, "a value lantern-box would refuse to build with is dropped")
+	assert.EqualValues(t, 4, got.ProbeConcurrency)
+}
+
+func TestBuildOptions_AutoSelectOptions(t *testing.T) {
+	cfg := testConfig(t)
+	overrides := map[string]string{cfg.Options.Outbounds[0].Tag: "https://example.com/callback"}
+	base := DecodeAutoSelectOptions([]byte(`{
+		"outbounds": ["server-sent"], "url": "https://server.example/", "url_overrides": {"x": "y"},
+		"probe_timeouts_ms": {"hysteria2x": 3000}, "probe_concurrency": 4, "switch_tolerance_percent": 150
+	}`))
+	opts, err := buildOptions(BoxOptions{
+		BasePath:           t.TempDir(),
+		Options:            cfg.Options,
+		BanditURLOverrides: overrides,
+		AutoSelectOptions:  base,
+	})
+	require.NoError(t, err, "an out-of-range switch_tolerance_percent must not stop the tunnel from building")
+
+	out := findOutbound(opts.Outbounds, AutoSelectTag)
+	require.NotNil(t, out, "missing auto-select outbound")
+	autoOpts := out.Options.(*lbO.MutableAutoSelectOutboundOptions)
+	assert.Equal(t, lbO.ProbeTimeoutsMs{"hysteria2x": 3000}, autoOpts.ProbeTimeoutsMs)
+	assert.EqualValues(t, 4, autoOpts.ProbeConcurrency)
+	assert.Equal(t, "https://google.com/generate_204", autoOpts.URL, "radiance owns the probe URL")
+	assert.Equal(t, overrides, autoOpts.URLOverrides, "radiance owns the URL overrides")
+	assert.NotContains(t, autoOpts.Outbounds, "server-sent", "radiance owns the members")
+	assert.EqualValues(t, urlTestInterval/time.Second, autoOpts.BackgroundIntervalSeconds,
+		"an unset interval keeps radiance's default")
+	assert.Equal(t, []string{"server-sent"}, base.Outbounds, "the shared options are not modified")
 }

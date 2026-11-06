@@ -2376,3 +2376,15 @@ func TestRemovalCleansUpAServerAddedConcurrently(t *testing.T) {
 	assert.False(t, tun.holds("late"), "the removed server leaves the tunnel")
 	assert.True(t, tun.holds("lantern-1"))
 }
+
+func TestServerListFromConfig_AutoSelectOptions(t *testing.T) {
+	list := serverListFromConfig(&config.Config{
+		AutoSelectOptions: json.RawMessage(`{"probe_timeouts_ms": {"hysteria2x": 3000}}`),
+	})
+	require.NotNil(t, list.AutoSelectOptions)
+	assert.Equal(t, map[string]uint32{"hysteria2x": 3000}, map[string]uint32(list.AutoSelectOptions.ProbeTimeoutsMs))
+
+	list = serverListFromConfig(&config.Config{})
+	require.NotNil(t, list.AutoSelectOptions, "a config without the field must still clear earlier timeouts")
+	assert.Empty(t, list.AutoSelectOptions.ProbeTimeoutsMs)
+}

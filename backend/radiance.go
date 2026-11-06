@@ -547,7 +547,11 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 	for _, ep := range cfg.Options.Endpoints {
 		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
 	}
-	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
+	return servers.ServerList{
+		Servers:           srvs,
+		URLOverrides:      cfg.BanditURLOverrides,
+		AutoSelectOptions: vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions),
+	}
 }
 
 func nonSelectableSet(cfg *config.Config) map[string]struct{} {
@@ -1302,7 +1306,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
-	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
+	allList := servers.ServerList{
+		Servers:           r.srvManager.AllServers(),
+		URLOverrides:      list.URLOverrides,
+		AutoSelectOptions: list.AutoSelectOptions,
+	}
 	// An evicted selection falls back to auto-select before the update removes
 	// it from the tunnel: the manual selector would otherwise pick an
 	// arbitrary member meanwhile.
@@ -1839,6 +1847,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.Options = cfg.Options
 		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
+		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
 		}
@@ -2217,6 +2226,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		settings.GetString(settings.DataPathKey),
 		servers.ServerList{Servers: svrs}.Outbounds(),
 		cfg.BanditURLOverrides,
+		vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions),
 	)
 	if err != nil {
 		return err
