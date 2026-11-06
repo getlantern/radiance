@@ -9,6 +9,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/service"
+	"golang.org/x/net/http2"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
@@ -27,6 +28,7 @@ type reversePortal interface {
 	Configure(samizdatreverse.PortalConfig) error
 	Rebind() error
 	Addr() net.Addr
+	Session(reverseTag string) (*http2.ClientConn, bool)
 }
 
 // setReversePortal configures the portal, first creating it for
@@ -122,6 +124,26 @@ func (t *tunnel) reversePortalListening() bool {
 	}
 	portal, ok := in.(reversePortal)
 	return ok && portal.Addr() != nil
+}
+
+// reverseSessionLive reports whether the portal holds a session for
+// reverseTag that can take a new stream. The portal is looked up under
+// t.outboundMu but asked outside it, since the check calls into the session's
+// HTTP/2 client.
+func (t *tunnel) reverseSessionLive(reverseTag string) bool {
+	t.outboundMu.Lock()
+	inbounds := service.FromContext[adapter.InboundManager](t.ctx)
+	var in adapter.Inbound
+	if inbounds != nil {
+		in, _ = inbounds.Get(reversePortalTag)
+	}
+	t.outboundMu.Unlock()
+	portal, ok := in.(reversePortal)
+	if !ok {
+		return false
+	}
+	_, live := portal.Session(reverseTag)
+	return live
 }
 
 func (t *tunnel) setReverseOutbounds(tags []string) error {

@@ -615,6 +615,16 @@ func (c *VPNClient) ReversePortalListening() bool {
 	return c.tunnel != nil && c.tunnel.reversePortalListening()
 }
 
+// ReverseSessionLive reports whether the running tunnel's portal holds a
+// session for reverseTag that can carry traffic now: one the friend's bridge
+// dialed in that is neither closed nor replaced. It is false with no tunnel
+// or no portal, whatever SetReverseOutbounds was given.
+func (c *VPNClient) ReverseSessionLive(reverseTag string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tunnel != nil && c.tunnel.reverseSessionLive(reverseTag)
+}
+
 // PhysicalInterfaceControl returns a socket control that binds a dial to the
 // running tunnel's underlying default interface, so the dial bypasses the
 // tunnel. It is nil with no tunnel running or no interface monitor to bind by.

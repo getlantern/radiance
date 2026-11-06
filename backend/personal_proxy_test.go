@@ -319,7 +319,8 @@ func TestPersonalProxyStatus(t *testing.T) {
 }
 
 // A friend's reverse outbound is part of that friend, never a friend of its
-// own, and alone makes the friend selectable.
+// own, and alone makes the friend selectable. The status reports it only with
+// a live session, which no tunnel means there is not.
 func TestPersonalProxyStatusFoldsReverseOutboundsIntoTheirFriend(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA, "lantern-1"), false))
@@ -327,9 +328,9 @@ func TestPersonalProxyStatusFoldsReverseOutboundsIntoTheirFriend(t *testing.T) {
 		lbA.ReverseHelperTag(ppFriendA), lbA.ReverseHelperTag(ppFriendB),
 	}))
 	assert.Equal(t, []vpn.PersonalProxyStatus{
-		{Tag: ppFriendA, Direct: true, Reverse: true},
-		{Tag: ppFriendB, Reverse: true},
-	}, r.PersonalProxyStatus())
+		{Tag: ppFriendA, Direct: true},
+		{Tag: ppFriendB},
+	}, r.PersonalProxyStatus(), "configured, but no session")
 	_, found := r.GetServerByTag(vpn.PersonalProxySelection(ppFriendB))
 	assert.True(t, found)
 	assert.NoError(t, r.checkConnectSelection(vpn.PersonalProxySelection(ppFriendB)))

@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,8 +14,10 @@ import (
 	"maps"
 	"math/big"
 	"net"
+	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,11 +26,13 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
+	"github.com/getlantern/samizdat"
 
 	rlog "github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -360,4 +365,90 @@ func TestPhysicalInterfaceControlNeedsATunnel(t *testing.T) {
 	c.mu.Unlock()
 	t.Cleanup(func() { _ = tun.close() })
 	assert.NotPanics(t, func() { _ = c.PhysicalInterfaceControl() })
+}
+
+// dialReverseSession dials the portal as the bridge of the pairing with short
+// ID id would and serves HTTP/2 on the session, and returns the session's
+// connection and a channel closed once serving it ends.
+func dialReverseSession(t *testing.T, portal *samizdatreverse.Portal, cfg *samizdatreverse.PortalConfig, id [8]byte) (net.Conn, <-chan struct{}) {
+	t.Helper()
+	priv, err := ecdh.X25519().NewPrivateKey(cfg.PrivateKey)
+	require.NoError(t, err)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(portal.Addr().(*net.TCPAddr).Port))
+	client, err := samizdat.NewClient(samizdat.ClientConfig{
+		ServerAddr: addr, ServerName: "localhost", PublicKey: priv.PublicKey().Bytes(), ShortID: id,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := client.DialSession(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})})
+	}()
+	return conn, done
+}
+
+// loopbackReversePortal puts a portal configured by cfg in the tunnel under
+// the portal's tag, created without the tunnel's network manager so that it
+// listens on loopback rather than bound to the physical interface, where a
+// bridge on this host could not reach it.
+func loopbackReversePortal(t *testing.T, tun *tunnel, cfg *samizdatreverse.PortalConfig) *samizdatreverse.Portal {
+	t.Helper()
+	in := reversePortalInbound("a.example.com")
+	router := service.FromContext[adapter.Router](tun.ctx)
+	logger := tun.logFactory.NewLogger("inbound/" + reversePortalTag)
+	require.NoError(t, service.FromContext[adapter.InboundManager](tun.ctx).Create(
+		context.Background(), router, logger, in.Tag, in.Type, in.Options))
+	portal := livePortal(t, tun)
+	require.NotNil(t, portal)
+	require.NoError(t, portal.Configure(*cfg))
+	return portal
+}
+
+// A configured reverse outbound is live only while the friend's bridge holds
+// a session on the portal: not before it dials in, through a replacement, and
+// not once the session ends.
+func TestReverseSessionLiveFollowsTheSession(t *testing.T) {
+	rev := lbA.ReverseHelperTag(testHelper1)
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	cfg := testPortalConfig(t, rev)
+	require.NoError(t, c.SetReverseOutbounds([]string{rev}))
+	assert.False(t, c.ReverseSessionLive(rev), "no tunnel")
+
+	tun := startPersonalProxiesTestTunnel(t)
+	c.mu.Lock()
+	c.tunnel = tun
+	require.NoError(t, c.restoreReverseLocked())
+	c.mu.Unlock()
+	t.Cleanup(func() {
+		c.mu.Lock()
+		c.tunnel = nil
+		c.mu.Unlock()
+	})
+	assert.False(t, c.ReverseSessionLive(rev), "configured, but no portal")
+	portal := loopbackReversePortal(t, tun, cfg)
+	assert.False(t, c.ReverseSessionLive(rev), "configured, but no session")
+
+	_, firstDone := dialReverseSession(t, portal, cfg, [8]byte{1})
+	require.Eventually(t, func() bool { return c.ReverseSessionLive(rev) }, 10*time.Second, 20*time.Millisecond)
+	assert.False(t, c.ReverseSessionLive(lbA.ReverseHelperTag(testHelper2)), "another friend has no session")
+
+	second, _ := dialReverseSession(t, portal, cfg, [8]byte{1})
+	select {
+	case <-firstDone:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "the replaced session was not closed")
+	}
+	assert.True(t, c.ReverseSessionLive(rev), "the confirmed replacement is live")
+
+	require.NoError(t, second.Close())
+	require.Eventually(t, func() bool { return !c.ReverseSessionLive(rev) }, 10*time.Second, 20*time.Millisecond)
+	assert.Equal(t, []string{rev}, c.ReverseOutbounds(), "the configured set is unchanged")
 }

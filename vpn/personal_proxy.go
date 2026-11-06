@@ -455,8 +455,11 @@ type PersonalProxyStatus struct {
 	// Direct reports whether the config carries the friend's direct outbound,
 	// which it does while the friend has a live route.
 	Direct bool `json:"direct"`
-	// Reverse reports whether the VPN client keeps the friend's reverse tag,
-	// whose outbound carries traffic over the session the friend dials in.
+	// Reverse reports whether the VPN client keeps the friend's reverse tag
+	// and the running tunnel's portal holds a live session the friend dialed
+	// in, so the reverse outbound can carry traffic now. It is false with no
+	// tunnel running, before the friend's bridge connects and once its
+	// session ends.
 	Reverse bool `json:"reverse"`
 	// Rooms reports whether this device has a rooms consumer and an inviter
 	// ticket for the friend's pairing.

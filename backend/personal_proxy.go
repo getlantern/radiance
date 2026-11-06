@@ -123,13 +123,21 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	statuses := make([]vpn.PersonalProxyStatus, 0, len(tags))
 	for _, tag := range tags {
 		f := r.friendReach(tag)
-		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Reverse: f.reverse, Rooms: f.consumer && f.tickets}
+		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Reverse: f.reverse && r.reverseSessionLive(tag), Rooms: f.consumer && f.tickets}
 		if f.direct && r.vpnClient != nil {
 			status.DirectDelayMs = r.vpnClient.PersonalProxyMember(tag).DirectDelay
 		}
 		statuses = append(statuses, status)
 	}
 	return statuses
+}
+
+// reverseSessionLive reports whether the running tunnel holds a live session
+// on friend's reverse outbound. Selection uses the configured reverse
+// outbounds instead, so a friend whose bridge is between sessions stays
+// selected.
+func (r *LocalBackend) reverseSessionLive(friend string) bool {
+	return r.vpnClient != nil && r.vpnClient.ReverseSessionLive(lbA.ReverseHelperTag(friend))
 }
 
 func (r *LocalBackend) reverseOutbounds() []string {
