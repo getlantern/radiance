@@ -682,12 +682,23 @@ func TestReverseRestartKeepsTheHoldOff(t *testing.T) {
 			e.cycle(t)
 			e.log.take()
 			arrived := e.srv.arrived.Load()
+			cycled := make(chan struct{}, 1)
+			e.c.cycled = func() {
+				select {
+				case cycled <- struct{}{}:
+				default:
+				}
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			for range 3 {
 				require.NoError(t, e.c.Start(context.Background()))
-				time.Sleep(20 * time.Millisecond)
+				select {
+				case <-cycled:
+				case <-ctx.Done():
+					t.Fatal("the client never finished a cycle")
+				}
 				e.c.Stop(ctx)
 			}
 			assert.Equal(t, arrived, e.srv.arrived.Load(), "a restart called lantern-cloud while held off")

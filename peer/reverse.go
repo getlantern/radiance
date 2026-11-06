@@ -107,6 +107,8 @@ type ReverseClient struct {
 	// yielded says the running client skipped the manual port for peer
 	// sharing.
 	yielded bool
+	// cycled, when set by a test before Start, runs after each cycle.
+	cycled func()
 
 	// st is owned by the run goroutine; a run starts only after the previous
 	// one's done closes.
@@ -281,6 +283,9 @@ func (c *ReverseClient) run(ctx context.Context, prev <-chan struct{}, done, rel
 	defer c.teardown(released)
 	for {
 		wait := c.cycle(ctx)
+		if c.cycled != nil {
+			c.cycled()
+		}
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
