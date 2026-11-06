@@ -1520,6 +1520,7 @@ func TestReversePreviousDroppedOnClear(t *testing.T) {
 	e.cycle(t)
 	assert.Equal(t, []string{"clear-portal", "deregister", "unmap"}, e.log.take())
 	assert.Nil(t, e.c.st.prev)
+	assert.Nil(t, e.c.st.published, "a cleared identity could come back as Previous")
 
 	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
 	e.keys.set("p1")
@@ -1577,6 +1578,8 @@ func TestReverseDoubleRotationKeepsTheLastPublished(t *testing.T) {
 		assert.NotEqual(t, first.PrivateKey, third.Previous.PrivateKey)
 		assert.Equal(t, e.clock.Now().Add(defaultReverseRotateInterval), third.Previous.Until)
 	})
+	// The published identity keeps its first deadline, and once that has
+	// passed it is never brought back.
 	t.Run("second identity never registered", func(t *testing.T) {
 		e := newRevEnv(t)
 		e.keys.set("p1")
@@ -1585,19 +1588,35 @@ func TestReverseDoubleRotationKeepsTheLastPublished(t *testing.T) {
 
 		e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
 		e.clock.Advance(defaultReverseRotateInterval)
+		rotated := e.clock.Now()
 		e.cycle(t)
 		second := e.box.lastPortal()
+		require.NotNil(t, second.Previous)
+		assert.Equal(t, first.PrivateKey, second.Previous.PrivateKey)
 
 		// The address is forgotten by now: the empty register answers, the
 		// route register fails.
 		e.srv.queue(revResponse{observedIP: "198.51.100.7"}, revResponse{status: http.StatusInternalServerError})
-		e.clock.Advance(defaultReverseRotateInterval)
+		e.clock.Advance(defaultReverseRotateInterval / 2)
 		e.cycle(t)
+		require.NotNil(t, e.box.lastPortal().Previous)
+		assert.Equal(t, rotated.Add(defaultReverseRotateInterval), e.box.lastPortal().Previous.Until)
+
+		// The address is still remembered, so the one register is the
+		// route register, which fails.
+		e.clock.Advance(defaultReverseRotateInterval / 2)
+		e.log.take()
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
 		third := e.box.lastPortal()
 		assert.NotEqual(t, second.PrivateKey, third.PrivateKey)
-		require.NotNil(t, third.Previous)
-		assert.Equal(t, first.PrivateKey, third.Previous.PrivateKey)
-		assert.Equal(t, e.clock.Now().Add(defaultReverseRotateInterval), third.Previous.Until)
+		assert.Nil(t, third.Previous, "an expired identity came back as Previous")
+		assert.Nil(t, e.c.st.published)
+
+		e.srv.queue(revResponse{observedIP: "198.51.100.7"}, revResponse{status: http.StatusInternalServerError})
+		e.clock.Advance(defaultReverseRotateInterval)
+		e.cycle(t)
+		assert.Nil(t, e.box.lastPortal().Previous, "an expired identity came back as Previous")
 	})
 }
 

@@ -407,10 +407,14 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 			c.cfg.Logger.Error("reverse: could not make listener credentials", "err", err)
 			return c.cfg.RegisterInterval
 		}
-		s.prev = nil
-		if s.creds != nil && s.published != nil {
-			s.prev, s.prevPort = s.published, s.publishedPort
-			s.prevRotated, s.prevUntil = now, now.Add(c.cfg.RotateInterval)
+		// A previous identity that is still the one published keeps the
+		// deadline it got when it was first rotated out.
+		if s.prev == nil || s.prev != s.published {
+			s.prev = nil
+			if s.creds != nil && s.published != nil {
+				s.prev, s.prevPort = s.published, s.publishedPort
+				s.prevRotated, s.prevUntil = now, now.Add(c.cfg.RotateInterval)
+			}
 		}
 		s.creds, s.credsAt = &creds, now
 	}
@@ -624,7 +628,8 @@ func (c *ReverseClient) clearBox() {
 	}
 	s.boxSet = false
 	s.portal, s.portalCreds, s.portalPrev = nil, nil, nil
-	s.prev = nil
+	// A cleared portal's identity is never brought back as Previous.
+	s.published, s.prev = nil, nil
 	s.outbounds, s.outboundsKnown = nil, true
 }
 
@@ -744,6 +749,10 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 	// Helpers that hold the previous identity's route dial the port it was
 	// published on, and a portal moved to another port takes nothing there.
 	if s.prev != nil && (!now.Before(s.prevUntil) || s.prevPort != s.mapping.InternalPort || s.prev == s.creds) {
+		// Once dropped, it is never brought back as Previous.
+		if s.published == s.prev {
+			s.published = nil
+		}
 		s.prev = nil
 	}
 
