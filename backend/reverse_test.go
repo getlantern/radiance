@@ -30,6 +30,8 @@ type fakeReverse struct {
 	running                                       atomic.Bool
 	box                                           peer.ReverseBox
 	tags                                          []string
+	// release, if set, answers ReleaseManualPort.
+	release func(context.Context) error
 }
 
 func (f *fakeReverse) Start(context.Context) error {
@@ -51,9 +53,15 @@ func (f *fakeReverse) Stop(context.Context) {
 	f.running.Store(false)
 }
 
-func (f *fakeReverse) NetworkChanged()   { f.networks.Add(1) }
-func (f *fakeReverse) PairingsChanged()  { f.pairings.Add(1) }
-func (f *fakeReverse) PeerShareChanged() { f.peerShares.Add(1) }
+func (f *fakeReverse) NetworkChanged()  { f.networks.Add(1) }
+func (f *fakeReverse) PairingsChanged() { f.pairings.Add(1) }
+func (f *fakeReverse) ReleaseManualPort(ctx context.Context) error {
+	f.peerShares.Add(1)
+	if f.release != nil {
+		return f.release(ctx)
+	}
+	return nil
+}
 
 const reverseSettle = 150 * time.Millisecond
 
@@ -309,4 +317,39 @@ func TestReverseHearsPeerShareTurnOn(t *testing.T) {
 
 	require.NoError(t, r.applyPeerShare(false))
 	assert.False(t, peerShareOn())
+}
+
+// Peer sharing starts only once the reverse portal has left the manual port,
+// or the wait for that has timed out.
+func TestPeerShareStartsAfterTheReversePortalLeavesTheManualPort(t *testing.T) {
+	peerFake := &fakePeerController{}
+	r := newPeerTestBackend(t, peerFake)
+	fake := &fakeReverse{}
+	r.reverseClient = fake
+	fake.release = func(ctx context.Context) error {
+		assert.True(t, peerShareOn(), "the reverse client reads peer sharing as on")
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		assert.Zero(t, peerFake.startCalls.Load(), "peer sharing waits for the release")
+		return nil
+	}
+	require.NoError(t, r.applyPeerShare(true))
+	assert.Equal(t, int64(1), peerFake.startCalls.Load())
+	require.NoError(t, r.applyPeerShare(false))
+
+	prev := reverseReleaseTimeout
+	reverseReleaseTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { reverseReleaseTimeout = prev })
+	fake.release = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	start := time.Now()
+	require.NoError(t, r.applyPeerShare(true))
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Equal(t, int64(2), peerFake.startCalls.Load(), "a timed-out release still starts peer sharing")
+	assert.Equal(t, int32(2), fake.peerShares.Load())
 }

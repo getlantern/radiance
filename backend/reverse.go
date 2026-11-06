@@ -42,7 +42,7 @@ type reverseController interface {
 	Stop(ctx context.Context)
 	NetworkChanged()
 	PairingsChanged()
-	PeerShareChanged()
+	ReleaseManualPort(ctx context.Context) error
 }
 
 func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
@@ -146,9 +146,21 @@ func (r *LocalBackend) stopReverse() {
 // peer sharing binds it.
 func peerShareOn() bool { return settings.GetBool(settings.PeerShareEnabledKey) }
 
-func (r *LocalBackend) reversePeerShareChanged() {
-	if r.reverseClient != nil {
-		r.reverseClient.PeerShareChanged()
+// reverseReleaseTimeout bounds how long turning peer sharing on waits for the
+// reverse portal to leave the manual port. A var so tests can shorten it.
+var reverseReleaseTimeout = 5 * time.Second
+
+// releaseReverseManualPort waits, at most reverseReleaseTimeout, for the
+// reverse portal to stop listening on the manual port peer sharing is about
+// to bind.
+func (r *LocalBackend) releaseReverseManualPort(ctx context.Context) {
+	if r.reverseClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, reverseReleaseTimeout)
+	defer cancel()
+	if err := r.reverseClient.ReleaseManualPort(ctx); err != nil {
+		slog.Warn("Reverse portal still holds the manual port; starting peer share anyway")
 	}
 }
 

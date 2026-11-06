@@ -1078,7 +1078,6 @@ func TestReverseYieldsTheManualPortToPeerSharing(t *testing.T) {
 	e.log.take()
 
 	sharing.Store(true)
-	e.c.PeerShareChanged()
 	e.cycle(t)
 	assert.Equal(t, []string{"clear-portal", "deregister", "register:0", "map", "portal", "outbounds:1", "register:1"}, e.log.take())
 	port := e.box.lastPortal().ListenPort
@@ -1088,4 +1087,84 @@ func TestReverseYieldsTheManualPortToPeerSharing(t *testing.T) {
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
 	assert.Equal(t, []string{"register:1"}, e.log.take(), "a port of its own stays put")
+}
+
+func TestReverseReleaseManualPortWaitsForThePortal(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
+	var sharing atomic.Bool
+	e := newRevEnv(t)
+	fwd := e.fwd
+	e.c = NewReverseClient(ReverseConfig{
+		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
+		PeerShareActive: sharing.Load,
+		NewForwarder: func(context.Context) (portForwarder, error) {
+			if m := reverseManualForwarder(sharing.Load); m != nil {
+				return m, nil
+			}
+			return fwd, nil
+		},
+	})
+	require.NoError(t, e.c.ReleaseManualPort(context.Background()), "a stopped client holds no port")
+
+	e.keys.set("p1")
+	require.NoError(t, e.c.Start(context.Background()))
+	t.Cleanup(func() { e.c.Stop(context.Background()) })
+	onManual := func() bool {
+		p := e.box.lastPortal()
+		return p != nil && p.ListenPort == 41234
+	}
+	require.Eventually(t, onManual, 5*time.Second, 5*time.Millisecond)
+
+	sharing.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, e.c.ReleaseManualPort(ctx))
+	e.box.mu.Lock()
+	last := -1
+	for i, p := range e.box.portals {
+		if p != nil && p.ListenPort == 41234 {
+			last = i
+		}
+	}
+	require.GreaterOrEqual(t, last, 0)
+	cleared := slices.Contains(e.box.portals[last+1:], nil)
+	e.box.mu.Unlock()
+	assert.True(t, cleared, "the portal left the manual port before the release returned")
+}
+
+func TestReverseReleaseManualPortTimesOutWhileThePortalHoldsIt(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerManualPortKey, 41234))
+	var sharing atomic.Bool
+	e := newRevEnv(t)
+	fwd := e.fwd
+	e.c = NewReverseClient(ReverseConfig{
+		API: e.c.cfg.API, Keys: e.keys, Box: e.box, Now: e.clock.Now,
+		PeerShareActive: sharing.Load,
+		NewForwarder: func(context.Context) (portForwarder, error) {
+			if m := reverseManualForwarder(sharing.Load); m != nil {
+				return m, nil
+			}
+			return fwd, nil
+		},
+	})
+	e.keys.set("p1")
+	require.NoError(t, e.c.Start(context.Background()))
+	t.Cleanup(func() {
+		e.box.setErrs(nil, nil)
+		e.c.Stop(context.Background())
+	})
+	require.Eventually(t, func() bool {
+		p := e.box.lastPortal()
+		return p != nil && p.ListenPort == 41234
+	}, 5*time.Second, 5*time.Millisecond)
+
+	e.box.setErrs(errors.New("portal busy"), nil)
+	sharing.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, e.c.ReleaseManualPort(ctx), context.DeadlineExceeded)
 }

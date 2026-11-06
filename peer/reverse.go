@@ -93,6 +93,9 @@ type ReverseClient struct {
 	cancel context.CancelFunc
 	// done closes when the last started run has torn down.
 	done chan struct{}
+	// releases are ReleaseManualPort's waiters, each closed once a cycle that
+	// began after it was added sees the portal off the manual port.
+	releases []chan struct{}
 
 	// st is owned by the run goroutine; a run starts only after the previous
 	// one's done closes.
@@ -121,6 +124,7 @@ type reverseState struct {
 	boxSet         bool
 	portal         *samizdatreverse.PortalConfig
 	portalCreds    *reverseCreds
+	portalManual   bool
 	outbounds      []string
 	outboundsKnown bool
 	apiNotBefore   time.Time
@@ -207,9 +211,28 @@ func (c *ReverseClient) NetworkChanged() {
 // PairingsChanged registers at once for the current inviter pairings.
 func (c *ReverseClient) PairingsChanged() { c.wake() }
 
-// PeerShareChanged moves the client off the manual port at once if peer
-// sharing now needs it.
-func (c *ReverseClient) PeerShareChanged() { c.wake() }
+// ReleaseManualPort moves the client off the manual port at once if peer
+// sharing, which must already be on, needs it. It waits until the portal no
+// longer listens on the manual port, the client stops, or ctx ends, and then
+// returns ctx's error. It returns nil at once when the client is not running.
+func (c *ReverseClient) ReleaseManualPort(ctx context.Context) error {
+	c.mu.Lock()
+	if c.cancel == nil {
+		c.mu.Unlock()
+		return nil
+	}
+	released, done := make(chan struct{}), c.done
+	c.releases = append(c.releases, released)
+	c.mu.Unlock()
+	c.wake()
+	select {
+	case <-released:
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
 
 func (c *ReverseClient) wake() {
 	select {
@@ -253,6 +276,13 @@ func (c *ReverseClient) teardown() {
 // cycle does one round of work and returns how long to wait before the next.
 func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 	s := &c.st
+	// Taken before PeerShareActive is read, so each waiter's peer sharing
+	// is seen as on.
+	c.mu.Lock()
+	releases := c.releases
+	c.releases = nil
+	c.mu.Unlock()
+	defer func() { c.settleReleases(releases) }()
 	now := c.cfg.Now()
 	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
 	c.dropRevoked(ids)
@@ -282,6 +312,7 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		s.lastPort = 0
 		gated = now.Before(s.apiNotBefore)
 	}
+	releases = c.closeIfReleased(releases)
 	if len(ids) == 0 {
 		if !gated {
 			c.deregister(ctx, now)
@@ -367,6 +398,28 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		}
 	}
 	return c.cfg.RegisterInterval
+}
+
+// closeIfReleased closes the waiters in releases and returns nil once the
+// portal is off the manual port, and returns releases otherwise.
+func (c *ReverseClient) closeIfReleased(releases []chan struct{}) []chan struct{} {
+	if s := &c.st; len(releases) == 0 || (s.boxSet && s.portalManual) {
+		return releases
+	}
+	for _, ch := range releases {
+		close(ch)
+	}
+	return nil
+}
+
+// settleReleases is closeIfReleased, handing any waiters left to the next
+// cycle.
+func (c *ReverseClient) settleReleases(releases []chan struct{}) {
+	if releases = c.closeIfReleased(releases); len(releases) > 0 {
+		c.mu.Lock()
+		c.releases = append(c.releases, releases...)
+		c.mu.Unlock()
+	}
 }
 
 // dropRevoked takes the pairings not in ids, or whose key is gone, out of the
@@ -514,7 +567,7 @@ func (c *ReverseClient) clearBox() {
 		return
 	}
 	s.boxSet = false
-	s.portal, s.portalCreds = nil, nil
+	s.portal, s.portalCreds, s.portalManual = nil, nil, false
 	s.outbounds, s.outboundsKnown = nil, true
 }
 
@@ -645,7 +698,8 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 			slog.Warn("reverse: could not configure the portal")
 			return
 		}
-		s.portal, s.portalCreds = cfg, s.creds
+		_, manual := s.fwd.(*portforward.ManualForwarder)
+		s.portal, s.portalCreds, s.portalManual = cfg, s.creds, manual
 	}
 	c.setOutbounds(tags)
 }

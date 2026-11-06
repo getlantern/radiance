@@ -116,12 +116,12 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	if err := persistPeerShare(true); err != nil {
 		return false, err
 	}
-	r.reversePeerShareChanged()
 	// A second "on" that queued behind an in-flight Start must not fail on
 	// "already active" and roll the toggle back under a running peer.
 	if r.peerClient.IsActive() {
 		return false, nil
 	}
+	r.releaseReverseManualPort(toggleCtx)
 	// Start registers the current settings, so a pending re-register retry,
 	// which was for an earlier session, has nothing left to do.
 	r.cancelPeerRereg()
