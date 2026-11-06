@@ -100,8 +100,9 @@ func NewBridgeClient(cfg BridgeConfig) *BridgeClient {
 	return &BridgeClient{cfg: cfg, kick: make(chan struct{}, 1), pairingByTag: make(map[string]string)}
 }
 
-// PairingsChanged closes, at once and without calling lantern-cloud, the
-// bridges of pairings whose key is gone.
+// PairingsChanged has a running client close, without calling lantern-cloud,
+// the bridges of pairings that no longer hold a volunteer key. It does not
+// block.
 func (b *BridgeClient) PairingsChanged() {
 	select {
 	case b.kick <- struct{}{}:

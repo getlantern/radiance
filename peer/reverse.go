@@ -71,7 +71,7 @@ type ReverseConfig struct {
 	// reads it once: a run started while it is on maps a port of its own
 	// rather than the manual port, which peer sharing binds.
 	PeerShareActive func() bool
-	// LocalIPControl, if set, returns the socket control that keeps a UPnP
+	// LocalIPControl, if set, returns the socket control that keeps a port
 	// mapping's LAN address lookup off the VPN tunnel, or nil with no tunnel.
 	LocalIPControl   func() control.Func
 	Now              func() time.Time
@@ -117,7 +117,8 @@ type reverseState struct {
 	fwd     portForwarder
 	mapping *portforward.Mapping
 	// manualPort is the manual port configured when the run started, or 0.
-	// The run maps it unless yielded, and never maps it automatically.
+	// The run maps it unless yielded, and never picks it as a discovered
+	// mapping's internal port.
 	manualPort uint16
 	yielded    bool
 	// lastPort is the internal port of the last mapping, tried again on a

@@ -1673,13 +1673,8 @@ func newForwarder(ctx context.Context, manual portForwarder, opts ...portforward
 	if manual != nil {
 		return manual, nil
 	}
-	// Explicitly return a nil interface on error — `return
-	// discoverForwarder(ctx)` collapses the (*Forwarder, error)
-	// pair into a typed-nil interface on failure, which then panics
-	// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
-	// because the nil-check passes (interface has a type) but the
-	// receiver is nil. Surfacing the underlying error here lets the
-	// caller see ErrNoPortForwarding instead of a runtime panic.
+	// Return an untyped nil on error: a typed-nil *Forwarder would pass the
+	// caller's fwd != nil check and panic in UnmapPort.
 	fwd, err := discoverForwarder(ctx, opts...)
 	if err != nil {
 		return nil, err

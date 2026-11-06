@@ -143,9 +143,6 @@ func (r *LocalBackend) stopReverse() {
 	}
 }
 
-// peerShareOn reports whether peer sharing is on. The setting turns on before
-// pauseReverse, so the reverse client a resume starts leaves the manual port
-// to peer sharing.
 func peerShareOn() bool { return settings.GetBool(settings.PeerShareEnabledKey) }
 
 // pauseReverse stops the reverse client, if it runs, and keeps it stopped
