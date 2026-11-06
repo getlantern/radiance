@@ -18,10 +18,22 @@ func init() {
 	publicIP.Store("") // ensure publicIP is type string
 }
 
+// publicIPStale is set when the network changed after publicIP was detected.
+var publicIPStale atomic.Bool
+
 // SetPublicIP stores the detected public IP for inclusion in API requests.
 func SetPublicIP(ip string) {
 	publicIP.Store(ip)
+	publicIPStale.Store(false)
 }
+
+// MarkPublicIPStale records that the network changed since the public IP was
+// last set, until the next SetPublicIP.
+func MarkPublicIPStale() { publicIPStale.Store(true) }
+
+// PublicIPStale reports whether the network changed since the public IP was
+// last set.
+func PublicIPStale() bool { return publicIPStale.Load() }
 
 const (
 	// Common Lantern headers. All are request headers sent to the proxy server

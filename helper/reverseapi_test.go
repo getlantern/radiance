@@ -24,8 +24,8 @@ import (
 const testReverseDevice = "device-under-test"
 
 type reverseCall struct {
-	path, deviceID, override, contentType string
-	body                                  []byte
+	path, deviceID, override, contentType, clientIP string
+	body                                            []byte
 }
 
 func reverseServer(t *testing.T, status int, resp string) (*httptest.Server, *[]reverseCall) {
@@ -35,7 +35,8 @@ func reverseServer(t *testing.T, status int, resp string) (*httptest.Server, *[]
 		body, _ := io.ReadAll(r.Body)
 		calls = append(calls, reverseCall{
 			path: r.URL.Path, deviceID: r.Header.Get(common.DeviceIDHeader),
-			override: r.Header.Get("X-Lantern-Feature-Override"), contentType: r.Header.Get("Content-Type"), body: body,
+			override: r.Header.Get("X-Lantern-Feature-Override"), contentType: r.Header.Get("Content-Type"),
+			clientIP: r.Header.Get(common.ClientIPHeader), body: body,
 		})
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(resp))
@@ -176,4 +177,27 @@ func TestReverseRedirectIsNotFollowedOffOriginOrTraced(t *testing.T) {
 
 	assert.Error(t, api.Deregister(context.Background()))
 	assert.False(t, offOrigin)
+}
+
+// The public IP is detected while the tunnel is down; after a network change
+// it may be the old network's, so reverse requests leave it to lantern-cloud
+// until it is detected again.
+func TestReverseOmitsAStalePublicIP(t *testing.T) {
+	common.SetPublicIP("198.51.100.9")
+	t.Cleanup(func() { common.SetPublicIP("") })
+	srv, calls := reverseServer(t, http.StatusOK, `{}`)
+	api := NewReverseAPI(srv.Client(), srv.URL+"/v1", testReverseDevice)
+
+	_, err := api.Register(context.Background(), nil)
+	require.NoError(t, err)
+	common.MarkPublicIPStale()
+	_, err = api.Routes(context.Background())
+	require.NoError(t, err)
+	common.SetPublicIP("203.0.113.9")
+	require.NoError(t, api.Deregister(context.Background()))
+
+	require.Len(t, *calls, 3)
+	assert.Equal(t, "198.51.100.9", (*calls)[0].clientIP, "before a network change")
+	assert.Empty(t, (*calls)[1].clientIP, "after a network change")
+	assert.Equal(t, "203.0.113.9", (*calls)[2].clientIP, "once detected again")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/helper/reverse"
 )
@@ -185,8 +186,10 @@ func (c *ReverseClient) Stop(ctx context.Context) {
 }
 
 // NetworkChanged forgets the observed addresses, deregisters, rebinds the
-// portal, maps the port again and registers at once.
+// portal, maps the port again and registers at once. It marks the public IP
+// stale, so reverse requests stop carrying it.
 func (c *ReverseClient) NetworkChanged() {
+	common.MarkPublicIPStale()
 	c.netChanged.Store(true)
 	c.wake()
 }

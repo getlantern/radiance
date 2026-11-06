@@ -30,6 +30,7 @@ import (
 
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/helper/reverse"
@@ -934,4 +935,13 @@ func TestReverseDropsARevokedPairingWhileTheAPIFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReverseNetworkChangedMarksThePublicIPStale(t *testing.T) {
+	common.SetPublicIP("198.51.100.9")
+	t.Cleanup(func() { common.SetPublicIP("") })
+	e := newRevEnv(t)
+	require.False(t, common.PublicIPStale())
+	e.c.NetworkChanged()
+	assert.True(t, common.PublicIPStale())
 }

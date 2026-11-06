@@ -135,6 +135,11 @@ func (a *ReverseAPI) do(ctx context.Context, path string, body, out any) error {
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set(common.DeviceIDHeader, a.deviceID)
+	// A stale address would make lantern-cloud advertise routes to the old
+	// network; without it, lantern-cloud uses the address it sees.
+	if common.PublicIPStale() {
+		r.Header.Del(common.ClientIPHeader)
+	}
 	if val := settings.GetString(settings.FeatureOverridesKey); val != "" {
 		r.Header.Set("X-Lantern-Feature-Override", val)
 	}
