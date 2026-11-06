@@ -1639,7 +1639,9 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 
 // settleFriendLocked moves a running tunnel that is not on tag's friend, as
 // one built while the friend had no member is not, onto it. It returns false
-// only if the tunnel refused and tag's fallback was committed instead.
+// only if the tunnel refused and tag's fallback was committed instead. A
+// reverse friend whose outbound is not up yet is not committed away from:
+// the tunnel runs on the fallback until restoreReverseSelection.
 // The caller must hold r.selectionMu.
 func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
@@ -1653,6 +1655,13 @@ func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	}
 	err := r.liveTunnel().SelectServer(tag)
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return true
+	}
+	if r.reverseFriends.has(friend) && !slices.Contains(r.reverseOutbounds(), lbA.ReverseHelperTag(friend)) {
+		fallback := r.fallbackFor(tag)
+		if err := r.liveTunnel().SelectServer(fallback); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			slog.Warn("Failed to switch to the fallback until the reverse outbound is up", "fallback", fallback, "error", err)
+		}
 		return true
 	}
 	slog.Info("Tunnel could not take up the selected personal proxy, falling back",

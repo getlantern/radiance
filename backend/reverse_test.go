@@ -266,3 +266,29 @@ func TestReverseBoxRestoresTheSavedFriendInTheTunnel(t *testing.T) {
 	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
 	assert.Equal(t, friend, tunnel.current())
 }
+
+// A connect to a reverse-only friend comes up before the reverse client has
+// published the friend's outbound. The tunnel runs on the fallback meanwhile,
+// but the saved selection stays the friend's so the outbound restores it.
+func TestReverseConnectKeepsTheFriendUntilItsOutboundIsUp(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	tun := &fakeHelperTunnel{friendless: true, refuseFriend: true}
+	tun.attach(r)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	friend := vpn.PersonalProxySelection(ppFriendB)
+	r.persistSelection(friend)
+	evts := fallbackEvents(t)
+
+	require.NoError(t, r.ConnectVPN(t.Context(), friend))
+	assert.Equal(t, friend, selectedTag(t), "the fallback was saved over the friend")
+	assert.NotEqual(t, friend, tun.current())
+	assert.Empty(t, evts)
+
+	tun.mu.Lock()
+	tun.refuseFriend = false
+	tun.mu.Unlock()
+	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendB)}))
+	assert.Equal(t, friend, tun.current())
+	assert.Equal(t, friend, selectedTag(t))
+}
