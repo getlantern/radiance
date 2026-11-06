@@ -724,6 +724,42 @@ func TestReverseMapsThroughTheTunnelBypass(t *testing.T) {
 	assert.Nil(t, fwd.control, "no control is set with no tunnel")
 }
 
+type quietForwarder struct {
+	*revForwarder
+	quiet bool
+}
+
+func (f *quietForwarder) SetQuietLogs(quiet bool) { f.quiet = quiet }
+
+func TestReverseMapsQuietly(t *testing.T) {
+	e := newRevEnv(t)
+	fwd := &quietForwarder{revForwarder: e.fwd}
+	e.c.cfg.NewForwarder = func(context.Context) (portForwarder, error) { return fwd, nil }
+	e.keys.set("p1")
+	e.cycle(t)
+	assert.Contains(t, e.log.take(), "map")
+	assert.True(t, fwd.quiet)
+}
+
+// Discovery logs the gateway, so only the reverse client's discovery is quiet.
+func TestOnlyTheReverseClientDiscoversQuietly(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var opts []int
+	prev := discoverForwarder
+	discoverForwarder = func(_ context.Context, o ...portforward.Option) (*portforward.Forwarder, error) {
+		opts = append(opts, len(o))
+		return nil, portforward.ErrNoPortForwarding
+	}
+	t.Cleanup(func() { discoverForwarder = prev })
+
+	_, err := NewReverseClient(ReverseConfig{}).cfg.NewForwarder(context.Background())
+	require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+	_, err = newDefaultForwarder(context.Background())
+	require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+	assert.Equal(t, []int{1, 0}, opts)
+}
+
 func TestReverseBoxErrorsRetryNextTick(t *testing.T) {
 	e := newRevEnv(t)
 	e.keys.set("p1")

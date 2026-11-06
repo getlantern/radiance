@@ -133,7 +133,7 @@ func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.NewForwarder == nil {
 		peerShareActive := cfg.PeerShareActive
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			return newForwarder(ctx, reverseManualForwarder(peerShareActive))
+			return newForwarder(ctx, reverseManualForwarder(peerShareActive), portforward.QuietLogs())
 		}
 	}
 	if cfg.Now == nil {
@@ -426,6 +426,10 @@ type localIPControlSetter interface {
 	SetLocalIPControl(control.Func)
 }
 
+type quietLogSetter interface {
+	SetQuietLogs(bool)
+}
+
 func (c *ReverseClient) mapPort(ctx context.Context) bool {
 	s := &c.st
 	fwd, err := c.cfg.NewForwarder(ctx)
@@ -434,6 +438,10 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 		slog.Info("reverse: no port forwarding",
 			"unsupported", errors.Is(err, portforward.ErrNoPortForwarding))
 		return false
+	}
+	// Its log lines would otherwise carry the mapped ports and LAN address.
+	if q, ok := fwd.(quietLogSetter); ok {
+		q.SetQuietLogs(true)
 	}
 	if lf, ok := fwd.(localIPControlSetter); ok && c.cfg.LocalIPControl != nil {
 		if fn := c.cfg.LocalIPControl(); fn != nil {

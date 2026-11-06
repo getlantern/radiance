@@ -1666,18 +1666,22 @@ func reverseManualForwarder(peerShareActive func() bool) portForwarder {
 	return chooseManualForwarder(false)
 }
 
-func newForwarder(ctx context.Context, manual portForwarder) (portForwarder, error) {
+// discoverForwarder is portforward.NewForwarder, a var so tests can see the
+// options it is given.
+var discoverForwarder = portforward.NewForwarder
+
+func newForwarder(ctx context.Context, manual portForwarder, opts ...portforward.Option) (portForwarder, error) {
 	if manual != nil {
 		return manual, nil
 	}
 	// Explicitly return a nil interface on error — `return
-	// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
+	// discoverForwarder(ctx)` collapses the (*Forwarder, error)
 	// pair into a typed-nil interface on failure, which then panics
 	// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
 	// because the nil-check passes (interface has a type) but the
 	// receiver is nil. Surfacing the underlying error here lets the
 	// caller see ErrNoPortForwarding instead of a runtime panic.
-	fwd, err := portforward.NewForwarder(ctx)
+	fwd, err := discoverForwarder(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
