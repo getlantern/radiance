@@ -237,6 +237,8 @@ func (c *ReverseClient) teardown() {
 func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 	s := &c.st
 	now := c.cfg.Now()
+	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
+	c.dropRevoked(ids)
 	gated := now.Before(s.apiNotBefore)
 	if c.netChanged.Swap(false) {
 		s.v4, s.v6 = observedAddr{}, observedAddr{}
@@ -251,7 +253,6 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		c.unmap(ctx)
 		gated = now.Before(s.apiNotBefore)
 	}
-	ids := c.cfg.Keys.IDs(string(helperticket.RoleInviter))
 	if len(ids) == 0 {
 		if !gated {
 			c.deregister(ctx, now)
@@ -337,6 +338,50 @@ func (c *ReverseClient) cycle(ctx context.Context) time.Duration {
 		}
 	}
 	return c.cfg.RegisterInterval
+}
+
+// dropRevoked takes the pairings not in ids, or whose key is gone, out of the
+// portal and reverse outbounds, so a revocation never waits on lantern-cloud.
+func (c *ReverseClient) dropRevoked(ids []string) {
+	s := &c.st
+	authorized := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if _, ok := c.cfg.Keys.Get(id); ok {
+			authorized[id] = true
+		}
+	}
+	held := len(s.tags)
+	maps.DeleteFunc(s.tags, func(id, _ string) bool { return !authorized[id] })
+	if len(authorized) == 0 {
+		c.clearBox()
+		return
+	}
+	if !s.boxSet {
+		return
+	}
+	allowed := make(map[string]bool, len(s.tags))
+	for _, tag := range s.tags {
+		allowed[lbA.ReverseHelperTag(tag)] = true
+	}
+	if s.portal != nil {
+		pairings := maps.Clone(s.portal.Pairings)
+		maps.DeleteFunc(pairings, func(_ [8]byte, tag string) bool { return !allowed[tag] })
+		if len(pairings) != len(s.portal.Pairings) {
+			cfg := *s.portal
+			cfg.Pairings = pairings
+			if err := c.cfg.Box.SetReversePortal(&cfg, c.coverDomain); err != nil {
+				slog.Warn("reverse: could not configure the portal")
+			} else {
+				s.portal = &cfg
+			}
+		}
+	}
+	kept := slices.DeleteFunc(slices.Clone(s.outbounds), func(tag string) bool { return !allowed[tag] })
+	// After a failed set the box may hold a dropped pairing's outbound that
+	// s.outbounds lacks.
+	if len(kept) != len(s.outbounds) || (!s.outboundsKnown && len(s.tags) < held) {
+		c.setOutbounds(kept)
+	}
 }
 
 // untilNextCycle is the register interval, or longer while API calls are

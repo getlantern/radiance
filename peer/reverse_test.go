@@ -556,17 +556,17 @@ func TestReversePairingsChangedDeregistersRemoved(t *testing.T) {
 	e.keys.remove("p1")
 	e.c.PairingsChanged()
 	e.cycle(t)
-	assert.Equal(t, []string{"deregister", "portal", "outbounds:1", "register:1"}, e.log.take())
+	assert.Equal(t, []string{"portal", "outbounds:1", "deregister", "register:1"}, e.log.take())
 	blobs := e.srv.lastRegister()
 	require.Len(t, blobs, 1)
 	assert.Equal(t, "p2", blobs[0].PairingID)
 	openBlob(t, k2, blobs[0], e.clock.Now())
 	assert.Equal(t, []string{lbA.ReverseHelperTag(revTag("p2"))}, e.box.lastOutbounds())
 
-	// The last pairing gone: deregister, clear the box and unmap.
+	// The last pairing gone: clear the box, deregister and unmap.
 	e.keys.remove("p2")
 	e.cycle(t)
-	assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take())
+	assert.Equal(t, []string{"clear-portal", "deregister", "unmap"}, e.log.take())
 	e.cycle(t)
 	assert.Empty(t, e.log.take())
 }
@@ -831,7 +831,7 @@ func TestReverseDeregisterErrorsBackOff(t *testing.T) {
 			e.log.take()
 
 			assert.Equal(t, tc.wait, e.cycle(t))
-			assert.Equal(t, []string{"deregister", "clear-portal", "unmap"}, e.log.take())
+			assert.Equal(t, []string{"clear-portal", "deregister", "unmap"}, e.log.take())
 			for range 3 {
 				e.clock.Advance(tc.wait / 4)
 				e.cycle(t)
@@ -900,4 +900,38 @@ func TestReverseReportsTagsBeforeTheBox(t *testing.T) {
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
 	assert.Len(t, got, 1, "an unchanged map is not reported again")
+}
+
+// A revoked pairing leaves the portal and reverse outbounds on the next
+// cycle even while lantern-cloud fails or is backed off from; the rest stay.
+func TestReverseDropsARevokedPairingWhileTheAPIFails(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			e := newRevEnv(t)
+			e.keys.set("p1")
+			k2 := e.keys.set("p2")
+			e.cycle(t)
+			tag1, tag2 := lbA.ReverseHelperTag(revTag("p1")), lbA.ReverseHelperTag(revTag("p2"))
+			require.ElementsMatch(t, []string{tag1, tag2}, e.box.lastOutbounds())
+
+			e.srv.setFallback(revResponse{status: status})
+			e.clock.Advance(defaultReverseRegisterInterval)
+			e.cycle(t)
+			e.log.take()
+			registers := e.srv.registerCount()
+
+			e.keys.remove("p1")
+			e.c.PairingsChanged()
+			e.cycle(t)
+			assert.Equal(t, []string{tag2}, e.box.lastOutbounds())
+			want := map[[8]byte]string{}
+			for _, sid := range reverse.AcceptedShortIDs(k2, e.clock.Now()) {
+				want[sid] = tag2
+			}
+			assert.Equal(t, want, e.box.lastPortal().Pairings)
+			if status == http.StatusServiceUnavailable {
+				assert.Equal(t, registers, e.srv.registerCount(), "held off")
+			}
+		})
+	}
 }

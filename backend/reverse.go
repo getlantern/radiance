@@ -66,10 +66,17 @@ func (r *LocalBackend) newBridgeClient(deviceID string) *helper.BridgeClient {
 // changes at it.
 func (r *LocalBackend) useReverseClient(c reverseController) {
 	r.reverseClient = c
-	r.helperPairingKeys.SetOnChange(func() {
-		c.PairingsChanged()
+	r.helperPairingKeys.SetOnChange(r.pairingKeysChanged)
+}
+
+func (r *LocalBackend) pairingKeysChanged() {
+	if r.reverseClient != nil {
+		r.reverseClient.PairingsChanged()
 		go r.pruneReverseFriends()
-	})
+	}
+	if r.bridgeClient != nil {
+		r.bridgeClient.PairingsChanged()
+	}
 }
 
 // pruneReverseFriends forgets the reverse friends whose inviter pairing ended,

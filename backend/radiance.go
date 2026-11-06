@@ -276,6 +276,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		r.useReverseClient(r.newReverseClient(platformDeviceID))
 	}
 	r.bridgeClient = r.newBridgeClient(platformDeviceID)
+	r.helperPairingKeys.SetOnChange(r.pairingKeysChanged)
 	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)

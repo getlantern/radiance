@@ -464,3 +464,57 @@ func TestBridgeSetRunningNeverBlocksOnTheAPI(t *testing.T) {
 	h.client.Stop(ctx)
 	assert.NoError(t, ctx.Err(), "stopping cancels the poll in flight")
 }
+
+func (h *bridgeHarness) revoke(pairingID string) {
+	h.keys.mu.Lock()
+	defer h.keys.mu.Unlock()
+	delete(h.keys.keys, pairingID)
+}
+
+// A revoked pairing's bridge closes on the next cycle even while
+// lantern-cloud fails or is backed off from, and the rest keep running.
+func TestBridgeDropsARevokedPairingWhileTheAPIFails(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h := newBridgeHarness(t)
+			r := testRoute(h.clock())
+			h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, r), h.seal(bridgePairingB, r)}, BridgeConfig: bridgeConfig1})
+			h.cycle()
+			box := h.allBoxes()[0]
+			require.Len(t, box.last(), 2)
+
+			h.api.set(status, ReverseRoutesResponse{})
+			h.revoke(bridgePairingA)
+			h.cycle()
+			assert.Equal(t, map[string]*lbO.SamizdatBridgeInboundOptions{
+				BridgeTag(bridgePairingB): h.wantOptions(bridgePairingB, r),
+			}, box.last())
+			assert.False(t, box.isClosed())
+
+			h.revoke(bridgePairingB)
+			h.cycle()
+			assert.True(t, box.isClosed())
+		})
+	}
+}
+
+func TestBridgePairingsChangedDropsWithoutTheAPI(t *testing.T) {
+	h := newBridgeHarness(t)
+	r := testRoute(h.clock())
+	h.api.set(http.StatusOK, ReverseRoutesResponse{Routes: []ReverseBlob{h.seal(bridgePairingA, r), h.seal(bridgePairingB, r)}, BridgeConfig: bridgeConfig1})
+	h.client.SetRunning(context.Background(), true)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.client.Stop(ctx)
+	})
+	require.Eventually(t, func() bool { return len(h.allBoxes()) == 1 && len(h.allBoxes()[0].last()) == 2 }, 5*time.Second, 5*time.Millisecond)
+	calls := h.api.calls.Load()
+
+	h.revoke(bridgePairingA)
+	h.client.PairingsChanged()
+	box := h.allBoxes()[0]
+	require.Eventually(t, func() bool { return len(box.last()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Contains(t, box.last(), BridgeTag(bridgePairingB))
+	assert.Equal(t, calls, h.api.calls.Load())
+}

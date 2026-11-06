@@ -55,7 +55,8 @@ type BridgeConfig struct {
 // to each, counting the bytes relayed into Usage. It is safe for concurrent
 // use.
 type BridgeClient struct {
-	cfg BridgeConfig
+	cfg  BridgeConfig
+	kick chan struct{}
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -75,8 +76,12 @@ type BridgeClient struct {
 type bridgeState struct {
 	box       BridgeBox
 	boxConfig string
-	backoff   time.Duration
-	lastSkips routeSkips
+	// bridges is the set last given to box, by tag. bridgesDirty says box may
+	// hold others, since that SetBridges failed.
+	bridges      map[string]*lbO.SamizdatBridgeInboundOptions
+	bridgesDirty bool
+	backoff      time.Duration
+	lastSkips    routeSkips
 }
 
 // routeSkips counts the routes a poll could not use, by reason.
@@ -92,7 +97,16 @@ func NewBridgeClient(cfg BridgeConfig) *BridgeClient {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = defaultBridgePollInterval
 	}
-	return &BridgeClient{cfg: cfg, pairingByTag: make(map[string]string)}
+	return &BridgeClient{cfg: cfg, kick: make(chan struct{}, 1), pairingByTag: make(map[string]string)}
+}
+
+// PairingsChanged closes, at once and without calling lantern-cloud, the
+// bridges of pairings whose key is gone.
+func (b *BridgeClient) PairingsChanged() {
+	select {
+	case b.kick <- struct{}{}:
+	default:
+	}
 }
 
 // BridgeTag returns the tag of the bridge serving pairingID. It is a pseudonym
@@ -150,22 +164,71 @@ func (b *BridgeClient) run(ctx context.Context, prev <-chan struct{}, done chan 
 	}
 	defer b.closeBox()
 	for {
-		wait := b.cycle(ctx)
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
+		timer := time.NewTimer(b.cycle(ctx))
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-b.kick:
+				b.dropRevoked(b.volunteerIDs())
+			case <-timer.C:
+				break wait
+			}
 		}
 	}
+}
+
+func (b *BridgeClient) volunteerIDs() []string {
+	return b.cfg.Keys.IDs(string(helperticket.RoleVolunteer))
+}
+
+// dropRevoked removes the bridges of pairings not in ids, or whose key is
+// gone, so a revocation never waits on lantern-cloud.
+func (b *BridgeClient) dropRevoked(ids []string) {
+	s := &b.st
+	if s.box == nil {
+		return
+	}
+	kept := make(map[string]*lbO.SamizdatBridgeInboundOptions, len(s.bridges))
+	for _, id := range ids {
+		if _, ok := b.cfg.Keys.Get(id); !ok {
+			continue
+		}
+		tag := BridgeTag(id)
+		if opts, ok := s.bridges[tag]; ok {
+			kept[tag] = opts
+		}
+	}
+	if len(kept) == len(s.bridges) && !s.bridgesDirty {
+		return
+	}
+	if len(kept) == 0 {
+		b.closeBox()
+		return
+	}
+	b.setBridges(kept)
+}
+
+func (b *BridgeClient) setBridges(bridges map[string]*lbO.SamizdatBridgeInboundOptions) {
+	s := &b.st
+	s.bridges = bridges
+	// The errors name tags.
+	if err := s.box.SetBridges(bridges); err != nil {
+		slog.Warn("bridge: could not apply every bridge")
+		s.bridgesDirty = true
+		return
+	}
+	s.bridgesDirty = false
 }
 
 // cycle does one poll and returns how long to wait before the next.
 func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 	s := &b.st
+	ids := b.volunteerIDs()
+	b.dropRevoked(ids)
 	// Only a device with volunteer pairings has routes to fetch.
-	ids := b.cfg.Keys.IDs(string(helperticket.RoleVolunteer))
 	if len(ids) == 0 {
 		b.closeBox()
 		return b.cfg.PollInterval
@@ -198,10 +261,7 @@ func (b *BridgeClient) cycle(ctx context.Context) time.Duration {
 		}
 		s.box, s.boxConfig = box, resp.BridgeConfig
 	}
-	// The errors name tags.
-	if err := s.box.SetBridges(bridges); err != nil {
-		slog.Warn("bridge: could not apply every bridge")
-	}
+	b.setBridges(bridges)
 	return b.cfg.PollInterval
 }
 
@@ -300,6 +360,7 @@ func (b *BridgeClient) closeBox() {
 	}
 	closeBridgeBox(s.box)
 	s.box, s.boxConfig = nil, ""
+	s.bridges, s.bridgesDirty = nil, false
 }
 
 // closeBridgeBox closes box, waiting at most bridgeCloseTimeout for it to
