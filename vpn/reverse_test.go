@@ -10,8 +10,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -247,6 +250,24 @@ func TestReversePortalListeningAfterAFailedRestore(t *testing.T) {
 	assert.True(t, c.ReversePortalListening())
 	require.NoError(t, c.SetReversePortal(nil, ""))
 	assert.False(t, c.ReversePortalListening())
+}
+
+// The kept config owns its buffers, so a caller reusing them after the call
+// cannot change what the next tunnel restores.
+func TestSetReversePortalKeepsItsOwnCopy(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	cfg := testPortalConfig(t, lbA.ReverseHelperTag(testHelper1))
+	want := *cfg
+	want.PrivateKey = slices.Clone(cfg.PrivateKey)
+	want.CertPEM = slices.Clone(cfg.CertPEM)
+	want.KeyPEM = slices.Clone(cfg.KeyPEM)
+	want.Pairings = maps.Clone(cfg.Pairings)
+	require.NoError(t, c.SetReversePortal(cfg, "a.example.com"))
+	clear(cfg.PrivateKey)
+	clear(cfg.CertPEM)
+	clear(cfg.KeyPEM)
+	clear(cfg.Pairings)
+	assert.True(t, reflect.DeepEqual(want, *c.reversePortal), "the kept config changed with the caller's buffers")
 }
 
 // A tunnel starts with the kept reverse outbounds and portal in its options,

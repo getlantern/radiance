@@ -4,6 +4,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -539,10 +540,10 @@ func (c *VPNClient) ReconcileHelpers(helpers servers.ServerList) error {
 // tunnel has none, with probes that fail authentication forwarded to
 // masqueradeDomain. A portal created for another masqueradeDomain is replaced,
 // ending its sessions. A nil cfg removes the portal and every reverse outbound,
-// and forgets the tags SetReverseOutbounds kept. cfg and masqueradeDomain are
-// kept and applied to each tunnel that comes up; with no tunnel running they
-// are only kept, and SetReversePortal returns nil. A configure error leaves
-// them kept.
+// and forgets the tags SetReverseOutbounds kept. A copy of cfg, and
+// masqueradeDomain, are kept and applied to each tunnel that comes up; with no
+// tunnel running they are only kept, and SetReversePortal returns nil. A
+// configure error leaves them kept.
 func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -552,6 +553,9 @@ func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig, masquera
 	} else {
 		kept := *cfg
 		kept.Pairings = maps.Clone(cfg.Pairings)
+		kept.PrivateKey = bytes.Clone(cfg.PrivateKey)
+		kept.CertPEM = bytes.Clone(cfg.CertPEM)
+		kept.KeyPEM = bytes.Clone(cfg.KeyPEM)
 		c.reversePortal, c.reverseMasquerade = &kept, masqueradeDomain
 	}
 	if c.tunnel == nil {
