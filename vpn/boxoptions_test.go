@@ -597,8 +597,10 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 		assert.Equal(t, ManualSelectTag, opts.Experimental.ClashAPI.DefaultMode)
 
 		options, _ := testBoxOptions(t)
-		_, err = buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: PersonalProxiesTag})
-		require.Error(t, err)
+		opts, err = buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: PersonalProxiesTag})
+		require.NoError(t, err, "without helpers the group starts on auto-select")
+		assert.Equal(t, AutoSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+		assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag))
 	})
 
 	t.Run("is reserved", func(t *testing.T) {

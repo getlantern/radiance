@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -108,6 +111,60 @@ func TestHelperRelayClientRoundTrip(t *testing.T) {
 	var ipcErr *Error
 	require.ErrorAs(t, err, &ipcErr)
 	assert.Equal(t, http.StatusBadRequest, ipcErr.Status)
+}
+
+func TestHelperPairingKeysEndpoint(t *testing.T) {
+	api := newLocalAPI(&backend.LocalBackend{}, false)
+	w := serveHelper(t, api, http.MethodGet, helperPairingKeysEndpoint, nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+
+	r := httptest.NewRequest(http.MethodPost, helperPairingKeysEndpoint, strings.NewReader(`{"keys":{"secret-pairing":`))
+	w = httptest.NewRecorder()
+	api.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, "bad helper pairing keys request\n", w.Body.String(), "the error is fixed text")
+}
+
+// Keys pushed by ipc.Client replace the backend's whole set, and neither the
+// keys nor the pairing IDs reach spans, even when the body is bad.
+func TestHelperPairingKeysClientRoundTrip(t *testing.T) {
+	mem := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(mem))
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prevTP); _ = tp.Shutdown(context.Background()) })
+
+	store := &helper.PairingKeys{}
+	b := &backend.LocalBackend{}
+	b.UseHelperPairingKeysForTest(store)
+	api := newLocalAPI(b, false)
+	c := newClient()
+	c.http.Transport = localTransport{api: api}
+
+	key := bytes.Repeat([]byte{0xA7}, 32)
+	err := c.SetHelperPairingKeys(context.Background(), map[string]helper.PairingKey{
+		"secret-pairing-inviter":   {Key: key, Role: "inviter"},
+		"secret-pairing-volunteer": {Key: key, Role: "volunteer"},
+	})
+	require.NoError(t, err)
+	got, ok := store.Get("secret-pairing-inviter")
+	require.True(t, ok)
+	assert.Equal(t, key, got)
+	assert.Equal(t, []string{"secret-pairing-volunteer"}, store.IDs("volunteer"))
+	assert.Same(t, store, b.HelperPairingKeys())
+
+	require.NoError(t, c.SetHelperPairingKeys(context.Background(), nil))
+	assert.Empty(t, store.IDs("inviter"), "an empty push clears the set")
+
+	r := httptest.NewRequest(http.MethodPost, helperPairingKeysEndpoint,
+		strings.NewReader(`{"keys":{"secret-pairing-bad":{"key":"`+base64.StdEncoding.EncodeToString(key)+`","role":`))
+	api.ServeHTTP(httptest.NewRecorder(), r)
+
+	for _, leak := range []string{"secret-pairing", base64.StdEncoding.EncodeToString(key), "pairing-keys"} {
+		for _, s := range mem.GetSpans() {
+			assert.NotContains(t, fmt.Sprint(s.Name, s.Attributes, s.Events), leak)
+		}
+	}
 }
 
 func TestHelperActivityEndpoint(t *testing.T) {
@@ -218,6 +275,8 @@ func TestLoggerSkipsHelperRoutes(t *testing.T) {
 	assert.False(t, ok, "personal proxies")
 	_, ok = routeOf(http.MethodGet, helperLiveEndpoint)
 	assert.False(t, ok, "live")
+	_, ok = routeOf(http.MethodPost, helperPairingKeysEndpoint)
+	assert.False(t, ok, "pairing keys")
 	route, ok := routeOf(http.MethodGet, "/not-a-route")
 	assert.True(t, ok)
 	assert.Equal(t, "/not-a-route", route)

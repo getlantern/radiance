@@ -67,13 +67,14 @@ func personalProxyOutbound(members []string) O.Outbound {
 // personalProxyStartMembers returns the members of friend's group in a tunnel
 // built with outbounds, whose helper tags are helpers.
 func personalProxyStartMembers(friend string, helpers []string, outbounds []O.Outbound, rooms bool) []string {
+	reverse := lbA.ReverseHelperTag(friend)
 	var members []string
 	for _, out := range outbounds {
 		if !slices.Contains(helpers, out.Tag) || slices.Contains(members, out.Tag) {
 			continue
 		}
 		consumer := out.Type == roomsConsumerType
-		if (consumer && rooms) || (!consumer && out.Tag == friend) {
+		if (consumer && rooms) || (!consumer && (out.Tag == friend || out.Tag == reverse)) {
 			members = append(members, out.Tag)
 		}
 	}
@@ -130,14 +131,18 @@ func (t *tunnel) roomsConsumersLocked(selector lbA.MutableOutboundGroup) []strin
 }
 
 // personalProxyMembersLocked returns what friend's group holds now: its direct
-// outbound if the selector offers it, and the rooms consumers if they may reach
-// it. The caller must hold t.outboundMu.
+// and reverse outbounds if the selector offers them, and the rooms consumers if
+// they may reach it. The caller must hold t.outboundMu.
 func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, friend string) []string {
 	var members []string
 	if slices.Contains(selector.All(), friend) {
 		if out := t.liveOutbound(friend); out != nil && out.Type() != roomsConsumerType {
 			members = append(members, friend)
 		}
+	}
+	if reverse := lbA.ReverseHelperTag(friend); reverse != "" && slices.Contains(selector.All(), reverse) &&
+		t.liveOutbound(reverse) != nil {
+		members = append(members, reverse)
 	}
 	if roomsReachable(t.inviterTickets, friend) {
 		members = append(members, t.roomsConsumersLocked(selector)...)
@@ -450,6 +455,9 @@ type PersonalProxyStatus struct {
 	// Direct reports whether the config carries the friend's direct outbound,
 	// which it does while the friend has a live route.
 	Direct bool `json:"direct"`
+	// Reverse reports whether the VPN client keeps the friend's reverse tag,
+	// whose outbound carries traffic over the session the friend dials in.
+	Reverse bool `json:"reverse"`
 	// Rooms reports whether this device has a rooms consumer and an inviter
 	// ticket for the friend's pairing.
 	Rooms bool `json:"rooms"`
