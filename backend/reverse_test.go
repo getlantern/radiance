@@ -556,6 +556,29 @@ func TestReverseGateSeedDoesNotOverwriteANewerStatus(t *testing.T) {
 	assert.False(t, g.vpnUp)
 }
 
+// After Close neither a queued prune nor a late record saves the friends, so
+// neither overwrites a replacement backend's.
+func TestReverseFriendsAreNotSavedAfterClose(t *testing.T) {
+	dataDir := t.TempDir()
+	r, _ := newReverseFriendBackend(t, dataDir)
+	r.stopReverse()
+	r.selectionMu.Lock()
+	r.selectionClosed = true
+	r.selectionMu.Unlock()
+	saved := func() *reverseFriends { return loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName)) }
+	require.True(t, saved().has(ppFriendB))
+
+	r.helperPairingKeys.Set(map[string]helper.PairingKey{
+		"pairing-other": {Key: bytes.Repeat([]byte{7}, 32), Role: string(helperticket.RoleInviter)},
+	})
+	r.pruneReverseFriends()
+	assert.True(t, saved().has(ppFriendB), "a prune after Close saved the friends")
+
+	r.reverseFriends.setTags(map[string]string{"pairing-other": ppFriendA})
+	require.NoError(t, reverseBox{r: r}.SetReverseOutbounds([]string{lbA.ReverseHelperTag(ppFriendA)}))
+	assert.False(t, saved().has(ppFriendA), "a record after Close saved the friends")
+}
+
 // A pairing revoked after the reverse client took its tags, and pruned before
 // they were recorded, is not recorded back.
 func TestReverseFriendsRecordSkipsARevokedPairing(t *testing.T) {

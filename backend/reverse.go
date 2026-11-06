@@ -87,16 +87,15 @@ func (r *LocalBackend) inviterPairingIDs() []string {
 }
 
 // pruneReverseFriends forgets the reverse friends whose inviter pairing ended,
-// and with them a selection that only they kept.
+// and with them a selection that only they kept. After Close it does nothing,
+// so it never saves over a replacement backend's friends.
 func (r *LocalBackend) pruneReverseFriends() {
-	if !r.reverseFriends.prune(r.inviterPairingIDs) {
-		return
-	}
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
-	if !r.selectionClosed {
-		r.clearSelectedIfMissingLocked()
+	if r.selectionClosed || !r.reverseFriends.prune(r.inviterPairingIDs) {
+		return
 	}
+	r.clearSelectedIfMissingLocked()
 }
 
 // startReverse runs the reverse client while the VPN is connected and the
@@ -330,8 +329,12 @@ func (b reverseBox) SetReverseOutbounds(tags []string) error {
 		return err
 	}
 	if len(tags) > 0 {
-		b.r.reverseFriends.record(tags, b.r.inviterPairingIDs)
-		b.r.restoreSavedSelection()
+		b.r.selectionMu.Lock()
+		defer b.r.selectionMu.Unlock()
+		if !b.r.selectionClosed {
+			b.r.reverseFriends.record(tags, b.r.inviterPairingIDs)
+			b.r.restoreSavedSelectionLocked()
+		}
 	}
 	return nil
 }
