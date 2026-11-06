@@ -91,6 +91,16 @@ func TestPairingKeysOnChangeFiresOnlyOnAChange(t *testing.T) {
 	assert.Equal(t, 4, calls)
 }
 
+func TestPairingKeysOnChangeFiresOnTheFirstSetEvenIfEmpty(t *testing.T) {
+	var p PairingKeys
+	calls := 0
+	p.SetOnChange(func() { calls++ })
+	p.Set(nil)
+	assert.Equal(t, 1, calls, "the first set is authoritative")
+	p.Set(map[string]PairingKey{})
+	assert.Equal(t, 1, calls)
+}
+
 func TestPairingKeysOnChangeRunsWithoutTheLock(t *testing.T) {
 	var p PairingKeys
 	var ids []string

@@ -238,6 +238,23 @@ func TestReverseKeepsASelectionAcrossALaunch(t *testing.T) {
 	assert.Equal(t, vpn.PersonalProxySelection(ppFriendB), selectedTag(t))
 }
 
+// A pairing that ended while the backend was stopped leaves friends in
+// reverse-friends.json, which the first, empty, set of pairing keys prunes.
+func TestReversePrunesPersistedFriendsOnTheFirstPairingKeys(t *testing.T) {
+	dataDir := t.TempDir()
+	r, _ := newReverseFriendBackend(t, dataDir)
+	r.stopReverse()
+
+	next, _ := newUnstartedReverseTestBackend(t, dataDir, false)
+	next.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
+	require.True(t, next.reverseFriends.has(ppFriendB))
+	require.Equal(t, vpn.PersonalProxySelection(ppFriendB), selectedTag(t))
+
+	next.SetHelperPairingKeys(nil)
+	require.Eventually(t, func() bool { return !next.reverseFriends.has(ppFriendB) }, time.Second, 5*time.Millisecond)
+	assert.Eventually(t, func() bool { return selectedTag(t) == vpn.AutoSelectTag }, time.Second, 5*time.Millisecond)
+}
+
 func TestReverseClearsASelectionWhenItsPairingEnds(t *testing.T) {
 	r, fake := newReverseFriendBackend(t, t.TempDir())
 	emitVPNStatus(vpn.Disconnected)

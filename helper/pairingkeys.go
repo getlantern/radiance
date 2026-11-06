@@ -24,13 +24,15 @@ type PairingKey struct {
 type PairingKeys struct {
 	mu       sync.Mutex
 	keys     map[string]PairingKey
+	set      bool
 	onChange func()
 }
 
 // Set replaces every key with keys, dropping entries whose Key is not a
 // chacha20poly1305 key or whose Role is neither inviter nor volunteer. It
-// copies keys. Only when the stored set changed does it run the change
-// callback, synchronously and without p's lock held, before returning.
+// copies keys. Only on the first Set, which may be empty, or when the stored
+// set changed does it run the change callback, synchronously and without p's
+// lock held, before returning.
 func (p *PairingKeys) Set(keys map[string]PairingKey) {
 	if p == nil {
 		return
@@ -43,13 +45,13 @@ func (p *PairingKeys) Set(keys map[string]PairingKey) {
 		next[id] = PairingKey{Key: bytes.Clone(k.Key), Role: k.Role}
 	}
 	p.mu.Lock()
-	if maps.EqualFunc(p.keys, next, func(a, b PairingKey) bool {
+	if p.set && maps.EqualFunc(p.keys, next, func(a, b PairingKey) bool {
 		return a.Role == b.Role && bytes.Equal(a.Key, b.Key)
 	}) {
 		p.mu.Unlock()
 		return
 	}
-	p.keys = next
+	p.keys, p.set = next, true
 	onChange := p.onChange
 	p.mu.Unlock()
 	if onChange != nil {
@@ -92,8 +94,8 @@ func (p *PairingKeys) IDs(role string) []string {
 	return ids
 }
 
-// SetOnChange sets f to run after each Set that changes the stored keys. f runs
-// synchronously on Set's goroutine and must not block.
+// SetOnChange sets f to run after the first Set and each Set that changes the
+// stored keys. f runs synchronously on Set's goroutine and must not block.
 func (p *PairingKeys) SetOnChange(f func()) {
 	if p == nil {
 		return
