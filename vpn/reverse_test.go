@@ -233,7 +233,9 @@ func TestReversePortalListeningAfterAFailedRestore(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 	assert.False(t, c.ReversePortalListening(), "no tunnel")
 	occupied, err := net.Listen("tcp", "[::]:0")
-	require.NoError(t, err)
+	if err != nil {
+		t.Skipf("no IPv6 listener to block the portal's port: %v", err)
+	}
 	cfg := testPortalConfig(t, lbA.ReverseHelperTag(testHelper1))
 	cfg.ListenPort = uint16(occupied.Addr().(*net.TCPAddr).Port)
 	require.NoError(t, c.SetReversePortal(cfg, "a.example.com"))
