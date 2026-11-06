@@ -47,7 +47,7 @@ func TestBuildOptions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			opts, err := buildOptions(tt.boxOptions)
+			opts, _, err := buildOptions(tt.boxOptions)
 			if tt.shouldError {
 				require.Error(t, err, "expected error but got none")
 				return
@@ -115,7 +115,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			Options:      cfg.Options,
 			SmartRouting: cfg.SmartRouting,
 		}
-		options, err := buildOptions(boxOptions)
+		options, _, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check rules, rulesets, and outbounds are correctly built into options
 		assert.Subset(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules, "missing smart routing rule")
@@ -130,7 +130,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 			Options:      cfg.Options,
 			SmartRouting: cfg.SmartRouting,
 		}
-		options, err := buildOptions(boxOptions)
+		options, _, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// sr-direct rule and ruleset should still be present (category still has outbounds)
 		assert.Contains(t, options.Route.Rules, wantSmartRoutingOpts.Route.Rules[0], "missing sr-direct rule")
@@ -151,7 +151,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 		// buildOptions round-trips the options through JSON, which lets sing-box
 		// fill in the reject action's default method; ToOptions leaves it unset.
 		wantRule.DefaultOptions.RejectOptions.Method = C.RuleActionRejectMethodDefault
-		options, err := buildOptions(boxOptions)
+		options, _, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		// check reject rule and rulesets are correctly built into options
 		assert.Contains(t, options.Route.Rules, wantRule, "missing ad block rule")
@@ -169,7 +169,7 @@ func TestBuildOptions_BanditURLOverrides(t *testing.T) {
 		Options:            cfg.Options,
 		BanditURLOverrides: overrides,
 	}
-	opts, err := buildOptions(boxOptions)
+	opts, _, err := buildOptions(boxOptions)
 	require.NoError(t, err)
 
 	out := findOutbound(opts.Outbounds, AutoSelectTag)
@@ -189,7 +189,7 @@ func TestBuildOptions_DropsHostAccess(t *testing.T) {
 	cfg.Options.Endpoints = append(cfg.Options.Endpoints, O.Endpoint{
 		Tag: "wg-listen", Type: C.TypeWireGuard, Options: &O.WireGuardEndpointOptions{ListenPort: 51820, Name: "../../tmp/x"},
 	})
-	opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+	opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
 	require.NoError(t, err)
 
 	assert.False(t, slices.ContainsFunc(opts.Endpoints, func(e O.Endpoint) bool { return e.Tag == "wg-listen" }))
@@ -201,6 +201,14 @@ func TestBuildOptions_DropsHostAccess(t *testing.T) {
 		"a dropped outbound must not be referenced by the selector")
 }
 
+func TestBuildOptions_DropsDeniedServices(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Options.Services = []O.Service{{Type: C.TypeSSMAPI, Tag: "ssm", Options: &O.SSMAPIServiceOptions{}}}
+	opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+	require.NoError(t, err)
+	assert.Empty(t, opts.Services)
+}
+
 func TestBuildOptions_RejectsHostAccessDNS(t *testing.T) {
 	cfg := testConfig(t)
 	var dns O.DNSOptions
@@ -209,12 +217,12 @@ func TestBuildOptions_RejectsHostAccessDNS(t *testing.T) {
 	}
 	dns.Servers = append(slices.Clone(dns.Servers), O.DNSServerOptions{
 		Type: C.DNSTypeUDP, Tag: "planted", Options: &O.RemoteDNSServerOptions{
-			RawLocalDNSServerOptions: O.RawLocalDNSServerOptions{DialerOptions: O.DialerOptions{NetNs: "/proc/1/ns/net"}},
+			RawLocalDNSServerOptions: O.RawLocalDNSServerOptions{DialerOptions: O.DialerOptions{AbstractDialerOptions: O.AbstractDialerOptions{NetNs: "/proc/1/ns/net"}}},
 			DNSServerAddressOptions:  O.DNSServerAddressOptions{Server: "192.0.2.1"},
 		},
 	})
 	cfg.Options.DNS = &dns
-	_, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
+	_, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: cfg.Options})
 	require.ErrorIs(t, err, hostaccess.ErrDenied)
 }
 
@@ -493,7 +501,7 @@ func TestHasGlobalIPv6Using(t *testing.T) {
 // QUIC bound for the proxy is rejected).
 func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	cfg := testConfig(t)
-	opts, err := buildOptions(BoxOptions{
+	opts, _, err := buildOptions(BoxOptions{
 		BasePath:     t.TempDir(),
 		Options:      cfg.Options,
 		SmartRouting: cfg.SmartRouting,
@@ -568,7 +576,7 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 	}
 
 	t.Run("groups every helper outbound and is offered by the manual selector", func(t *testing.T) {
-		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t)})
+		opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t)})
 		require.NoError(t, err)
 		group := findOutbound(opts.Outbounds, PersonalProxiesTag)
 		require.NotNil(t, group)
@@ -583,7 +591,7 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 
 	t.Run("does not exist without helper outbounds", func(t *testing.T) {
 		options, _ := testBoxOptions(t)
-		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
+		opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
 		require.NoError(t, err)
 		assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag), "a url-test group must never start empty")
 		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
@@ -591,16 +599,16 @@ func TestBuildOptions_PersonalProxies(t *testing.T) {
 	})
 
 	t.Run("can be the initial selection while helpers exist", func(t *testing.T) {
-		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t), InitialServer: PersonalProxiesTag})
+		opts, mode, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: withHelpers(t), InitialServer: PersonalProxiesTag})
 		require.NoError(t, err)
 		manual := findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
 		assert.Equal(t, PersonalProxiesTag, manual.Outbounds[0])
-		assert.Equal(t, ManualSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+		assert.Equal(t, ManualSelectTag, mode)
 
 		options, _ := testBoxOptions(t)
-		opts, err = buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: PersonalProxiesTag})
+		opts, mode, err = buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: PersonalProxiesTag})
 		require.NoError(t, err, "without helpers the group starts on auto-select")
-		assert.Equal(t, AutoSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+		assert.Equal(t, AutoSelectTag, mode)
 		assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag))
 	})
 
@@ -629,7 +637,7 @@ func TestBuildOptions_AutoSelectOptions(t *testing.T) {
 		"outbounds": ["server-sent"], "url": "https://server.example/", "url_overrides": {"x": "y"},
 		"probe_timeouts_ms": {"hysteria2x": 3000}, "probe_concurrency": 4, "switch_tolerance_percent": 150
 	}`))
-	opts, err := buildOptions(BoxOptions{
+	opts, _, err := buildOptions(BoxOptions{
 		BasePath:           t.TempDir(),
 		Options:            cfg.Options,
 		BanditURLOverrides: overrides,

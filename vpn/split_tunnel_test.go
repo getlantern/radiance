@@ -17,6 +17,7 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -377,7 +378,7 @@ func TestMatch(t *testing.T) {
 	}
 	rsetOpts := O.RuleSet{
 		Type: C.RuleSetTypeLocal,
-		Tag:  splitTunnelTag,
+		Tag:  badoption.Listable[string]{splitTunnelTag},
 		LocalOptions: O.LocalRuleSet{
 			Path: st.ruleFile,
 		},
@@ -391,7 +392,7 @@ func TestMatch(t *testing.T) {
 	service.MustRegister[adapter.Router](ctx, router)
 	service.MustRegister(ctx, new(adapter.NetworkManager))
 
-	ruleSet, err := R.NewRuleSet(ctx, logger, rsetOpts)
+	ruleSet, err := R.NewRuleSet(ctx, logger, splitTunnelTag, rsetOpts)
 	require.NoError(t, err)
 	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
 	defer ruleSet.Close()
@@ -448,7 +449,7 @@ func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitR
 	}
 	rsetOpts := O.RuleSet{
 		Type:         C.RuleSetTypeLocal,
-		Tag:          splitTunnelTag,
+		Tag:          badoption.Listable[string]{splitTunnelTag},
 		LocalOptions: O.LocalRuleSet{Path: st.ruleFile},
 		Format:       C.RuleSetFormatSource,
 	}
@@ -459,7 +460,7 @@ func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitR
 	service.MustRegister[adapter.Router](ctx, router)
 	service.MustRegister(ctx, new(adapter.NetworkManager))
 
-	ruleSet, err := R.NewRuleSet(ctx, logger, rsetOpts)
+	ruleSet, err := R.NewRuleSet(ctx, logger, splitTunnelTag, rsetOpts)
 	require.NoError(t, err)
 	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
 	t.Cleanup(func() { ruleSet.Close() })

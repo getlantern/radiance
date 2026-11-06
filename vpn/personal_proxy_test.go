@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -122,7 +124,7 @@ func personalProxyMembers(tun *tunnel) []string {
 // check starts (a race with Remove), and every group checks as it starts.
 func awaitFirstProbe(t *testing.T, tun *tunnel, tag string) {
 	t.Helper()
-	history := tun.clashServer.HistoryStorage()
+	history := service.PtrFromContext[urltest.HistoryStorage](tun.ctx)
 	require.Eventually(t, func() bool { return history.LoadURLTestHistory(tag) != nil },
 		5*time.Second, 5*time.Millisecond)
 }
@@ -157,7 +159,7 @@ func TestPersonalProxyGroupFollowsSelection(t *testing.T) {
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
 	assert.ElementsMatch(t, []string{friendA, consumer}, personalProxyMembers(tun))
 	assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
-	assert.Equal(t, ManualSelectTag, tun.clashServer.selectedMode())
+	assert.Equal(t, ManualSelectTag, tun.clashModeManager.selectedMode())
 	assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets(), "tickets for other pairings are filtered")
 	assert.NotSame(t, consumerOut, tun.liveOutbound(consumer), "the consumer reconnects narrowed")
 	assert.ElementsMatch(t, []string{friendA, friendB, consumer}, personalProxiesMembers(tun),
@@ -182,7 +184,7 @@ func TestPersonalProxyGroupFollowsSelection(t *testing.T) {
 	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
 	require.NoError(t, tun.selectAuto())
 	assert.Nil(t, tun.personalProxyGroup(), "auto-select deselects too")
-	assert.Equal(t, AutoSelectTag, tun.clashServer.selectedMode())
+	assert.Equal(t, AutoSelectTag, tun.clashModeManager.selectedMode())
 	assert.Len(t, tun.roomTickets(), 2)
 }
 
@@ -192,7 +194,7 @@ func TestPersonalProxySelectionNeedsAMember(t *testing.T) {
 	require.ErrorIs(t, tun.selectOutbound(PersonalProxySelection(friendC)), ErrPersonalProxyUnavailable)
 	require.ErrorIs(t, tun.selectOutbound(PersonalProxyTag), ErrPersonalProxyUnavailable)
 	assert.Nil(t, tun.personalProxyGroup())
-	assert.Equal(t, AutoSelectTag, tun.clashServer.selectedMode(), "a refused selection changes nothing")
+	assert.Equal(t, AutoSelectTag, tun.clashModeManager.selectedMode(), "a refused selection changes nothing")
 	assert.Same(t, consumerOut, tun.liveOutbound(consumer))
 
 	// A rooms-only friend: a ticket and the consumer, no direct outbound.
@@ -230,7 +232,7 @@ func TestPersonalProxyGroupLastMemberFallsBackToPersonalProxies(t *testing.T) {
 	assert.Nil(t, tun.personalProxyGroup())
 	assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
 	assert.Equal(t, PersonalProxiesTag, selectedInManual(t, tun))
-	assert.Equal(t, ManualSelectTag, tun.clashServer.selectedMode())
+	assert.Equal(t, ManualSelectTag, tun.clashModeManager.selectedMode())
 	assert.Len(t, tun.roomTickets(), 1, "narrowing ends")
 }
 
@@ -244,7 +246,7 @@ func TestPersonalProxyGroupLastMemberFallsBackToAuto(t *testing.T) {
 	require.NoError(t, tun.updateOutbounds(servers.ServerList{Servers: []*servers.Server{directServer("lantern-1")}}))
 	assert.Nil(t, tun.personalProxyGroup())
 	assert.Nil(t, tun.personalProxiesGroup())
-	assert.Equal(t, AutoSelectTag, tun.clashServer.selectedMode())
+	assert.Equal(t, AutoSelectTag, tun.clashModeManager.selectedMode())
 }
 
 // A ticket-key rotation changes every tag: the selected friend's tag leaves
@@ -286,7 +288,7 @@ func TestPersonalProxyMemberReportsTheDirectOutbound(t *testing.T) {
 	assert.Equal(t, PersonalProxyMember{Direct: true}, tun.personalProxyMember(friendA))
 	assert.Equal(t, PersonalProxyMember{}, tun.personalProxyMember(consumer))
 	assert.Equal(t, PersonalProxyMember{}, tun.personalProxyMember(friendB))
-	tun.clashServer.HistoryStorage().StoreURLTestHistory(friendA, &adapter.URLTestHistory{Delay: 42})
+	service.PtrFromContext[urltest.HistoryStorage](tun.ctx).StoreURLTestHistory(friendA, &adapter.URLTestHistory{Delay: 42})
 	assert.Equal(t, PersonalProxyMember{Direct: true, DirectDelay: 42}, tun.personalProxyMember(friendA))
 }
 
@@ -311,25 +313,25 @@ func TestBuildOptions_PersonalProxy(t *testing.T) {
 		assert.Equal(t, lbC.TypeMutableURLTest, group.Type)
 		return group.Options.(*lbO.MutableURLTestOutboundOptions).Outbounds
 	}
-	build := func(t *testing.T, options O.Options, rooms bool) (O.Options, *lbO.MutableSelectorOutboundOptions) {
-		opts, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options,
+	build := func(t *testing.T, options O.Options, rooms bool) (O.Options, string, *lbO.MutableSelectorOutboundOptions) {
+		opts, mode, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options,
 			InitialServer: PersonalProxySelection(friendA), personalProxyRooms: rooms})
 		require.NoError(t, err)
-		return opts, findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
+		return opts, mode, findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
 	}
 
 	t.Run("starts selected over the friend's members", func(t *testing.T) {
-		opts, manual := build(t, withHelpers(t, friendA, friendB, consumer), true)
+		opts, mode, manual := build(t, withHelpers(t, friendA, friendB, consumer), true)
 		assert.Equal(t, []string{friendA, consumer}, members(opts))
 		assert.Equal(t, PersonalProxyTag, manual.Outbounds[0])
-		assert.Equal(t, ManualSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+		assert.Equal(t, ManualSelectTag, mode)
 
-		opts, _ = build(t, withHelpers(t, friendA, friendB, consumer), false)
+		opts, _, _ = build(t, withHelpers(t, friendA, friendB, consumer), false)
 		assert.Equal(t, []string{friendA}, members(opts), "no rooms ticket, no consumer")
 	})
 
 	t.Run("falls back to the personal proxies group without members", func(t *testing.T) {
-		opts, manual := build(t, withHelpers(t, friendB, consumer), false)
+		opts, _, manual := build(t, withHelpers(t, friendB, consumer), false)
 		assert.Nil(t, members(opts))
 		assert.NotContains(t, manual.Outbounds, PersonalProxyTag)
 		assert.Equal(t, PersonalProxiesTag, manual.Outbounds[0])
@@ -337,9 +339,9 @@ func TestBuildOptions_PersonalProxy(t *testing.T) {
 
 	t.Run("falls back to auto-select without helpers", func(t *testing.T) {
 		options, _ := testBoxOptions(t)
-		opts, _ := build(t, options, true)
+		opts, mode, _ := build(t, options, true)
 		assert.Nil(t, members(opts))
-		assert.Equal(t, AutoSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+		assert.Equal(t, AutoSelectTag, mode)
 	})
 }
 
@@ -349,11 +351,11 @@ func TestNewTunnelNarrowsToTheInitialFriend(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), nil, nil)
 	tickets := &fakeInviterTickets{byFriend: map[string][]string{friendA: {"a"}, friendB: {"b"}}}
 	c.SetInviterTickets(tickets)
-	tn := c.newTunnel(BoxOptions{InitialServer: PersonalProxySelection(friendA)})
+	tn := c.newTunnel(BoxOptions{InitialServer: PersonalProxySelection(friendA)}, AutoSelectTag)
 	assert.Equal(t, []string{"a"}, tn.roomTickets())
 	assert.True(t, c.withPersonalProxyRooms(BoxOptions{InitialServer: PersonalProxySelection(friendA)}).personalProxyRooms)
 	assert.False(t, c.withPersonalProxyRooms(BoxOptions{InitialServer: PersonalProxySelection(friendC)}).personalProxyRooms)
-	assert.Equal(t, []string{"a", "b"}, c.newTunnel(BoxOptions{InitialServer: friendA}).roomTickets())
+	assert.Equal(t, []string{"a", "b"}, c.newTunnel(BoxOptions{InitialServer: friendA}, AutoSelectTag).roomTickets())
 }
 
 // The group the tunnel creates at runtime carries traffic.
@@ -509,7 +511,7 @@ func requireClosed(t *testing.T, conn net.Conn, msg string) {
 func awaitRoutedLeaf(t *testing.T, tun *tunnel, leaf string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		for _, c := range tun.clashServer.connTracker.activeConnections() {
+		for _, c := range tun.connTracker.activeConnections() {
 			if slices.Contains(c.ChainList, PersonalProxyTag) && (leaf == "" || strings.HasSuffix(c.Outbound, "/"+leaf)) {
 				return true
 			}
@@ -574,7 +576,7 @@ func TestPersonalProxyFailedSwitchRestoresThePreviousSelection(t *testing.T) {
 				assert.Equal(t, []string{"ticket-" + friendA}, tun.roomTickets())
 				assert.ElementsMatch(t, members, personalProxyMembers(tun))
 				assert.Equal(t, PersonalProxyTag, selectedInManual(t, tun))
-				assert.Equal(t, ManualSelectTag, tun.clashServer.selectedMode())
+				assert.Equal(t, ManualSelectTag, tun.clashModeManager.selectedMode())
 			}
 			assertSelected()
 			requireEcho(t, viaA)
@@ -617,7 +619,7 @@ func TestPersonalProxyFailedFirstSelectionRestoresTheTunnel(t *testing.T) {
 				assert.Nil(t, tun.personalProxyGroup())
 				assert.NotContains(t, selectorMembers(t, tun, ManualSelectTag), PersonalProxyTag)
 				assert.Equal(t, before, selectedInManual(t, tun))
-				assert.Equal(t, mode, tun.clashServer.selectedMode())
+				assert.Equal(t, mode, tun.clashModeManager.selectedMode())
 				if mode == AutoSelectTag {
 					requireEcho(t, flow)
 				}

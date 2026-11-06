@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 	lbO "github.com/getlantern/lantern-box/option"
+
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 // testBridgeConfig passes validateAbuseRules with inline rule sets, so a box
@@ -62,6 +65,13 @@ func TestBridgeBoxOptionsBypassTheVPNAndListenNowhere(t *testing.T) {
 
 	_, err = bridgeBoxOptions(box.Context(context.Background()), `{"route":`)
 	assert.Error(t, err)
+}
+
+func TestBridgeBoxOptionsDenyHostAccess(t *testing.T) {
+	cfg := strings.Replace(testBridgeConfig, `{"action": "reject", "port": [25, 465, 587]}`,
+		`{"action": "reject", "port": [25, 465, 587]}, {"action": "route-options", "tls_spoof": "example.com"}`, 1)
+	_, err := bridgeBoxOptions(box.Context(context.Background()), cfg)
+	assert.ErrorIs(t, err, hostaccess.ErrDenied)
 }
 
 // A config without direct mode's abuse rules builds no box, so no bridge can

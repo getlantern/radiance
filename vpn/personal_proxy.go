@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -157,7 +158,7 @@ func (t *tunnel) personalProxyMembersLocked(selector lbA.MutableOutboundGroup, f
 // On any failure but errLibboxClosed the selection is refused and the previous
 // one restored. The caller must hold t.outboundMu.
 func (t *tunnel) selectPersonalProxyLocked(friend string) error {
-	if t.mutGrpMgr == nil || t.outboundMgr == nil || t.clashServer == nil {
+	if t.mutGrpMgr == nil || t.outboundMgr == nil || t.clashModeManager == nil {
 		return errors.New("tunnel not running")
 	}
 	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
@@ -169,7 +170,7 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	if len(members) == 0 {
 		return ErrPersonalProxyUnavailable
 	}
-	prev, prevMode, prevSelected := t.personalProxy.Load(), t.clashServer.selectedMode(), selector.Now()
+	prev, prevMode, prevSelected := t.personalProxy.Load(), t.clashModeManager.selectedMode(), selector.Now()
 	changed := t.selectedFriend() != friend
 	if changed {
 		t.personalProxy.Store(&friend)
@@ -193,7 +194,7 @@ func (t *tunnel) selectPersonalProxyLocked(friend string) error {
 	// member selected before it dialed, not the one that carried it, so none
 	// is kept.
 	if changed {
-		t.clashServer.connTracker.closeThrough(PersonalProxyTag)
+		t.connTracker.closeThrough(PersonalProxyTag)
 	}
 	return nil
 }
@@ -494,8 +495,8 @@ func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
 		return m
 	}
 	m.Direct = true
-	if t.clashServer != nil {
-		if h := t.clashServer.HistoryStorage(); h != nil {
+	if t.ctx != nil {
+		if h := service.PtrFromContext[urltest.HistoryStorage](t.ctx); h != nil {
 			if rec := h.LoadURLTestHistory(friend); rec != nil {
 				m.DirectDelay = rec.Delay
 			}

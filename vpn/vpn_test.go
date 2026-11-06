@@ -434,7 +434,7 @@ func TestCurrentSelectedServer_WhileRejecting(t *testing.T) {
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
 		AutoSelectTag: stubGroup{now: "srv-a"},
 	}}
-	tun.clashServer.setRejectMode(true)
+	tun.clashModeManager.setRejectMode(true)
 	c := &VPNClient{tunnel: tun}
 	c.status.Store(Connected)
 
@@ -472,7 +472,7 @@ func TestManualSelectionIsModeAware(t *testing.T) {
 	_, ok = c.ManualSelection()
 	assert.False(t, ok, "auto mode on srv-a is not a pin of srv-a")
 
-	_, err := tun.clashServer.SetMode(ManualSelectTag)
+	_, err := tun.clashModeManager.SetMode(ManualSelectTag)
 	require.NoError(t, err)
 	tag, ok := c.ManualSelection()
 	assert.True(t, ok)

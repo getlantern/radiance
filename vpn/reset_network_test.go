@@ -34,6 +34,7 @@ func (*resetMonitor) RegisterCallback(tun.DefaultInterfaceUpdateCallback) *list.
 	return nil
 }
 func (*resetMonitor) UpdateDefaultInterface(string, int32, bool, bool) {}
+func (*resetMonitor) UpdateNetworkPath(string)                         {}
 
 type resetPlatform struct {
 	adapter.PlatformInterface
@@ -44,7 +45,8 @@ func (*resetPlatform) Initialize(adapter.NetworkManager) error { return nil }
 func (p *resetPlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
 	return p.monitor
 }
-func (*resetPlatform) UsePlatformNetworkInterfaces() bool { return true }
+func (*resetPlatform) UsePlatformNetworkInterfaces() bool       { return true }
+func (*resetPlatform) UsePlatformDefaultInterfaceMonitor() bool { return true }
 func (*resetPlatform) NetworkInterfaces() ([]adapter.NetworkInterface, error) {
 	return nil, nil
 }
