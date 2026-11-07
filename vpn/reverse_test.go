@@ -283,16 +283,30 @@ func TestBuildOptionsAfterTheLastReverseOutboundGoes(t *testing.T) {
 func TestSetReversePortalKeepsItsOwnCopy(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 	cfg := testPortalConfig(t, lbA.ReverseHelperTag(testHelper1))
+	old := testPortalConfig(t, lbA.ReverseHelperTag(testHelper1))
+	cfg.Previous = &samizdatreverse.PreviousIdentity{
+		PrivateKey: old.PrivateKey, CertPEM: old.CertPEM, KeyPEM: old.KeyPEM,
+		Until: time.Now().Add(time.Hour),
+	}
 	want := *cfg
 	want.PrivateKey = slices.Clone(cfg.PrivateKey)
 	want.CertPEM = slices.Clone(cfg.CertPEM)
 	want.KeyPEM = slices.Clone(cfg.KeyPEM)
 	want.Pairings = maps.Clone(cfg.Pairings)
+	wantPrev := *cfg.Previous
+	wantPrev.PrivateKey = slices.Clone(cfg.Previous.PrivateKey)
+	wantPrev.CertPEM = slices.Clone(cfg.Previous.CertPEM)
+	wantPrev.KeyPEM = slices.Clone(cfg.Previous.KeyPEM)
+	want.Previous = &wantPrev
 	require.NoError(t, c.SetReversePortal(cfg, "a.example.com"))
 	clear(cfg.PrivateKey)
 	clear(cfg.CertPEM)
 	clear(cfg.KeyPEM)
 	clear(cfg.Pairings)
+	clear(cfg.Previous.PrivateKey)
+	clear(cfg.Previous.CertPEM)
+	clear(cfg.Previous.KeyPEM)
+	cfg.Previous.Until = time.Time{}
 	assert.True(t, reflect.DeepEqual(want, *c.reversePortal), "the kept config changed with the caller's buffers")
 }
 
