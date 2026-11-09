@@ -900,7 +900,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		return errs
 	}
 	if patchErr != nil {
-		return errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
+		errs = errors.Join(errs, fmt.Errorf("failed to update settings: %w", patchErr))
+		// A failed write still updates memory, and a split-tunnel change above
+		// left its rebuild to this restart.
+		return errors.Join(errs, r.maybeRestartVPN(diff))
 	}
 	_, autoChanged := diff[settings.AutoConnectKey]
 	if _, selectedChanged := diff[settings.SelectedServerKey]; autoChanged || selectedChanged {
@@ -2020,10 +2023,16 @@ func (r *LocalBackend) RestartVPN() error {
 
 // restartVPNLocked is RestartVPN for a caller holding r.splitTunnelMu.
 func (r *LocalBackend) restartVPNLocked() error {
+	return r.rebuildVPNLocked(r.liveTunnel().Restart)
+}
+
+// rebuildVPNLocked runs rebuild on the saved selection's options, then applies a
+// selection saved during it. The caller must hold r.splitTunnelMu.
+func (r *LocalBackend) rebuildVPNLocked(rebuild func(vpn.BoxOptions) error) error {
 	bOptions := r.restartBoxOptions()
-	// selectionMu is not held across the restart: a platform restart may
+	// selectionMu is not held across the rebuild: a platform restart may
 	// reconnect through this backend, which takes it.
-	if err := r.liveTunnel().Restart(bOptions); err != nil {
+	if err := rebuild(bOptions); err != nil {
 		return err
 	}
 	r.selectionMu.Lock()

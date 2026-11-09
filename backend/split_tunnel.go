@@ -131,7 +131,9 @@ func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 	if !apply || r.vpnClient == nil || r.vpnClient.Status() != vpn.Connected {
 		return nil
 	}
-	err = r.vpnClient.ApplySplitTunnel(before, r.getBoxOptions())
+	err = r.rebuildVPNLocked(func(options vpn.BoxOptions) error {
+		return r.vpnClient.ApplySplitTunnel(before, options)
+	})
 	if errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return nil
 	}
