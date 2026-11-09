@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -262,7 +264,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	r := &LocalBackend{
 		ctx:               ctx,
 		cancel:            cancel,
-		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter")),
+		issueReporter:     newIssueReporter(),
 		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
 		accountClient:     accountClient,
 		confHandler:       config.NewConfigHandler(ctx, cOpts),
@@ -698,13 +700,13 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	}
 
 	if r == nil {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 		return meta
 	}
 	if r.issueReporter != nil {
 		meta.reporter = r.issueReporter
 	} else {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 	}
 	if r.deviceID != "" {
 		meta.deviceID = r.deviceID
@@ -766,6 +768,18 @@ func (r *LocalBackend) ReportIssue(
 	}
 	slog.Info("Issue reported successfully")
 	return nil
+}
+
+func newIssueReporter() *issue.IssueReporter {
+	tunnel := &http.Client{
+		// Leaves time for the kindling fallback when the tunnel is up but stalls.
+		Timeout: 2 * time.Minute,
+		Transport: traces.NewRoundTripper(&http.Transport{
+			Proxy:           http.ProxyURL(&url.URL{Scheme: "socks5", Host: common.TunnelProxyAddr}),
+			IdleConnTimeout: 30 * time.Second,
+		}),
+	}
+	return issue.NewIssueReporter(tunnel, kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 }
 
 // baseIssueAttachments returns a list of file paths to include as attachments in every issue report
@@ -1168,8 +1182,27 @@ func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool)
 	return list.Tags(), nil
 }
 
+// AddPrivateServer registers a private server and adds it to a running tunnel.
 func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
-	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
+	if err := r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined); err != nil {
+		return err
+	}
+	// Held from the lookup through the tunnel update, so a concurrent
+	// RemoveServers can't drop the server in between and have it added back.
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	server, found := r.srvManager.GetServerByTag(tag)
+	if !found {
+		return fmt.Errorf("private server %q disappeared after registration", tag)
+	}
+	list := servers.ServerList{Servers: []*servers.Server{server}}
+	if cfg, _ := r.confHandler.GetConfig(); cfg != nil {
+		list.URLOverrides = cfg.BanditURLOverrides
+	}
+	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to add private server to VPN client: %w", err)
+	}
+	return nil
 }
 
 func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
