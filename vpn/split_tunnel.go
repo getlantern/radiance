@@ -159,7 +159,7 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 	if err := s.updateFilterLocked(filterType, item, merge); err != nil {
 		return err
 	}
-	s.logger.Debug("added item to filter", "filterType", filterType, "item", item)
+	s.logger.Debug("added item to filter", "filterType", filterType)
 	if err := s.saveLocked(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -173,7 +173,7 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	if err := s.updateFilterLocked(filterType, item, remove); err != nil {
 		return err
 	}
-	s.logger.Debug("removed item from filter", "filterType", filterType, "item", item)
+	s.logger.Debug("removed item from filter", "filterType", filterType)
 	if err := s.saveLocked(); err != nil {
 		return fmt.Errorf("writing rule to %s: %w", s.ruleFile, err)
 	}
@@ -185,7 +185,7 @@ func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
 	s.access.Lock()
 	defer s.access.Unlock()
 	s.updateFiltersLocked(items, merge)
-	s.logger.Debug("added items to filter", "items", items.String())
+	s.logger.Debug("added items to filter", "items", items.len())
 	return s.saveLocked()
 }
 
@@ -194,7 +194,7 @@ func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 	s.access.Lock()
 	defer s.access.Unlock()
 	s.updateFiltersLocked(items, remove)
-	s.logger.Debug("removed items from filter", "items", items.String())
+	s.logger.Debug("removed items from filter", "items", items.len())
 	return s.saveLocked()
 }
 
@@ -446,7 +446,7 @@ func (s *SplitTunnel) loadRule() error {
 	s.inverted.Store(s.activeFilter.Invert)
 
 	s.logger.Log(context.Background(), log.LevelTrace, "loaded split tunnel rules",
-		"file", s.ruleFile, "filters", s.Filters().String(),
+		"file", s.ruleFile, "filters", s.Filters().len(),
 		"enabled", s.IsEnabled(), "policy", s.Policy(),
 	)
 	return nil

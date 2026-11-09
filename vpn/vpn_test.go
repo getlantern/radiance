@@ -263,7 +263,7 @@ func TestRunOfflineURLTests_AlreadyConnected(t *testing.T) {
 	c.status.Store(Connected)
 	c.tunnel = &tunnel{}
 
-	_, err := c.RunOfflineURLTests(t.Context(), "", nil, nil)
+	_, err := c.RunOfflineURLTests(t.Context(), "", nil, nil, nil)
 	assert.ErrorIs(t, err, ErrTunnelAlreadyConnected)
 }
 
@@ -324,7 +324,7 @@ func TestRunOfflineURLTests_Panic(t *testing.T) {
 			})
 
 			client := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-			results, err := client.RunOfflineURLTests(ctx, "", []O.Outbound{{Type: "panic-test", Tag: "panic"}}, nil)
+			results, err := client.RunOfflineURLTests(ctx, "", []O.Outbound{{Type: "panic-test", Tag: "panic"}}, nil, nil)
 			require.ErrorContains(t, err, "panic running offline URL tests:")
 			assert.Contains(t, err.Error(), phase)
 			assert.NotContains(t, err.Error(), "\n")
@@ -349,7 +349,7 @@ func TestRunOfflineURLTests_Panic(t *testing.T) {
 				t.Fatal("offline test completion was not signalled")
 			}
 
-			results, err = client.RunOfflineURLTests(t.Context(), "", []O.Outbound{{Type: "missing-outbound", Tag: "invalid"}}, nil)
+			results, err = client.RunOfflineURLTests(t.Context(), "", []O.Outbound{{Type: "missing-outbound", Tag: "invalid"}}, nil, nil)
 			require.ErrorContains(t, err, "failed to create sing-box instance")
 			assert.NotContains(t, err.Error(), "offline tests already running")
 			assert.Nil(t, results)
@@ -456,4 +456,25 @@ func TestSelectedPersonalProxy(t *testing.T) {
 	assert.Equal(t, friend, c.SelectedPersonalProxy())
 	c.tunnel.personalProxy.Store(nil)
 	assert.Empty(t, c.SelectedPersonalProxy())
+}
+
+func TestManualSelectionIsModeAware(t *testing.T) {
+	_, ok := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil).ManualSelection()
+	assert.False(t, ok, "no tunnel")
+
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{
+		AutoSelectTag:   stubGroup{now: "srv-a"},
+		ManualSelectTag: stubGroup{now: "srv-a"},
+	}}
+	c := &VPNClient{tunnel: tun}
+	c.status.Store(Connected)
+	_, ok = c.ManualSelection()
+	assert.False(t, ok, "auto mode on srv-a is not a pin of srv-a")
+
+	_, err := tun.clashServer.SetMode(ManualSelectTag)
+	require.NoError(t, err)
+	tag, ok := c.ManualSelection()
+	assert.True(t, ok)
+	assert.Equal(t, "srv-a", tag)
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/getlantern/common"
 
 	"github.com/getlantern/radiance/account"
+	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/usermessage"
@@ -188,4 +189,10 @@ type ResultResponse struct {
 type HelperRelayRequest struct {
 	Op   string          `json:"op"`
 	Body json.RawMessage `json:"body,omitempty"`
+}
+
+// HelperPairingKeysRequest is every helper pairing key lantern-core holds,
+// keyed by pairing ID. It replaces the set radiance holds.
+type HelperPairingKeysRequest struct {
+	Keys map[string]helper.PairingKey `json:"keys"`
 }

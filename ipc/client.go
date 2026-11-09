@@ -937,6 +937,12 @@ func (c *Client) HelperRelay(ctx context.Context, op string, body []byte) (helpe
 	return res, err
 }
 
+// SetHelperPairingKeys replaces the helper pairing keys radiance holds with
+// keys, keyed by pairing ID.
+func (c *Client) SetHelperPairingKeys(ctx context.Context, keys map[string]helper.PairingKey) error {
+	return c.doJSON(ctx, http.MethodPost, helperPairingKeysEndpoint, HelperPairingKeysRequest{Keys: keys}, nil)
+}
+
 // PersonalProxyStatus reads the status of each friend this device invited
 // (see vpn.PersonalProxyStatus).
 func (c *Client) PersonalProxyStatus(ctx context.Context) ([]vpn.PersonalProxyStatus, error) {

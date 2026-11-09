@@ -20,6 +20,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/reporting"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/logsafe"
 	"github.com/getlantern/radiance/kindling/fronted"
 	radiancesmart "github.com/getlantern/radiance/kindling/smart"
 	soartunnel "github.com/getlantern/radiance/kindling/soar"
@@ -312,7 +313,7 @@ type slogWriter struct {
 
 func (w *slogWriter) Write(p []byte) (n int, err error) {
 	s := strings.TrimSpace(string(p))
-	w.Info(s)
+	w.Info(logsafe.StripQueries(s))
 	return len(p), nil
 }
 

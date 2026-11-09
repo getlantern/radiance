@@ -25,14 +25,19 @@ func TestRejectionTally_GroupsByRegistrableDomain(t *testing.T) {
 	tally.record("bare-host.example")
 	tally.record(":443")
 
-	domains, total := tally.summary()
+	total, domains := tally.counts()
 	assert.Equal(t, int64(7), total)
-	assert.Equal(t, rejectedDomain{Domain: "googlevideo.com", Count: 3, Hosts: 2}, domains[0])
-	assert.Contains(t, domains, rejectedDomain{Domain: "cdninstagram.com", Count: 1, Hosts: 1})
-	assert.Contains(t, domains, rejectedDomain{Domain: "149.154.167.51", Count: 1, Hosts: 1})
-	assert.Contains(t, domains, rejectedDomain{Domain: "2001:b28:f23d:f001::a", Count: 1, Hosts: 1})
-	assert.Contains(t, domains, rejectedDomain{Domain: "bare-host.example", Count: 1, Hosts: 1},
-		"a destination without a port is still counted")
+	assert.Equal(t, 5, domains, "googlevideo.com's two hosts count as one domain")
+	for host, domain := range map[string]string{
+		"rr1---sn-abc.googlevideo.com":     "googlevideo.com",
+		"scontent-iad3-1.cdninstagram.com": "cdninstagram.com",
+		"149.154.167.51":                   "149.154.167.51",
+		"2001:b28:f23d:f001::a":            "2001:b28:f23d:f001::a",
+		"bare-host.example":                "bare-host.example",
+	} {
+		assert.Equal(t, domain, registrableDomain(host), host)
+	}
+	assert.NotNil(t, tally.state.Hosts["bare-host.example"], "a destination without a port is still counted")
 
 	h := tally.state.Hosts["rr2---sn-def.googlevideo.com"]
 	require.NotNil(t, h, "host case and trailing dot are normalized")
@@ -49,7 +54,7 @@ func TestRejectionTally_CapsHostsAndCountsOverflow(t *testing.T) {
 	assert.Len(t, tally.state.Hosts, maxRejectedHosts)
 	assert.Equal(t, int64(5), tally.state.Overflow)
 	assert.Equal(t, int64(2), tally.state.Hosts["h0.example.com"].Count, "known hosts still count past the cap")
-	_, total := tally.summary()
+	total, _ := tally.counts()
 	assert.Equal(t, int64(maxRejectedHosts+6), total)
 }
 
@@ -65,9 +70,9 @@ func TestRejectionTally_PersistsAcrossRestarts(t *testing.T) {
 	tally.flush()
 
 	reloaded := newRejectionTally(path)
-	domains, total := reloaded.summary()
+	total, domains := reloaded.counts()
 	assert.Equal(t, int64(2), total)
-	assert.Equal(t, []rejectedDomain{{Domain: "twimg.com", Count: 2, Hosts: 1}}, domains)
+	assert.Equal(t, 1, domains)
 
 	reloaded.record("pbs.twimg.com:443")
 	reloaded.flush()
@@ -111,9 +116,9 @@ func TestRejectionTally_CorruptFileStartsFresh(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(saved), 0o600))
 			tally := newRejectionTally(path)
 			tally.record("x.example.com:443")
-			domains, total := tally.summary()
+			total, domains := tally.counts()
 			assert.Equal(t, int64(1), total)
-			assert.Equal(t, []rejectedDomain{{Domain: "example.com", Count: 1, Hosts: 1}}, domains)
+			assert.Equal(t, 1, domains)
 		})
 	}
 }
@@ -170,7 +175,8 @@ func TestClient_TalliesRejectedCloseEvents(t *testing.T) {
 	peerconn.Notify(peerconn.Event{State: -1, Source: "198.51.100.9:5001", Destination: "rr1---sn-abc.googlevideo.com:443", Rejected: true})
 	require.NoError(t, c.Stop(ctx))
 
-	domains, total := newRejectionTally(path).summary()
+	reloaded := newRejectionTally(path)
+	total, _ := reloaded.counts()
 	assert.Equal(t, int64(1), total)
-	assert.Equal(t, []rejectedDomain{{Domain: "googlevideo.com", Count: 1, Hosts: 1}}, domains)
+	assert.Contains(t, reloaded.state.Hosts, "rr1---sn-abc.googlevideo.com")
 }

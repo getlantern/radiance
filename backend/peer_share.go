@@ -111,6 +111,7 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 		}
+		r.restartYieldedReverse()
 		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
@@ -121,6 +122,10 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	if r.peerClient.IsActive() {
 		return false, nil
 	}
+	// The reverse client may hold the manual port peer sharing binds. Once
+	// resumed it picks its port from the setting persisted above.
+	resume := r.pauseReverse(toggleCtx)
+	defer resume()
 	// Start registers the current settings, so a pending re-register retry,
 	// which was for an earlier session, has nothing left to do.
 	r.cancelPeerRereg()
@@ -265,6 +270,7 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	if err := persistPeerShare(false); err != nil {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
 	}
+	r.restartYieldedReverse()
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the

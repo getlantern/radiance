@@ -1,4 +1,5 @@
 build/**
+/bin/
 .salt
 .userData
 config/proxy.conf
