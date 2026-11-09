@@ -1,19 +1,25 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	box "github.com/getlantern/lantern-box"
 	lbO "github.com/getlantern/lantern-box/option"
+
+	"github.com/getlantern/radiance/log"
 )
 
 // testBridgeConfig passes validateAbuseRules with inline rule sets, so a box
@@ -148,10 +154,93 @@ func TestBridgeTrackerCountsBothDirectionsUnderTheInbound(t *testing.T) {
 	assert.Equal(t, map[string]int64{"bridge-a": 8}, counts)
 }
 
-func TestMinLevelHandlerDropsInfo(t *testing.T) {
-	h := minLevelHandler{Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}), min: slog.LevelWarn}
-	assert.False(t, h.Enabled(context.Background(), slog.LevelInfo))
-	assert.True(t, h.Enabled(context.Background(), slog.LevelError))
-	assert.False(t, h.WithAttrs(nil).Enabled(context.Background(), slog.LevelInfo))
-	assert.False(t, h.WithGroup("g").Enabled(context.Background(), slog.LevelInfo))
+func TestBridgeLogFilterPassesOnlyTheBridgesBelowWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	h := bridgeLogFilter{Handler: slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: log.LevelTrace})}
+	ctx := context.Background()
+	assert.True(t, h.Enabled(ctx, slog.LevelDebug), "Enabled cannot see the tag yet")
+
+	logAt := func(h slog.Handler, level slog.Level, msg string, attrs ...any) {
+		r := slog.NewRecord(time.Now(), level, msg, 0)
+		r.Add(attrs...)
+		require.NoError(t, h.Handle(ctx, r))
+	}
+	logAt(h, slog.LevelDebug, "bridge-debug", "tag", bridgeLogName)
+	logAt(h, slog.LevelInfo, "direct-info", "tag", "outbound/direct[direct]")
+	logAt(h, slog.LevelDebug, "untagged-debug")
+	logAt(h, slog.LevelWarn, "direct-warn", "tag", "outbound/direct[direct]")
+	logAt(h.WithAttrs([]slog.Attr{slog.String("tag", bridgeLogName)}), slog.LevelDebug, "bridge-attrs-debug")
+	logAt(h.WithGroup("g"), slog.LevelInfo, "group-info")
+
+	out := buf.String()
+	assert.Contains(t, out, "bridge-debug")
+	assert.Contains(t, out, "bridge-attrs-debug")
+	assert.Contains(t, out, "direct-warn")
+	assert.NotContains(t, out, "direct-info")
+	assert.NotContains(t, out, "untagged-debug")
+	assert.NotContains(t, out, "group-info")
+}
+
+// TestBridgeBoxLogsItsBridgesButNoDestination runs a real box at trace: a
+// bridge that cannot reach its portal says so, and a connection routed to a
+// destination leaves no trace of it.
+func TestBridgeBoxLogsItsBridgesButNoDestination(t *testing.T) {
+	logs := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: log.LevelTrace})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	bb, err := NewBridgeBox(context.Background(), testBridgeConfig, func(string, int64) {})
+	require.NoError(t, err)
+	require.NoError(t, bb.Start())
+	t.Cleanup(func() { _ = bb.Close() })
+	require.NoError(t, bb.SetBridges(map[string]*lbO.SamizdatBridgeInboundOptions{
+		"bridge-a": testBridgeOptions("0011223344556677"),
+	}))
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "could not reach the portal")
+	}, 5*time.Second, 20*time.Millisecond)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	local, remote := net.Pipe()
+	t.Cleanup(func() { _ = remote.Close() })
+	dest := ln.Addr().String()
+	bb.(*bridgeBox).box.Router().RouteConnectionEx(context.Background(), local, adapter.InboundContext{
+		Inbound:     "bridge-a",
+		Destination: M.ParseSocksaddr(dest),
+	}, func(error) {})
+	select {
+	case c := <-accepted:
+		_ = c.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the routed connection never reached its destination")
+	}
+
+	_, port, _ := net.SplitHostPort(dest)
+	assert.NotContains(t, logs.String(), ":"+port)
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
