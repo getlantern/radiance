@@ -13,7 +13,9 @@ import (
 	"net/http"
 
 	"github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/helper"
 )
 
 type RegisterRequest struct {
@@ -103,6 +105,12 @@ type HeartbeatRequest struct {
 	// one TCP conn, and a client may hold several, so a connection count would
 	// overstate how many people are actually being helped.
 	ActiveClients int `json:"active_clients"`
+	// RelayedBytes is the bytes relayed since the last heartbeat that
+	// succeeded; omitted when zero.
+	RelayedBytes uint64 `json:"relayed_bytes,omitempty"`
+	// PairedBytes omits traffic that came through no pairing, so its sum can
+	// be less than RelayedBytes.
+	PairedBytes []helper.PairedBytes `json:"paired_bytes,omitempty"`
 }
 
 // decodeError is a 2xx response whose body did not decode, so callers can
@@ -133,8 +141,10 @@ type API struct {
 // suffixed with either ".../v1" or ".../api/v1". Per-endpoint paths are
 // appended to baseURL without re-adding any version segment, matching
 // how every other radiance caller of common.GetBaseURL composes URLs.
+// The API uses a copy of httpClient that follows redirects only within the
+// request's origin, since a heartbeat body can carry pairing IDs.
 func NewAPI(httpClient *http.Client, baseURL, deviceID string) *API {
-	return &API{httpClient: httpClient, baseURL: baseURL, deviceID: deviceID}
+	return &API{httpClient: sameorigin.Client(httpClient, "peer api"), baseURL: baseURL, deviceID: deviceID}
 }
 
 func (a *API) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
@@ -173,8 +183,12 @@ func (a *API) Verify(ctx context.Context, routeID string) error {
 // server has recorded the heartbeat, so a body that doesn't decode, including
 // the empty body of a server that predates the IDs, never fails it: the
 // response comes back as not known and the peer keeps the set it has.
-func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int) (*HeartbeatResponse, error) {
-	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients}
+//
+// A non-2xx response means the heartbeat, and the usage it carries, was not
+// recorded; a transport error or timeout leaves that unknown.
+func (a *API) Heartbeat(ctx context.Context, routeID string, activeClients int, usage RelayUsage) (*HeartbeatResponse, error) {
+	req := HeartbeatRequest{RouteID: routeID, ActiveClients: activeClients,
+		RelayedBytes: usage.RelayedBytes, PairedBytes: usage.PairedBytes}
 	var resp HeartbeatResponse
 	err := a.do(ctx, http.MethodPost, "/peer/heartbeat", req, &resp)
 	var de *decodeError

@@ -158,3 +158,29 @@ func TestRelayCallsOnChangeWhenPairingsChange(t *testing.T) {
 	}
 	assert.Equal(t, int32(4), changes.Load())
 }
+
+// A relayed body carries invite hashes, public keys and encrypted names, so a
+// redirect to another origin must not replay it there.
+func TestRelayRefusesCrossOriginRedirects(t *testing.T) {
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var other atomic.Int32
+			elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				other.Add(1)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer elsewhere.Close()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, elsewhere.URL+r.URL.Path, code)
+			}))
+			defer srv.Close()
+			var changes atomic.Int32
+
+			_, err := NewRelayer(srv.Client(), srv.URL+"/v1", func() { changes.Add(1) }).
+				Relay(context.Background(), "invites/claim", []byte(`{"invite_hash":"h"}`))
+			require.Error(t, err)
+			assert.Zero(t, other.Load(), "the other origin never receives the body")
+			assert.Zero(t, changes.Load())
+		})
+	}
+}

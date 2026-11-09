@@ -25,6 +25,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 	lbA "github.com/getlantern/lantern-box/adapter"
+	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/otel"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/getlantern/radiance/common/fileperm"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/internal/hostaccess"
+	"github.com/getlantern/radiance/internal/logsafe"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/traces"
 
@@ -181,6 +183,10 @@ func (s *Server) CheckHostAccess() error {
 type ServerList struct {
 	Servers      []*Server         `json:"servers"`
 	URLOverrides map[string]string `json:"url_overrides,omitempty"`
+	// AutoSelectOptions, when set, carries a Lantern config's auto-select
+	// options, and the tunnel applies their probe timeouts. Nil, as on
+	// user-added servers, leaves the current probe timeouts in place.
+	AutoSelectOptions *lbO.MutableAutoSelectOutboundOptions `json:"auto_select_options,omitempty"`
 }
 
 func (sl ServerList) Tags() []string {
@@ -287,8 +293,46 @@ func retryableHTTPClient(logger *slog.Logger) *retryablehttp.Client {
 	client.RetryMax = 10
 	client.RetryWaitMin = 1 * time.Second
 	client.RetryWaitMax = 10 * time.Second
-	client.Logger = redactingLogger{logger: logger}
+	client.Logger = queryStrippingLogger{logger}
 	return client
+}
+
+// queryStrippingLogger strips URL queries from the strings and errors retryablehttp
+// logs, whatever logger it wraps: private-server request URLs carry the access token in
+// the query, and retryablehttp masks only userinfo passwords.
+type queryStrippingLogger struct {
+	logger *slog.Logger
+}
+
+func (l queryStrippingLogger) Error(msg string, keysAndValues ...any) {
+	l.logger.Error(msg, stripQueries(keysAndValues)...)
+}
+
+func (l queryStrippingLogger) Warn(msg string, keysAndValues ...any) {
+	l.logger.Warn(msg, stripQueries(keysAndValues)...)
+}
+
+func (l queryStrippingLogger) Info(msg string, keysAndValues ...any) {
+	l.logger.Info(msg, stripQueries(keysAndValues)...)
+}
+
+func (l queryStrippingLogger) Debug(msg string, keysAndValues ...any) {
+	l.logger.Debug(msg, stripQueries(keysAndValues)...)
+}
+
+func stripQueries(values []any) []any {
+	stripped := make([]any, len(values))
+	for i, value := range values {
+		switch v := value.(type) {
+		case string:
+			stripped[i] = logsafe.StripQueries(v)
+		case error:
+			stripped[i] = logsafe.StripQueries(v.Error())
+		default:
+			stripped[i] = value
+		}
+	}
+	return stripped
 }
 
 // AllServers returns a deep-copied slice of all servers.
@@ -736,7 +780,7 @@ func (m *Manager) AddPrivateServer(tag, ip string, port int, accessToken string,
 			AccessToken: accessToken, Port: port, IsJoined: joined,
 		},
 	}
-	slog.Info("Adding private server from remote manager", "tag", tag, "ip", ip, "port", port, "location", loc, "is_joined", joined)
+	slog.Info("Adding private server from remote manager", "tag", tag, "country", loc.CountryCode, "is_joined", joined)
 	list := ServerList{Servers: []*Server{srv}}
 	return m.AddServers(list, false)
 }
@@ -780,6 +824,13 @@ func (m *Manager) RevokePrivateServerInvite(ip string, port int, accessToken str
 		return fmt.Errorf("failed to revoke invite, invalid status code: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// redactError returns an error carrying err's message with URL query components
+// removed. The result does not wrap err, whose chain may still carry the access
+// token.
+func redactError(err error) error {
+	return errors.New(logsafe.StripQueries(err.Error()))
 }
 
 // privateServerRequest sends a bodyless request to the server manager at

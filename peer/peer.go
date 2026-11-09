@@ -28,11 +28,12 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
-	"github.com/getlantern/radiance/portforward"
+	rlog "github.com/getlantern/radiance/log"
 )
 
 // StatusEvent fires whenever the Client's session state changes — successful
@@ -76,7 +77,7 @@ const (
 )
 
 type portForwarder interface {
-	MapPort(ctx context.Context, internalPort uint16, description string) (*portforward.Mapping, error)
+	MapPort(ctx context.Context, protocol string, internalPort uint16, description string) (*portforward.Mapping, error)
 	UnmapPort(ctx context.Context) error
 	StartRenewal(ctx context.Context)
 	ExternalIP(ctx context.Context) (string, error)
@@ -347,23 +348,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, errors.New("peer: Config.API is required")
 	}
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			if fwd := pickManualForwarder(); fwd != nil {
-				return fwd, nil
-			}
-			// Explicitly return a nil interface on error — `return
-			// portforward.NewForwarder(ctx)` collapses the (*Forwarder, error)
-			// pair into a typed-nil interface on failure, which then panics
-			// inside the deferred cleanup's `if fwd != nil { fwd.UnmapPort... }`
-			// because the nil-check passes (interface has a type) but the
-			// receiver is nil. Surfacing the underlying error here lets the
-			// caller see ErrNoPortForwarding instead of a runtime panic.
-			fwd, err := portforward.NewForwarder(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return fwd, nil
-		}
+		cfg.NewForwarder = newDefaultForwarder
 	}
 	if cfg.BuildBoxService == nil {
 		cfg.BuildBoxService = defaultBuildBoxService
@@ -516,10 +501,15 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		return fmt.Errorf("discover gateway: %w", err)
 	}
 	internalPort := pickInternalPort()
-	mapping, err := fwd.MapPort(ctx, internalPort, "Lantern Share My Connection")
+	mapping, err := fwd.MapPort(ctx, portforward.TCP, internalPort, "Lantern Share My Connection")
 	if err != nil {
 		return fmt.Errorf("map port %d: %w", internalPort, err)
 	}
+	// Renew from the moment the port is mapped: a PCP or NAT-PMP gateway can
+	// grant a lease shorter than registering, starting the box and verifying
+	// take. Not tied to the caller's ctx, which ends with Start: UnmapPort,
+	// which both rollback and Stop call, stops the renewal.
+	fwd.StartRenewal(context.Background())
 
 	c.emitPhase(PhaseDetectingIP, "")
 	externalIP, err := fwd.ExternalIP(ctx)
@@ -722,12 +712,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		rotation = peerCredRotationInterval
 	}
 
-	fwd.StartRenewal(runCtx)
 	go c.heartbeatLoop(runCtx, heartbeat, runDone)
 	go c.credRotationLoop(runCtx, rotation)
 
 	slog.Info("peer client started",
-		"external_ip", externalIP,
 		"external_port", mapping.ExternalPort,
 		"internal_port", mapping.InternalPort,
 		"method", mapping.Method,
@@ -1057,6 +1045,24 @@ func (c *Client) isVerifierConn(state int, source, destination string, bytes *pe
 	return true
 }
 
+// sendHeartbeat sends one heartbeat carrying the traffic relayed since the
+// last one that succeeded. A heartbeat that fails keeps that traffic for the
+// next, except on a 400 for a heartbeat that carried traffic: a server that
+// predates the usage fields rejects them, so the traffic is dropped and the
+// heartbeat sent again without it.
+func (c *Client) sendHeartbeat(ctx context.Context, routeID string) (*HeartbeatResponse, error) {
+	usage := c.relay.takeUsage()
+	resp, err := c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), usage)
+	if err == nil {
+		return resp, nil
+	}
+	if (usage.RelayedBytes > 0 || len(usage.PairedBytes) > 0) && isBadRequest(err) {
+		return c.cfg.API.Heartbeat(ctx, routeID, c.ActiveClients(), RelayUsage{})
+	}
+	c.relay.restoreUsage(usage)
+	return resp, err
+}
+
 // heartbeatLoop closes done on exit so Stop can wait for the loop before
 // tearing down resources. The channel is passed in rather than read off the
 // Client because Stop nils c.runDone before waiting on its local copy.
@@ -1077,7 +1083,7 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 				return
 			}
 			hbCtx, cancel := context.WithTimeout(ctx, c.cfg.HeartbeatTimeout)
-			resp, err := c.cfg.API.Heartbeat(hbCtx, routeID, c.ActiveClients())
+			resp, err := c.sendHeartbeat(hbCtx, routeID)
 			cancel()
 			if err == nil && resp.PairingShortIDsKnown {
 				// Replaces the pairing set, so an ended pairing stops working
@@ -1123,6 +1129,11 @@ func (c *Client) heartbeatLoop(ctx context.Context, interval time.Duration, done
 func isNotRegistered(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 404
+}
+
+func isBadRequest(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 400
 }
 
 // credRotationLoop periodically rotates the peer's samizdat credentials
@@ -1201,6 +1212,7 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
+			//logleak:ok recovered panic value
 			err = fmt.Errorf("peer re-register panicked: %v", r)
 		}
 	}()
@@ -1490,6 +1502,7 @@ func buildAndStartWithRetry(ctx context.Context, build func() (boxService, error
 			if inFlight != nil {
 				_ = closeBox(inFlight)
 			}
+			//logleak:ok recovered panic value
 			box, retErr = nil, fmt.Errorf("build or start new sing-box panicked: %v", r)
 		}
 	}()
@@ -1603,34 +1616,91 @@ func ensurePeerOutboundsBypassVPN(options string) (string, error) {
 // doesn't listen on (or, worse, one it does listen on for another
 // service). Out-of-range / unparseable values are logged at Warn and
 // the resolution falls through to the next source as if unset.
-func pickManualForwarder() portForwarder {
+func pickManualForwarder() portForwarder { return chooseManualForwarder(slog.Default(), true) }
+
+// chooseManualForwarder is pickManualForwarder logging to log; with logPort
+// false its log lines carry neither the port nor a rejected value.
+func chooseManualForwarder(log *slog.Logger, logPort bool) portForwarder {
+	attr := func(key string, value any) []any {
+		if !logPort {
+			return nil
+		}
+		return []any{key, value}
+	}
 	if raw := settings.GetInt(settings.PeerManualPortKey); raw != 0 {
 		if raw < 1 || raw > 65535 {
-			slog.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
-				"value", raw)
+			log.Warn("ignoring out-of-range peer_manual_port setting; falling through to env / UPnP",
+				attr("value", raw)...)
 		} else {
 			port := uint16(raw)
-			slog.Info("peer client using manual port forward",
-				"port", port, "source", "setting")
+			log.Info("peer client using manual port forward",
+				append(attr("port", port), "source", "setting")...)
 			return portforward.NewManualForwarder(port)
 		}
 	}
 	if raw := env.GetString(env.PeerExternalPort); raw != "" {
 		port, err := portforward.ParseManualPort(raw)
 		if err != nil {
-			slog.Warn("ignoring invalid "+env.PeerExternalPort.String(),
-				"value", raw, "err", err)
+			log.Warn("ignoring invalid "+env.PeerExternalPort.String(),
+				append(attr("value", raw), attr("err", err)...)...)
 		} else {
-			slog.Info("peer client using manual port forward",
-				"port", port, "source", env.PeerExternalPort.String())
+			log.Info("peer client using manual port forward",
+				append(attr("port", port), "source", env.PeerExternalPort.String())...)
 			return portforward.NewManualForwarder(port)
 		}
 	}
 	return nil
 }
 
+func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
+	return newForwarder(ctx, pickManualForwarder())
+}
+
+// reverseManualPort is the configured manual port, or 0, found without the
+// port in the log.
+func reverseManualPort(log *slog.Logger) uint16 {
+	if m, ok := chooseManualForwarder(log, false).(*portforward.ManualForwarder); ok {
+		return m.Port()
+	}
+	return 0
+}
+
+// discoverForwarder is portforward.NewForwarder, a var so tests can see the
+// options it is given.
+var discoverForwarder = portforward.NewForwarder
+
+func newForwarder(ctx context.Context, manual portForwarder, opts ...portforward.Option) (portForwarder, error) {
+	if manual != nil {
+		return manual, nil
+	}
+	// Return an untyped nil on error: a typed-nil *Forwarder would pass the
+	// caller's fwd != nil check and panic in UnmapPort.
+	fwd, err := discoverForwarder(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return fwd, nil
+}
+
 func pickInternalPort() uint16 {
 	return uint16(internalPortMin + rand.IntN(internalPortMax-internalPortMin))
+}
+
+// pickInternalPortExcept is pickInternalPort, never returning avoid.
+func pickInternalPortExcept(avoid uint16) uint16 {
+	if int(avoid) < internalPortMin || int(avoid) >= internalPortMax {
+		return pickInternalPort()
+	}
+	return internalPortSkipping(rand.IntN(internalPortMax-internalPortMin-1), avoid)
+}
+
+// internalPortSkipping is the i-th port of the internal range without avoid,
+// which must be in the range.
+func internalPortSkipping(i int, avoid uint16) uint16 {
+	if port := uint16(internalPortMin + i); port < avoid {
+		return port
+	}
+	return uint16(internalPortMin + i + 1)
 }
 
 // servePool returns nil when this peer also serves the general pool, so the
@@ -2071,7 +2141,12 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // box.Context installs, so the peer and the main tunnel coexist without
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
+	return newBoxContextLoggingTo(ctx, slog.Default().Handler())
+}
+
+// newBoxContextLoggingTo is newPeerBoxContext with the box logging to h.
+func newBoxContextLoggingTo(ctx context.Context, h slog.Handler) context.Context {
 	ctx = box.Context(ctx)
-	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(slog.Default().Handler()))
+	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(h)))
 	return ctx
 }

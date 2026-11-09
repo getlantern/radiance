@@ -529,3 +529,26 @@ func TestOnPauseUpdate(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveDuplicatesKeepsAutoSelectOptions(t *testing.T) {
+	opts := &lbO.MutableAutoSelectOutboundOptions{ProbeTimeoutsMs: lbO.ProbeTimeoutsMs{"hysteria2x": 3000}}
+	var curr lsync.TypedMap[string, []byte]
+	got := removeDuplicates(context.Background(), &curr, servers.ServerList{AutoSelectOptions: opts})
+	assert.Same(t, opts, got.AutoSelectOptions)
+}
+
+func TestUpdateOutboundsWithAutoSelectOptions(t *testing.T) {
+	tun := startPersonalProxiesTestTunnel(t)
+	require.NoError(t, tun.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, map[string]uint32{"hysteria2x": 3000}),
+		"the auto-select group must accept probe timeouts")
+	require.NoError(t, tun.updateOutbounds(servers.ServerList{
+		Servers:           []*servers.Server{directServer("lantern-1")},
+		AutoSelectOptions: DecodeAutoSelectOptions([]byte(`{"probe_timeouts_ms": {"hysteria2x": 3000}}`)),
+	}))
+	members := selectorMembers(t, tun, AutoSelectTag)
+
+	// A config with no servers still reaches the setter, and leaves the
+	// members alone.
+	require.NoError(t, tun.updateOutbounds(servers.ServerList{AutoSelectOptions: DecodeAutoSelectOptions(nil)}))
+	assert.Equal(t, members, selectorMembers(t, tun, AutoSelectTag))
+}

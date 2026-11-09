@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/getlantern/radiance/common/sameorigin"
 )
 
 // widgetSignalingClient starts a widget and returns the HTTP client the
@@ -71,6 +73,8 @@ func TestWidgetSignalingFollowsSameOriginRedirects(t *testing.T) {
 }
 
 func TestSignalingRedirectLimit(t *testing.T) {
+	checkSignalingRedirect := widgetSignalingClient(t).CheckRedirect
+	maxSignalingRedirects := sameorigin.MaxRedirects
 	req := httptest.NewRequest(http.MethodPost, "https://freddie.example/v1/signal", nil)
 	via := make([]*http.Request, maxSignalingRedirects)
 	for i := range via {

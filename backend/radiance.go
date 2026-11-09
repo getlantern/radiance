@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"time"
 
@@ -109,6 +110,10 @@ type LocalBackend struct {
 	// selectionClosed is set by Close; a ticket-change reconcile then does
 	// nothing. Guarded by selectionMu.
 	selectionClosed bool
+	// connectPending says a connect has built, or is building, a tunnel whose
+	// selection it has not persisted yet. Until it has, the saved selection
+	// is not restored over the requested one. Guarded by selectionMu.
+	connectPending bool
 
 	deviceID string
 
@@ -125,7 +130,12 @@ type LocalBackend struct {
 
 	stopSelectionHistoryListener context.CancelFunc
 	selectionHistoryMu           sync.Mutex
-	selectionReporter            *selectionReporter
+	// stopSelectionRestore ends the periodic restoreSavedSelection of the
+	// connected tunnel and waits for a restore in progress. Guarded by
+	// selectionRestoreMu.
+	stopSelectionRestore func()
+	selectionRestoreMu   sync.Mutex
+	selectionReporter    *selectionReporter
 
 	exhaustionGate exhaustionGate
 
@@ -134,10 +144,26 @@ type LocalBackend struct {
 	// inviter side so they draw on a single fetch budget. It stops fetching
 	// when ctx ends.
 	helperTickets *helper.Source
+	// helperUsage is the rooms-mode bytes relayed per helper pairing, shared
+	// by the widget and the ticket fetcher.
+	helperUsage *helper.Usage
 	// helperRelay sends the app's helper-invite requests to lantern-cloud.
 	helperRelay *helper.Relayer
 	// helperActivity is today's sharing time and bytes, kept on the device.
 	helperActivity *helper.ActivityTracker
+	// helperPairingKeys is the K_pair of each helper pairing, pushed by
+	// lantern-core over IPC.
+	helperPairingKeys *helper.PairingKeys
+	// reverseClient serves this device's paired helpers as a reverse inviter
+	// while reverseGate runs it. Nil where reverseUnsupported.
+	reverseClient reverseController
+	reverseGate   atomic.Pointer[reverseGate]
+	// reverseFriends keeps the selections of friends reachable by reverse
+	// outbound while those outbounds are down.
+	reverseFriends *reverseFriends
+	// bridgeClient serves this device's inviters over reverse routes while
+	// the widget runs.
+	bridgeClient *helper.BridgeClient
 }
 
 type Options struct {
@@ -252,7 +278,15 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		deviceID:  platformDeviceID,
 		dataCapCh: make(chan *account.DataCapInfo, 1),
 	}
-	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).Fetch)
+	r.helperUsage = &helper.Usage{}
+	r.helperPairingKeys = &helper.PairingKeys{}
+	r.reverseFriends = loadReverseFriends(filepath.Join(dataDir, reverseFriendsFileName))
+	if !reverseUnsupported() {
+		r.useReverseClient(r.newReverseClient(platformDeviceID))
+	}
+	r.bridgeClient = r.newBridgeClient(platformDeviceID)
+	r.helperPairingKeys.SetOnChange(r.pairingKeysChanged)
+	r.helperTickets = helper.NewSource(ctx, helper.NewFetcher(kindling.HTTPClient(), common.GetBaseURL()).WithUsage(r.helperUsage).Fetch)
 	r.helperTickets.SetOnInviterChange(r.reconcilePersonalProxy)
 	vpnClient.SetInviterTickets(r.helperTickets)
 	// The widget and the tunnel share r.helperTickets, so invalidating it
@@ -370,6 +404,7 @@ func (r *LocalBackend) Start() {
 		}
 	}
 	r.startVPNStatusListeners()
+	r.startReverse()
 	r.startAutoSelectedListener()
 	r.startSessionAutoSelectListener()
 
@@ -392,6 +427,12 @@ func (r *LocalBackend) Start() {
 	// interface, so partial backends in tests skip it.
 	if r.helperTickets != nil {
 		unbounded.SetTicketSource(r.helperTickets)
+		unbounded.SetPairedUsage(r.helperUsage)
+	}
+	// The bridges run while the widget does; on iOS that is only in the
+	// foreground.
+	if r.bridgeClient != nil {
+		unbounded.SetRunHook(func(running bool) { r.bridgeClient.SetRunning(r.ctx, running) })
 	}
 	// The widget reports the tunnel's state with its STUN preflights, so
 	// freddie can tell whether STUN failures follow the VPN.
@@ -506,7 +547,11 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 	for _, ep := range cfg.Options.Endpoints {
 		addSvr(ep.Tag, ep.Type, ep, cfg.OutboundLocations[ep.Tag])
 	}
-	return servers.ServerList{Servers: srvs, URLOverrides: cfg.BanditURLOverrides}
+	return servers.ServerList{
+		Servers:           srvs,
+		URLOverrides:      cfg.BanditURLOverrides,
+		AutoSelectOptions: vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions),
+	}
 }
 
 func nonSelectableSet(cfg *config.Config) map[string]struct{} {
@@ -548,6 +593,7 @@ func (r *LocalBackend) Close() {
 			r.helperActivity.Flush()
 		}
 		r.closePeerClient()
+		r.stopReverse()
 		// unbounded.start spawns its worker on a context.Background-
 		// derived ctx (it has to outlive any single NewConfigEvent),
 		// so Close has to explicitly tell it to shut down — otherwise
@@ -557,6 +603,9 @@ func (r *LocalBackend) Close() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := unbounded.Stop(stopCtx); err != nil {
 			slog.Warn("unbounded stop on backend close returned error", "error", err)
+		}
+		if r.bridgeClient != nil {
+			r.bridgeClient.Stop(stopCtx)
 		}
 		cancel()
 		// vpnClient is always set in production via NewLocalBackend, but
@@ -599,6 +648,10 @@ func (r *LocalBackend) startVPNStatusListeners() {
 			kindling.SetNetworkPaused(r.ctx, false)
 		}
 	})
+	r.startSelectionFallbackListener()
+}
+
+func (r *LocalBackend) startSelectionFallbackListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
 		switch evt.Status {
 		case vpn.Disconnected, vpn.ErrorStatus, vpn.Restarting:
@@ -773,8 +826,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// Reject an invalid split-tunnel policy before applying or persisting anything, so settings.json
 	// can't hold a value the runtime would silently fall back to exclude for.
 	if v, ok := diff[settings.SplitTunnelPolicyKey]; ok {
-		if p := vpn.SplitTunnelPolicy(fmt.Sprintf("%v", v)); !p.Valid() {
-			return fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, v)
+		if p, _ := v.(string); !vpn.SplitTunnelPolicy(p).Valid() {
+			return fmt.Errorf("invalid %s: want %q or %q (got %T)",
+				settings.SplitTunnelPolicyKey, vpn.SplitTunnelPolicyExclude, vpn.SplitTunnelPolicyInclude, v)
 		}
 	}
 	// An explicit peer toggle is applied whether or not it changes the stored
@@ -787,7 +841,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
-			return fmt.Errorf("invalid %s: %v", settings.PeerShareEnabledKey, peerValue)
+			return fmt.Errorf("invalid %s: want a bool, got %T", settings.PeerShareEnabledKey, peerValue)
 		}
 		peerOn = on
 		diff = maps.Clone(diff)
@@ -988,7 +1042,23 @@ func (r *LocalBackend) AllServers() []*servers.Server {
 	return r.srvManager.AllServers()
 }
 
+// GetServerByTag returns the server with the given tag, an exact match first.
+// Otherwise a live reverse outbound, which the manager never holds, resolves
+// to its friend's helper server, or to the friend's personal proxy when the
+// manager has none; one that is not live resolves to nothing.
 func (r *LocalBackend) GetServerByTag(tag string) (*servers.Server, bool) {
+	if srv, found := r.serverByTag(tag); found {
+		return srv, true
+	}
+	if friend, ok := lbA.HelperTagOfReverse(tag); ok {
+		if !slices.Contains(r.reverseOutbounds(), tag) {
+			return nil, false
+		}
+		if srv, found := r.srvManager.GetServerByTag(friend); found {
+			return srv, true
+		}
+		return r.personalProxyServer(friend)
+	}
 	return r.serverByTag(tag)
 }
 
@@ -1005,14 +1075,35 @@ func (r *LocalBackend) serverByTag(tag string) (*servers.Server, bool) {
 }
 
 // personalProxiesServer stands in for the tunnel's group over helper
-// outbounds. Like the group, it exists while a helper outbound does.
+// outbounds. It exists while the group does, and while a reverse friend's
+// pairing lasts, so a selection of the group stands while the friend's
+// reverse outbound is down.
 func (r *LocalBackend) personalProxiesServer() (*servers.Server, bool) {
+	if !r.personalProxiesLive() && len(r.reverseFriends.friends()) == 0 {
+		return nil, false
+	}
+	return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
+}
+
+// personalProxiesLive reports whether the tunnel's group exists: whether a
+// helper or reverse outbound does.
+func (r *LocalBackend) personalProxiesLive() bool {
 	for _, srv := range r.srvManager.AllServers() {
 		if lbA.IsHelperTag(srv.Tag) {
-			return &servers.Server{Tag: vpn.PersonalProxiesTag, Type: lbC.TypeMutableURLTest}, true
+			return true
 		}
 	}
-	return nil, false
+	return len(r.reverseOutbounds()) > 0
+}
+
+// startSelection is the selection a tunnel built now starts on for tag. A
+// personal proxies group with no member yet starts on auto-select, which is
+// not saved, until restoreSavedSelectionLocked selects the group.
+func (r *LocalBackend) startSelection(tag string) string {
+	if tag == vpn.PersonalProxiesTag && !r.personalProxiesLive() {
+		return vpn.AutoSelectTag
+	}
+	return tag
 }
 
 func (r *LocalBackend) RemoveServers(tags []string) error {
@@ -1039,7 +1130,9 @@ func (r *LocalBackend) RemoveServers(tags []string) error {
 	if rmErr := r.liveTunnel().RemoveOutbounds(gone); rmErr != nil && !errors.Is(rmErr, vpn.ErrTunnelNotConnected) {
 		err = errors.Join(err, fmt.Errorf("failed to remove outbounds: %w", rmErr))
 	}
-	return errors.Join(err, r.reconcileLiveHelpersLocked())
+	err = errors.Join(err, r.reconcileLiveHelpersLocked())
+	r.restoreSavedSelectionLocked()
+	return err
 }
 
 // AddServers adds user-supplied servers, clearing IsLantern on each.
@@ -1113,6 +1206,9 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 // tunnel through.
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
+	CurrentAutoSelectedServer() (string, error)
+	CurrentSelectedServer() (string, error)
+	ManualSelection() (string, bool)
 	SelectedPersonalProxy() string
 	UpdateOutbounds(list servers.ServerList) error
 	SelectServer(tag string) error
@@ -1147,6 +1243,7 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	defer func() {
 		r.clearSelectedIfMissingLocked()
 		err = errors.Join(err, r.reconcileLiveHelpersLocked())
+		r.restoreSavedSelectionLocked()
 	}()
 	existing := r.srvManager.AllServers()
 	existingTags := serverTagSet(existing)
@@ -1228,7 +1325,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
-	allList := servers.ServerList{Servers: r.srvManager.AllServers(), URLOverrides: list.URLOverrides}
+	allList := servers.ServerList{
+		Servers:           r.srvManager.AllServers(),
+		URLOverrides:      list.URLOverrides,
+		AutoSelectOptions: list.AutoSelectOptions,
+	}
 	// An evicted selection falls back to auto-select before the update removes
 	// it from the tunnel: the manual selector would otherwise pick an
 	// arbitrary member meanwhile.
@@ -1241,21 +1342,68 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 }
 
 // startHelperReconcileListener reconciles each tunnel that comes up with the
-// helpers the server manager holds. A connect or restart builds its tunnel
-// from options captured before it took the VPN lock, so a config update in
-// between, which found no tunnel or the previous one, may have ended, added
-// or rotated a helper the new tunnel does not reflect.
+// helpers the server manager holds, and restores the saved selection on it.
+// A connect or restart builds its tunnel from options captured before it took
+// the VPN lock, so a config update in between, which found no tunnel or the
+// previous one, may have ended, added or rotated a helper the new tunnel does
+// not reflect. While connected, the restore also runs every
+// selectionRestoreInterval.
 func (r *LocalBackend) startHelperReconcileListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.StatusUpdateEvent) {
-		if evt.Status != vpn.Connected {
-			return
-		}
-		r.selectionMu.Lock()
-		defer r.selectionMu.Unlock()
-		if err := r.reconcileLiveHelpersLocked(); err != nil {
-			slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
+		switch evt.Status {
+		case vpn.Connected:
+			r.tunnelConnected()
+		case vpn.Disconnected, vpn.ErrorStatus:
+			r.setSelectionRestoreTicker(false)
 		}
 	})
+}
+
+func (r *LocalBackend) tunnelConnected() {
+	r.selectionMu.Lock()
+	if err := r.reconcileLiveHelpersLocked(); err != nil {
+		slog.Warn("Failed to reconcile the new tunnel's helpers", "error", err)
+	}
+	r.restoreSavedSelectionLocked()
+	r.selectionMu.Unlock()
+	r.setSelectionRestoreTicker(true)
+}
+
+// selectionRestoreInterval is how often a connected tunnel's saved selection
+// is restored, catching a member that arrived by a path that did not restore
+// it. A var so tests can shorten it.
+var selectionRestoreInterval = 30 * time.Second
+
+// setSelectionRestoreTicker starts, or restarts, or stops the periodic
+// restoreSavedSelection. It ends with r.ctx either way.
+func (r *LocalBackend) setSelectionRestoreTicker(on bool) {
+	r.selectionRestoreMu.Lock()
+	defer r.selectionRestoreMu.Unlock()
+	if r.stopSelectionRestore != nil {
+		r.stopSelectionRestore()
+		r.stopSelectionRestore = nil
+	}
+	if !on {
+		return
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	done := make(chan struct{})
+	// Waiting means no restore selects after the ticker is stopped. Callers
+	// do not hold selectionMu, which a restore takes.
+	r.stopSelectionRestore = func() { cancel(); <-done }
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(selectionRestoreInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				r.restoreSavedSelection()
+			}
+		}
+	}()
 }
 
 // reconcileLiveHelpersLocked makes the tunnel's helpers the ones the server
@@ -1582,12 +1730,20 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 		return err
 	}
 	bOptions := r.getBoxOptions()
-	bOptions.InitialServer = tag
+	bOptions.InitialServer = r.startSelection(tag)
+	r.setConnectPending(true)
 	if err := r.liveTunnel().Connect(ctx, bOptions); err != nil {
+		r.setConnectPending(false)
 		return fmt.Errorf("failed to connect VPN: %w", err)
 	}
 	r.persistConnectedSelection(tag)
 	return nil
+}
+
+func (r *LocalBackend) setConnectPending(pending bool) {
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	r.connectPending = pending
 }
 
 // persistConnectedSelection persists the tag a connect selected. A config
@@ -1597,6 +1753,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 func (r *LocalBackend) persistConnectedSelection(tag string) {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()
+	r.connectPending = false
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.serverByTag(tag); !found {
 			slog.Info("Connected server was withdrawn during the connect, falling back", "tag", tag)
@@ -1608,11 +1765,22 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 		return
 	}
 	r.persistSelection(tag)
+	// Reapplied even when the tunnel seems on it: auto mode reports the
+	// server it chose, which can be the one just pinned.
+	if _, friend := vpn.ParsePersonalProxySelection(tag); !friend {
+		if err := r.liveTunnel().SelectServer(r.startSelection(tag)); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			slog.Warn("Failed to apply the connected selection", "tag", tag, "error", err)
+		}
+	}
+	// Members may have arrived since the tunnel was built without them.
+	r.restoreSavedSelectionLocked()
 }
 
 // settleFriendLocked moves a running tunnel that is not on tag's friend, as
 // one built while the friend had no member is not, onto it. It returns false
-// only if the tunnel refused and tag's fallback was committed instead.
+// only if the tunnel refused and tag's fallback was committed instead. A
+// reverse friend whose outbound is not up yet is not committed away from:
+// the tunnel runs on the fallback until restoreSavedSelectionLocked.
 // The caller must hold r.selectionMu.
 func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
@@ -1626,6 +1794,13 @@ func (r *LocalBackend) settleFriendLocked(tag string) bool {
 	}
 	err := r.liveTunnel().SelectServer(tag)
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return true
+	}
+	if r.reverseFriends.has(friend) && !slices.Contains(r.reverseOutbounds(), lbA.ReverseHelperTag(friend)) {
+		fallback := r.fallbackFor(tag)
+		if err := r.liveTunnel().SelectServer(fallback); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+			slog.Warn("Failed to switch to the fallback until the reverse outbound is up", "fallback", fallback, "error", err)
+		}
 		return true
 	}
 	slog.Info("Tunnel could not take up the selected personal proxy, falling back",
@@ -1691,6 +1866,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.Options = cfg.Options
 		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
+		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
 		}
@@ -1812,8 +1988,8 @@ func (r *LocalBackend) RestartVPN() error {
 		r.settleFriendLocked(tag)
 		return nil
 	}
-	if tag != bOptions.InitialServer {
-		if err := r.liveTunnel().SelectServer(tag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+	if start := r.startSelection(tag); start != bOptions.InitialServer {
+		if err := r.liveTunnel().SelectServer(start); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 			return fmt.Errorf("apply the selection saved during the restart: %w", err)
 		}
 	}
@@ -1830,7 +2006,7 @@ func (r *LocalBackend) restartBoxOptions() vpn.BoxOptions {
 	if r.beforeRestartSelection != nil {
 		r.beforeRestartSelection()
 	}
-	bOptions.InitialServer = r.savedSelectionTag()
+	bOptions.InitialServer = r.startSelection(r.savedSelectionTag())
 	return bOptions
 }
 
@@ -1847,12 +2023,18 @@ func (r *LocalBackend) savedSelectionTag() string {
 	return vpn.AutoSelectTag
 }
 
-// ResetNetwork drops the VPN's connections and re-seeds its interface state.
-func (r *LocalBackend) ResetNetwork() { r.vpnClient.ResetNetwork() }
+// ResetNetwork drops the VPN's connections and re-seeds its interface state,
+// and has the reverse client re-register from the new network.
+func (r *LocalBackend) ResetNetwork() {
+	r.vpnClient.ResetNetwork()
+	r.reverseNetworkChanged()
+}
 
 // ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
+// The reverse client re-registers from the new network either way.
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	r.vpnClient.ResetNetworkForMonitor(listener)
+	r.reverseNetworkChanged()
 }
 
 // Pause pauses the VPN for a device sleep.
@@ -1962,22 +2144,22 @@ func (r *LocalBackend) VPNThroughput() (vpn.ThroughputSnapshot, error) {
 // The server may no longer be available if it was removed from the manager since it was selected.
 func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 	if settings.GetBool(settings.AutoConnectKey) {
-		tag, err := r.vpnClient.CurrentAutoSelectedServer()
+		tag, err := r.liveTunnel().CurrentAutoSelectedServer()
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current auto-selected server: %w", err)
 		}
-		server, found := r.serverByTag(tag)
+		server, found := r.GetServerByTag(tag)
 		return server, found, nil
 	}
 	if !settings.Exists(settings.SelectedServerKey) {
-		tag, err := r.vpnClient.CurrentSelectedServer()
+		tag, err := r.liveTunnel().CurrentSelectedServer()
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to get current selected server: %w", err)
 		}
 		if tag == "" {
 			return nil, false, fmt.Errorf("no selected server")
 		}
-		server, found := r.serverByTag(tag)
+		server, found := r.GetServerByTag(tag)
 		return server, found, nil
 	}
 	var selected servers.Server
@@ -1995,7 +2177,7 @@ func (r *LocalBackend) SelectedServer() (*servers.Server, bool, error) {
 // CurrentAutoSelectedServer returns the tag of the server that is currently auto-selected by the
 // VPN client.
 func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
-	return r.vpnClient.CurrentAutoSelectedServer()
+	return r.liveTunnel().CurrentAutoSelectedServer()
 }
 
 func (r *LocalBackend) startSessionAutoSelectListener() {
@@ -2063,6 +2245,7 @@ func (r *LocalBackend) RunOfflineURLTests() error {
 		settings.GetString(settings.DataPathKey),
 		servers.ServerList{Servers: svrs}.Outbounds(),
 		cfg.BanditURLOverrides,
+		vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions),
 	)
 	if err != nil {
 		return err
@@ -2167,6 +2350,24 @@ func (r *LocalBackend) HelperActivity() helper.Activity {
 // volunteer now.
 func (r *LocalBackend) HelperLive() helper.LiveSnapshot {
 	return helper.DefaultLive.Snapshot()
+}
+
+// SetHelperPairingKeys replaces this device's helper pairing keys (see
+// helper.PairingKeys.Set).
+func (r *LocalBackend) SetHelperPairingKeys(keys map[string]helper.PairingKey) {
+	r.helperPairingKeys.Set(keys)
+}
+
+// HelperPairingKeys returns the store SetHelperPairingKeys writes to; it is
+// nil on a backend not built by NewLocalBackend.
+func (r *LocalBackend) HelperPairingKeys() *helper.PairingKeys {
+	return r.helperPairingKeys
+}
+
+// UseHelperPairingKeysForTest sets the store SetHelperPairingKeys writes to,
+// for tests of the IPC route, which cannot build a full backend.
+func (r *LocalBackend) UseHelperPairingKeysForTest(p *helper.PairingKeys) {
+	r.helperPairingKeys = p
 }
 
 // SetHelperRelayForTest sets the relayer HelperRelay uses, for tests of the
@@ -2430,6 +2631,7 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 		if !waitForDirect(ctx, direct) {
 			return nil
 		}
+		network := common.PublicIPNetwork()
 		attemptCtx, cancel := context.WithTimeout(ctx, publicIPAttemptTimeout)
 		result, err := lookup(attemptCtx)
 		cancel()
@@ -2440,7 +2642,7 @@ func detectPublicIP(ctx context.Context, direct func() bool, lookup func(context
 			slog.Debug("Discarded public IP looked up while the VPN came up", "attempt", attempt)
 			continue
 		default:
-			common.SetPublicIP(result.IP.String())
+			common.SetPublicIPFrom(result.IP.String(), network)
 			// IP intentionally omitted — Lantern users in censored regions
 			// can't safely have their public IP in routinely-collected
 			// client logs. Confidence + sources are enough for operator

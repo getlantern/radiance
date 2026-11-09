@@ -65,7 +65,7 @@ func TestAPI_DecodesPairingShortIDSets(t *testing.T) {
 	assert.Equal(t, want, reg.PairingShortIDSets)
 	assert.Equal(t, Revision(1700000000000), reg.PairingShortIDsRevision)
 
-	hb, err := api.Heartbeat(context.Background(), "r", 0)
+	hb, err := api.Heartbeat(context.Background(), "r", 0, RelayUsage{})
 	require.NoError(t, err)
 	assert.Equal(t, want, hb.PairingShortIDSets)
 	assert.True(t, hb.PairingShortIDsKnown)

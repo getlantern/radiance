@@ -1,12 +1,14 @@
 package vpn
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,6 +33,13 @@ const (
 	testHelper2 = "helper-ba9876543210"
 )
 
+// wsaeaddrinuse is Winsock's WSAEADDRINUSE, which syscall.EADDRINUSE does not match on Windows.
+const wsaeaddrinuse = syscall.Errno(10048)
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, wsaeaddrinuse)
+}
+
 func directServer(tag string) *servers.Server {
 	return &servers.Server{Tag: tag, Type: C.TypeDirect, IsLantern: true,
 		Options: O.Outbound{Tag: tag, Type: C.TypeDirect, Options: &O.DirectOutboundOptions{}}}
@@ -44,8 +53,9 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 }
 
 // startPersonalProxiesTestTunnelWith is startPersonalProxiesTestTunnel with
-// inbounds.
-func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds []O.Inbound, helpers ...string) *tunnel {
+// the inbounds that inbounds returns. It calls inbounds again for each retry
+// of a start whose inbound port was taken before the inbound bound it.
+func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds func() []O.Inbound, helpers ...string) *tunnel {
 	t.Helper()
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -71,18 +81,33 @@ func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds []O.Inbound, help
 	)
 	options := O.Options{
 		Log:       &O.LogOptions{Disabled: true},
-		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Route:     &O.RouteOptions{Rules: []O.Rule{selectModeRule(AutoSelectTag), selectModeRule(ManualSelectTag)}},
 		Experimental: &O.ExperimentalOptions{
 			ClashAPI:  &O.ClashAPIOptions{ModeList: []string{ManualSelectTag, AutoSelectTag}, DefaultMode: AutoSelectTag},
-			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
+			CacheFile: &O.CacheFileOptions{Enabled: true},
 		},
 	}
-	tun := &tunnel{dataPath: t.TempDir()}
+	var tun *tunnel
+	for attempt := 1; ; attempt++ {
+		if inbounds != nil {
+			options.Inbounds = inbounds()
+		}
+		options.Experimental.CacheFile.Path = filepath.Join(t.TempDir(), "cache.db")
+		tun = &tunnel{dataPath: t.TempDir()}
+		err := tun.init(t.Context(), options, nil)
+		if err == nil {
+			err = tun.boxInstance.Start()
+		}
+		if err == nil {
+			break
+		}
+		_ = tun.close()
+		if attempt == 5 || !isAddrInUse(err) {
+			require.NoError(t, err)
+		}
+	}
 	t.Cleanup(func() { assert.NoError(t, tun.close()) })
-	require.NoError(t, tun.init(t.Context(), options, nil))
-	require.NoError(t, tun.boxInstance.Start())
 	tun.optsMap = makeOutboundOptsMap(tun.ctx, options)
 	tun.nonSelectableTags = makeNonSelectableTagSet(nil, options)
 	tun.outboundMgr = service.FromContext[adapter.OutboundManager](tun.ctx)
