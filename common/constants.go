@@ -30,6 +30,11 @@ const (
 	// handshake) can take minutes, far longer than DefaultHTTPTimeout allows.
 	KindlingHTTPTimeout = (360 * time.Second)
 
+	// TunnelProxyAddr is a loopback SOCKS5 proxy into the VPN tunnel. Unlike the
+	// bypass proxy, its traffic is routed like any app's, through the selected server.
+	// It listens only while the VPN is connected, and never in novpn builds.
+	TunnelProxyAddr = "127.0.0.1:14986"
+
 	// API URLs
 	ProServerURL      = "https://api.getiantem.org"
 	StageProServerURL = "https://api.staging.iantem.io/pro-server"
