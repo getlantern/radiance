@@ -776,7 +776,8 @@ func newIssueReporter() *issue.IssueReporter {
 		// Leaves time for the kindling fallback when the tunnel is up but stalls.
 		Timeout: 2 * time.Minute,
 		Transport: traces.NewRoundTripper(&http.Transport{
-			Proxy: http.ProxyURL(&url.URL{Scheme: "socks5", Host: common.TunnelProxyAddr}),
+			Proxy:           http.ProxyURL(&url.URL{Scheme: "socks5", Host: common.TunnelProxyAddr}),
+			IdleConnTimeout: 30 * time.Second,
 		}),
 	}
 	return issue.NewIssueReporter(tunnel, kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
