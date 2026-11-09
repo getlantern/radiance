@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -43,7 +44,12 @@ const (
 	TypeProcessPath      = "processPath"
 	TypeProcessPathRegex = "processPathRegex"
 	TypePackageName      = "packageName"
+	TypePackageNameRegex = "packageNameRegex"
 )
+
+// ErrInvalidSplitTunnelFilter means a filter item was rejected and the filter
+// left unchanged; adding the same item again fails the same way.
+var ErrInvalidSplitTunnelFilter = errors.New("invalid split-tunnel filter")
 
 // SplitTunnelFilter is the set of domains, processes, and packages a user has
 // configured for split-tunnel routing.
@@ -56,11 +62,13 @@ type SplitTunnelFilter struct {
 	ProcessPath      []string
 	ProcessPathRegex []string
 	PackageName      []string
+	PackageNameRegex []string
 }
 
 func (f SplitTunnelFilter) len() int {
 	return len(f.Domain) + len(f.DomainSuffix) + len(f.DomainKeyword) + len(f.DomainRegex) +
-		len(f.ProcessName) + len(f.ProcessPath) + len(f.ProcessPathRegex) + len(f.PackageName)
+		len(f.ProcessName) + len(f.ProcessPath) + len(f.ProcessPathRegex) +
+		len(f.PackageName) + len(f.PackageNameRegex)
 }
 
 func (f SplitTunnelFilter) String() string {
@@ -88,6 +96,9 @@ func (f SplitTunnelFilter) String() string {
 	}
 	if len(f.PackageName) > 0 {
 		str = append(str, fmt.Sprintf("packageName: %v", f.PackageName))
+	}
+	if len(f.PackageNameRegex) > 0 {
+		str = append(str, fmt.Sprintf("packageNameRegex: %v", f.PackageNameRegex))
 	}
 	return "{" + strings.Join(str, ", ") + "}"
 }

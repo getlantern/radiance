@@ -20,12 +20,12 @@ type SplitTunnelCmd struct {
 type SplitTunnelListCmd struct{}
 
 type SplitTunnelAddCmd struct {
-	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name"`
+	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name, package-name-regex"`
 	Value string `arg:"-v,--value,required" help:"filter value (e.g. example.com)"`
 }
 
 type SplitTunnelRemoveCmd struct {
-	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name"`
+	Type  string `arg:"-t,--type,required" help:"filter type: domain, domain-suffix, domain-keyword, domain-regex, process-name, process-path, process-path-regex, package-name, package-name-regex"`
 	Value string `arg:"-v,--value,required" help:"filter value (e.g. example.com)"`
 }
 
@@ -76,6 +76,7 @@ func printFilters(f vpn.SplitTunnelFilter) {
 		{"process-path", f.ProcessPath},
 		{"process-path-regex", f.ProcessPathRegex},
 		{"package-name", f.PackageName},
+		{"package-name-regex", f.PackageNameRegex},
 	}
 	hasAny := false
 	for _, e := range entries {
@@ -103,11 +104,13 @@ func parseFilter(spec string) (string, string, error) {
 
 // filterTypeFromArg converts a CLI arg like "domain-suffix" to the internal type "domainSuffix".
 func filterTypeFromArg(a string) string {
-	s, rest, _ := strings.Cut(a, "-")
-	if rest != "" {
-		s += strings.ToUpper(rest[:1]) + rest[1:]
+	words := strings.Split(a, "-")
+	for i := 1; i < len(words); i++ {
+		if w := words[i]; w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
 	}
-	return s
+	return strings.Join(words, "")
 }
 
 func buildFilter(filterType, value string) vpn.SplitTunnelFilter {
@@ -129,6 +132,8 @@ func buildFilter(filterType, value string) vpn.SplitTunnelFilter {
 		f.ProcessPathRegex = []string{value}
 	case vpn.TypePackageName:
 		f.PackageName = []string{value}
+	case vpn.TypePackageNameRegex:
+		f.PackageNameRegex = []string{value}
 	}
 	return f
 }

@@ -1157,10 +1157,17 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		err = s.backend(r.Context()).RemoveSplitTunnelItems(items)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), splitTunnelStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func splitTunnelStatus(err error) int {
+	if errors.Is(err, vpn.ErrInvalidSplitTunnelFilter) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 /////////////

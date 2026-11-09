@@ -482,6 +482,86 @@ func splitTunnelMatcher(t *testing.T, st *SplitTunnel) (rule adapter.Rule, waitR
 	return rule, waitReload
 }
 
+func TestPackageNameRegex(t *testing.T) {
+	dir := t.TempDir()
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, st.AddItems(SplitTunnelFilter{
+		PackageName:      []string{"com.example.exact"},
+		PackageNameRegex: []string{`^org\.telegram\.`},
+	}))
+
+	reloaded, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	f := reloaded.Filters()
+	assert.Equal(t, []string{"com.example.exact"}, f.PackageName)
+	assert.Equal(t, []string{`^org\.telegram\.`}, f.PackageNameRegex)
+
+	rule, waitReload := splitTunnelMatcher(t, st)
+	owner := func(pkg string) *adapter.InboundContext {
+		return &adapter.InboundContext{ProcessInfo: &adapter.ConnectionOwner{AndroidPackageNames: []string{pkg}}}
+	}
+	assert.True(t, rule.Match(owner("org.telegram.messenger")))
+	assert.True(t, rule.Match(owner("com.example.exact")))
+	assert.False(t, rule.Match(owner("com.example.other")))
+
+	require.NoError(t, st.RemoveItems(SplitTunnelFilter{PackageNameRegex: []string{`^org\.telegram\.`}}))
+	waitReload()
+	assert.False(t, rule.Match(owner("org.telegram.messenger")))
+	assert.True(t, rule.Match(owner("com.example.exact")))
+
+	require.NoError(t, st.AddItem(TypePackageNameRegex, `^com\.bank\.`))
+	waitReload()
+	assert.True(t, rule.Match(owner("com.bank.app")))
+	require.NoError(t, st.RemoveItem(TypePackageNameRegex, `^com\.bank\.`))
+	waitReload()
+	assert.False(t, rule.Match(owner("com.bank.app")))
+	assert.Empty(t, st.Filters().PackageNameRegex)
+}
+
+func TestRejectInvalidRegex(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	require.NoError(t, st.SetEnabled(true))
+	require.NoError(t, st.AddItem(TypeDomain, "kept.com"))
+	want := st.Filters()
+
+	for _, typ := range []string{TypeDomainRegex, TypeProcessPathRegex, TypePackageNameRegex} {
+		assert.ErrorIs(t, st.AddItem(typ, "*.example.com"), ErrInvalidSplitTunnelFilter, typ)
+	}
+	for _, f := range []SplitTunnelFilter{
+		{Domain: []string{"added.com"}, DomainRegex: []string{"("}},
+		{ProcessName: []string{"proc"}, ProcessPathRegex: []string{"["}},
+		{PackageName: []string{"com.pkg"}, PackageNameRegex: []string{"*"}},
+	} {
+		assert.ErrorIs(t, st.AddItems(f), ErrInvalidSplitTunnelFilter, f.String())
+	}
+	assert.Equal(t, want, st.Filters())
+
+	// The saved rule set must still load in sing-box.
+	rule, _ := splitTunnelMatcher(t, st)
+	assert.True(t, rule.Match(&adapter.InboundContext{Domain: "kept.com"}))
+}
+
+func TestRemoveSavedInvalidRegex(t *testing.T) {
+	dir := t.TempDir()
+	older := newSplitTunnel(dir, rlog.NoOpLogger())
+	require.NoError(t, older.SetEnabled(true))
+	require.NoError(t, older.AddItem(TypeDomain, "kept.com"))
+	older.access.Lock()
+	older.ruleMap[TypeDomainRegex].DomainRegex = append(older.ruleMap[TypeDomainRegex].DomainRegex, "*.example.com")
+	require.NoError(t, older.saveLocked())
+	older.access.Unlock()
+
+	st, err := NewSplitTunnelHandler(dir, rlog.NoOpLogger())
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.example.com"}, st.Filters().DomainRegex)
+	require.NoError(t, st.RemoveItem(TypeDomainRegex, "*.example.com"))
+
+	rule, _ := splitTunnelMatcher(t, st)
+	assert.True(t, rule.Match(&adapter.InboundContext{Domain: "kept.com"}))
+}
+
 func TestPolicyInvertsMatch(t *testing.T) {
 	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
 	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
@@ -663,7 +743,8 @@ func TestMigration(t *testing.T) {
 				},
 				{
 					"process_path_regex": "/opt/.*"
-				}
+				},
+				{}
 			]
 		}
 	]
