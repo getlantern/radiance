@@ -848,9 +848,14 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		diff = maps.Clone(diff)
 		delete(diff, settings.PeerShareEnabledKey)
 	}
+	_, adBlockChanged := diff[settings.AdBlockKey]
+	_, smartRoutingChanged := diff[settings.SmartRoutingKey]
+	// maybeRestartVPN rebuilds with the new split-tunnel rules, so applying
+	// them first would restart the tunnel twice.
+	restartPending := adBlockChanged || smartRoutingChanged
 	current := r.SplitTunnelState()
 	if (enabled != nil && *enabled != current.Enabled) || (policy != nil && *policy != current.Policy) {
-		if err := r.updateSplitTunnel(func() error { return r.splitTunnelMgr.Configure(enabled, policy) }); err != nil {
+		if err := r.saveSplitTunnel(func() error { return r.splitTunnelMgr.Configure(enabled, policy) }, !restartPending); err != nil {
 			return err
 		}
 	}
@@ -1968,6 +1973,11 @@ func (r *LocalBackend) RestartVPN() error {
 		return ErrVPNBusy
 	}
 	defer r.splitTunnelMu.unlock()
+	return r.restartVPNLocked()
+}
+
+// restartVPNLocked is RestartVPN for a caller holding r.splitTunnelMu.
+func (r *LocalBackend) restartVPNLocked() error {
 	bOptions := r.restartBoxOptions()
 	// selectionMu is not held across the restart: a platform restart may
 	// reconnect through this backend, which takes it.
@@ -2213,12 +2223,17 @@ func (r *LocalBackend) startAutoSelectedListener() {
 // If removal was deferred because the tunnel was active, it restarts the tunnel
 // to apply the clear immediately.
 func (r *LocalBackend) ClearTunnelCache() error {
+	// Lock before writing the marker so ErrVPNBusy means nothing changed.
+	if !r.splitTunnelMu.lock(splitTunnelLockTimeout) {
+		return ErrVPNBusy
+	}
+	defer r.splitTunnelMu.unlock()
 	shouldRestart, err := r.vpnClient.ClearTunnelCache(settings.GetString(settings.DataPathKey))
 	if err != nil || !shouldRestart {
 		return err
 	}
 
-	err = r.RestartVPN()
+	err = r.restartVPNLocked()
 	if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
 		return nil
 	}

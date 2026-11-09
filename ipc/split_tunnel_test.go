@@ -23,16 +23,22 @@ import (
 
 func TestSplitTunnelStateAPI(t *testing.T) {
 	// Backend initialization changes process-wide logging and crash output.
-	if os.Getenv("RADIANCE_SPLIT_API_CHILD") == "" {
+	// The parent owns the dirs: the child holds the crash log open until it
+	// exits, and Windows can't remove an open file.
+	childDir := os.Getenv("RADIANCE_SPLIT_API_CHILD")
+	if childDir == "" {
+		dir := t.TempDir()
 		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSplitTunnelStateAPI$")
-		cmd.Env = append(os.Environ(), "RADIANCE_SPLIT_API_CHILD=1")
+		cmd.Env = append(os.Environ(), "RADIANCE_SPLIT_API_CHILD="+dir)
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 		return
 	}
 	settings.Reset()
 	t.Cleanup(settings.Reset)
-	dataDir, logDir := t.TempDir(), t.TempDir()
+	dataDir, logDir := filepath.Join(childDir, "data"), filepath.Join(childDir, "logs")
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(logDir, 0o755))
 	t.Setenv("RADIANCE_DATA_PATH", dataDir)
 	t.Setenv("RADIANCE_LOG_PATH", logDir)
 	require.NoError(t, settings.InitSettings(dataDir))

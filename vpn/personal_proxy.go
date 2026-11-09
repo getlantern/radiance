@@ -503,3 +503,30 @@ func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
 	}
 	return m
 }
+
+// liveManualSelection returns the manual selector's current pick in the form
+// BoxOptions.InitialServer accepts, or "" when the tunnel is not on a manual pick.
+func (t *tunnel) liveManualSelection() string {
+	cs := t.clashServer
+	if cs == nil || cs.selectedMode() != ManualSelectTag {
+		return ""
+	}
+	selected, ok := t.outboundMgr.Outbound(ManualSelectTag)
+	if !ok {
+		return ""
+	}
+	group, ok := selected.(adapter.OutboundGroup)
+	if !ok {
+		return ""
+	}
+	now := group.Now()
+	// buildOptions only builds the friend group from a friend-qualified tag.
+	if now == PersonalProxyTag {
+		friend := t.personalProxy.Load()
+		if friend == nil {
+			return ""
+		}
+		return PersonalProxySelection(*friend)
+	}
+	return now
+}

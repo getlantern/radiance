@@ -89,6 +89,12 @@ func (r *LocalBackend) RemoveSplitTunnelItems(items vpn.SplitTunnelFilter) error
 }
 
 func (r *LocalBackend) updateSplitTunnel(update func() error) error {
+	return r.saveSplitTunnel(update, true)
+}
+
+// saveSplitTunnel persists update. With apply false it leaves a connected
+// tunnel on the old rules, for a caller that restarts it next.
+func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 	if r.splitTunnelMgr == nil {
 		return ErrSplitTunnelUnavailable
 	}
@@ -120,7 +126,7 @@ func (r *LocalBackend) updateSplitTunnel(update func() error) error {
 	}); err != nil {
 		slog.Warn("Failed to mirror split-tunnel state into settings", "error", err)
 	}
-	if r.vpnClient == nil || r.vpnClient.Status() != vpn.Connected {
+	if !apply || r.vpnClient == nil || r.vpnClient.Status() != vpn.Connected {
 		return nil
 	}
 	err = r.vpnClient.ApplySplitTunnel(before, r.getBoxOptions())

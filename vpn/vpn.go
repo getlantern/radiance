@@ -326,12 +326,8 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		c.mu.Unlock()
 		return ErrTunnelNotConnected
 	}
-	if cs := c.tunnel.clashServer; cs != nil && cs.selectedMode() == ManualSelectTag {
-		if selected, ok := c.tunnel.outboundMgr.Outbound(ManualSelectTag); ok {
-			if group, ok := selected.(adapter.OutboundGroup); ok {
-				boxOptions.InitialServer = group.Now()
-			}
-		}
+	if boxOptions.InitialServer == "" {
+		boxOptions.InitialServer = c.tunnel.liveManualSelection()
 	}
 
 	c.setStatus(Restarting, nil)
