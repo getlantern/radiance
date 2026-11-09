@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	sbox "github.com/sagernet/sing-box"
@@ -146,9 +147,11 @@ func (t bridgeTracker) counter(tag string) []N.CountFunc {
 // bridgeLogFilter passes the bridges' own records at the level the handler it
 // wraps allows, and drops every other record below warnings: the direct
 // outbound logs each destination of the friend's traffic at info, and the
-// router and DNS at debug. A bridge's records name no destination, and the
-// log writer redacts addresses on them (see bridgeLogName). sing-box asks
-// Enabled before a record carries its tag, so Handle decides.
+// router and DNS at debug. A bridge's own records name no destination, and
+// the log writer redacts addresses on them (see bridgeLogName). They are told
+// by their message as well as their tag: the bridge's UoT router logs each
+// destination under the same tag. sing-box asks Enabled before a record
+// carries its tag, so Handle decides.
 type bridgeLogFilter struct {
 	slog.Handler
 	// bridge is whether WithAttrs gave every record the bridges' tag.
@@ -156,7 +159,7 @@ type bridgeLogFilter struct {
 }
 
 func (h bridgeLogFilter) Handle(ctx context.Context, r slog.Record) error {
-	if r.Level < slog.LevelWarn && !h.bridge && !isBridgeRecord(r) {
+	if r.Level < slog.LevelWarn && !h.isBridgeRecord(r) {
 		return nil
 	}
 	return h.Handler.Handle(ctx, r)
@@ -170,10 +173,13 @@ func (h bridgeLogFilter) WithGroup(name string) slog.Handler {
 	return bridgeLogFilter{Handler: h.Handler.WithGroup(name), bridge: h.bridge}
 }
 
-func isBridgeRecord(r slog.Record) bool {
-	bridge := false
+func (h bridgeLogFilter) isBridgeRecord(r slog.Record) bool {
+	if !strings.HasPrefix(r.Message, lbC.TypeSamizdatBridge) {
+		return false
+	}
+	bridge := h.bridge
 	r.Attrs(func(a slog.Attr) bool {
-		bridge = isBridgeTag(a)
+		bridge = bridge || isBridgeTag(a)
 		return !bridge
 	})
 	return bridge
