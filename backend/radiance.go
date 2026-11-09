@@ -1185,8 +1185,27 @@ func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool)
 	return list.Tags(), nil
 }
 
+// AddPrivateServer registers a private server and adds it to a running tunnel.
 func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
-	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
+	if err := r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined); err != nil {
+		return err
+	}
+	// Held from the lookup through the tunnel update, so a concurrent
+	// RemoveServers can't drop the server in between and have it added back.
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	server, found := r.srvManager.GetServerByTag(tag)
+	if !found {
+		return fmt.Errorf("private server %q disappeared after registration", tag)
+	}
+	list := servers.ServerList{Servers: []*servers.Server{server}}
+	if cfg, _ := r.confHandler.GetConfig(); cfg != nil {
+		list.URLOverrides = cfg.BanditURLOverrides
+	}
+	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to add private server to VPN client: %w", err)
+	}
+	return nil
 }
 
 func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
