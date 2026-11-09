@@ -39,7 +39,13 @@ const bridgeLogName = "inbound/helper[" + lbC.TypeSamizdatBridge + "]"
 // (see bridgeLogFilter), and it calls count with a bridge's tag for the bytes
 // each of its connections relays.
 func NewBridgeBox(ctx context.Context, bridgeConfig string, count func(tag string, n int64)) (helper.BridgeBox, error) {
-	ctx = newBoxContextLoggingTo(ctx, bridgeLogFilter{Handler: slog.Default().Handler()})
+	return newBridgeBox(ctx, slog.Default().Handler(), bridgeConfig, count)
+}
+
+// newBridgeBox is NewBridgeBox with the box logging to base, through
+// bridgeLogFilter.
+func newBridgeBox(ctx context.Context, base slog.Handler, bridgeConfig string, count func(tag string, n int64)) (helper.BridgeBox, error) {
+	ctx = newBoxContextLoggingTo(ctx, bridgeLogFilter{Handler: base})
 	opts, err := bridgeBoxOptions(ctx, bridgeConfig)
 	if err != nil {
 		return nil, err

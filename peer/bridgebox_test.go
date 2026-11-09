@@ -188,11 +188,8 @@ func TestBridgeLogFilterPassesOnlyTheBridgesBelowWarnings(t *testing.T) {
 // destination leaves no trace of it.
 func TestBridgeBoxLogsItsBridgesButNoDestination(t *testing.T) {
 	logs := &lockedBuffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: log.LevelTrace})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	bb, err := NewBridgeBox(context.Background(), testBridgeConfig, func(string, int64) {})
+	base := slog.NewTextHandler(logs, &slog.HandlerOptions{Level: log.LevelTrace})
+	bb, err := newBridgeBox(context.Background(), base, testBridgeConfig, func(string, int64) {})
 	require.NoError(t, err)
 	require.NoError(t, bb.Start())
 	t.Cleanup(func() { _ = bb.Close() })
