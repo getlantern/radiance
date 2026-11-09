@@ -101,6 +101,8 @@ func TestFetchConfig(t *testing.T) {
 				"server-side infra-outbound gating depends on this advertisement")
 			assert.Contains(t, confReq.Capabilities, C.CapabilityUnboundedTuning,
 				"the server sends Unbounded tuning only to clients advertising this")
+			assert.Contains(t, confReq.Capabilities, "outline_smart_dialer",
+				"the server sends the proxyless rule-set detour only to clients advertising this")
 			if tt.preferredServerLoc != nil {
 				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
