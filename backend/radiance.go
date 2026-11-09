@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -263,7 +265,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	r := &LocalBackend{
 		ctx:               ctx,
 		cancel:            cancel,
-		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter")),
+		issueReporter:     newIssueReporter(),
 		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
 		accountClient:     accountClient,
 		confHandler:       config.NewConfigHandler(ctx, cOpts),
@@ -699,13 +701,13 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	}
 
 	if r == nil {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 		return meta
 	}
 	if r.issueReporter != nil {
 		meta.reporter = r.issueReporter
 	} else {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 	}
 	if r.deviceID != "" {
 		meta.deviceID = r.deviceID
@@ -767,6 +769,18 @@ func (r *LocalBackend) ReportIssue(
 	}
 	slog.Info("Issue reported successfully")
 	return nil
+}
+
+func newIssueReporter() *issue.IssueReporter {
+	tunnel := &http.Client{
+		// Leaves time for the kindling fallback when the tunnel is up but stalls.
+		Timeout: 2 * time.Minute,
+		Transport: traces.NewRoundTripper(&http.Transport{
+			Proxy:           http.ProxyURL(&url.URL{Scheme: "socks5", Host: common.TunnelProxyAddr}),
+			IdleConnTimeout: 30 * time.Second,
+		}),
+	}
+	return issue.NewIssueReporter(tunnel, kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 }
 
 // baseIssueAttachments returns a list of file paths to include as attachments in every issue report
