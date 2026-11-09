@@ -138,7 +138,7 @@ func splitTunnelSettings(updates settings.Settings) (*bool, *vpn.SplitTunnelPoli
 	if value, ok := updates[settings.SplitTunnelKey]; ok {
 		on, ok := value.(bool)
 		if !ok {
-			return nil, nil, fmt.Errorf("invalid %s: %v", settings.SplitTunnelKey, value)
+			return nil, nil, fmt.Errorf("invalid %s: want a bool, got %T", settings.SplitTunnelKey, value)
 		}
 		enabled = &on
 	}
@@ -147,7 +147,8 @@ func splitTunnelSettings(updates settings.Settings) (*bool, *vpn.SplitTunnelPoli
 		text, ok := value.(string)
 		p := vpn.SplitTunnelPolicy(text)
 		if !ok || !p.Valid() {
-			return nil, nil, fmt.Errorf("invalid %s: %v", settings.SplitTunnelPolicyKey, value)
+			return nil, nil, fmt.Errorf("invalid %s: want %q or %q (got %T)",
+				settings.SplitTunnelPolicyKey, vpn.SplitTunnelPolicyExclude, vpn.SplitTunnelPolicyInclude, value)
 		}
 		policy = &p
 	}

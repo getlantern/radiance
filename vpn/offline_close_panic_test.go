@@ -79,7 +79,7 @@ func TestOfflineClosePanicE2E(t *testing.T) {
 			outbounds = append([]O.Outbound{{Type: "close-panic", Tag: "close-panic", Options: &O.DirectOutboundOptions{}}}, outbounds...)
 			urls["close-panic"] = target.URL + "/direct"
 		}
-		return NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil).RunOfflineURLTests(ctx, "", outbounds, urls)
+		return NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil).RunOfflineURLTests(ctx, "", outbounds, urls, nil)
 	}
 
 	baseline := settledSnapshot(t)

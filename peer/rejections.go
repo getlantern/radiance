@@ -1,15 +1,12 @@
 package peer
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"net"
 	"os"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -19,9 +16,8 @@ import (
 	"github.com/getlantern/radiance/common/fileperm"
 )
 
-// maxRejectedHosts bounds the tally file. Sharded CDN hostnames are unbounded
-// in number, so past the cap new hosts only add to Overflow; the summary groups
-// by registrable domain, where the cap is rarely reached.
+// maxRejectedHosts bounds the tally file, since sharded CDN hostnames are
+// unbounded in number.
 const maxRejectedHosts = 2000
 
 // maxPortsPerHost bounds each host's port breakdown, which a port scan could
@@ -34,11 +30,10 @@ const otherPorts = "other"
 // people in censored countries asked for.
 const rejectionsFileMode = fileperm.Private
 
-const rejectionSummarySize = 15
-
 // rejectionTally counts destinations this peer refused by a reject rule — the
 // server-issued allowlist or an abuse block — so that hosts the allowlist
-// wrongly excludes show up without anyone having to read debug logs.
+// wrongly excludes can be found in the tally file, since the peer's logs redact
+// hosts.
 //
 // It keeps only the refused host and port. It never records who asked or
 // when, since the people using this peer are in censored countries and the
@@ -60,14 +55,6 @@ type rejectionState struct {
 type rejectedHost struct {
 	Count int64            `json:"count"`
 	Ports map[string]int64 `json:"ports"`
-}
-
-// rejectedDomain is one line of the summary: refusals grouped by registrable
-// domain, or by address for IP literals.
-type rejectedDomain struct {
-	Domain string
-	Count  int64
-	Hosts  int
 }
 
 // newRejectionTally loads the tally at path. An empty path keeps it in memory
@@ -101,7 +88,7 @@ func newRejectionTally(path string) *rejectionTally {
 }
 
 // validRejectionState reports whether saved state is safe to resume from.
-// Valid JSON can still hold entries record and summary would dereference as
+// Valid JSON can still hold entries that record and counts would dereference as
 // nil, or more hosts than the cap allows.
 func validRejectionState(s rejectionState) bool {
 	if len(s.Hosts) > maxRejectedHosts || s.Overflow < 0 {
@@ -158,33 +145,20 @@ func (t *rejectionTally) record(destination string) {
 	h.Ports[port]++
 }
 
-// summary is ordered most refused first; flush logs its head.
-func (t *rejectionTally) summary() (domains []rejectedDomain, total int64) {
+// counts returns the number of refusals, including those past the host cap, and
+// of distinct registrable domains among the tracked hosts.
+func (t *rejectionTally) counts() (total int64, domains int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	byDomain := map[string]*rejectedDomain{}
+	seen := make(map[string]struct{}, len(t.state.Hosts))
 	for host, h := range t.state.Hosts {
-		key := registrableDomain(host)
-		d, ok := byDomain[key]
-		if !ok {
-			d = &rejectedDomain{Domain: key}
-			byDomain[key] = d
-		}
-		d.Count += h.Count
-		d.Hosts++
+		seen[registrableDomain(host)] = struct{}{}
 		total += h.Count
 	}
-	total += t.state.Overflow
-	for _, d := range byDomain {
-		domains = append(domains, *d)
-	}
-	slices.SortFunc(domains, func(a, b rejectedDomain) int {
-		return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(a.Domain, b.Domain))
-	})
-	return domains, total
+	return total + t.state.Overflow, len(seen)
 }
 
-// flush writes the tally if it changed and logs the top refused domains. The
+// flush writes the tally if it changed and logs the refusal counts. The
 // write is atomic so a crash mid-write cannot leave a truncated tally that the
 // next start would discard.
 func (t *rejectionTally) flush() {
@@ -201,13 +175,9 @@ func (t *rejectionTally) flush() {
 		return
 	}
 
-	domains, total := t.summary()
-	top := make([]string, 0, rejectionSummarySize)
-	for _, d := range domains[:min(len(domains), rejectionSummarySize)] {
-		top = append(top, d.Domain+"="+strconv.FormatInt(d.Count, 10))
-	}
+	total, domains := t.counts()
 	slog.Info("peer: destinations refused by reject rules", "total", total,
-		"domains", len(domains), "top", strings.Join(top, " "), "path", t.path)
+		"domains", domains, "path", t.path)
 
 	if t.path == "" {
 		return
