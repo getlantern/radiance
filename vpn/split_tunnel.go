@@ -170,8 +170,6 @@ func (s *SplitTunnel) commitLocked(next SplitTunnelState) error {
 	return nil
 }
 
-type actionFn func(slice []string, items []string) []string
-
 func merge(selected []string, items []string) []string {
 	for _, item := range items {
 		if !slices.Contains(selected, item) {
@@ -193,9 +191,9 @@ func (s *SplitTunnel) save(state SplitTunnelState) error {
 	if !state.Policy.Valid() {
 		return fmt.Errorf("invalid split-tunnel policy: %q", state.Policy)
 	}
-	rule := O.HeadlessRule{Type: C.RuleTypeLogical, LogicalOptions: splitTunnelRule(state)}
-	if _, err := R.NewHeadlessRule(context.Background(), rule); err != nil {
-		return fmt.Errorf("compiling split tunnel rule: %w", err)
+	rule, err := compileSplitTunnelRule(state)
+	if err != nil {
+		return err
 	}
 	buf, err := json.Marshal(O.PlainRuleSetCompat{
 		Version: 3,
@@ -208,6 +206,14 @@ func (s *SplitTunnel) save(state SplitTunnelState) error {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)
 	}
 	return nil
+}
+
+func compileSplitTunnelRule(state SplitTunnelState) (O.HeadlessRule, error) {
+	rule := O.HeadlessRule{Type: C.RuleTypeLogical, LogicalOptions: splitTunnelRule(state)}
+	if _, err := R.NewHeadlessRule(context.Background(), rule); err != nil {
+		return rule, fmt.Errorf("compiling split tunnel rule: %w", err)
+	}
+	return rule, nil
 }
 
 func splitTunnelRule(state SplitTunnelState) O.LogicalHeadlessRule {
@@ -314,11 +320,9 @@ func (s *SplitTunnel) loadRule() error {
 		s.quarantineInvalidRuleSet(raw)
 		return fmt.Errorf("validating rule file %s: %w", s.ruleFile, err)
 	}
-	if _, err := R.NewHeadlessRule(context.Background(), O.HeadlessRule{
-		Type: C.RuleTypeLogical, LogicalOptions: splitTunnelRule(next),
-	}); err != nil {
+	if _, err := compileSplitTunnelRule(next); err != nil {
 		s.quarantineInvalidRuleSet(raw)
-		return fmt.Errorf("compiling split tunnel rule: %w", err)
+		return err
 	}
 	s.access.Lock()
 	root := rs.Options.Rules[0].LogicalOptions

@@ -82,6 +82,7 @@ type LocalBackend struct {
 	beforeRestartSelection func()
 	splitTunnelMgr         *vpn.SplitTunnel
 	splitTunnelMu          waitMutex
+	splitTunnelClosed      bool // guarded by splitTunnelMu
 	sessionHistory         *vpn.SessionHistory
 
 	peerClient   peerController
@@ -232,8 +233,11 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	if err != nil {
 		slog.Error("Loading split tunnel handler", "error", err)
 	}
-	if err := splitTunnelMgr.ImportLegacyPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+	if err := splitTunnelMgr.ImportLegacyPolicy(legacySplitTunnelPolicy()); err != nil {
 		slog.Warn("Importing legacy split-tunnel policy", "error", err)
+	} else {
+		// Repairs a mirror write that failed before the last exit.
+		mirrorSplitTunnelSettings(splitTunnelMgr.State())
 	}
 
 	vpnClient := vpn.NewVPNClient(dataDir, slog.Default().With("service", "vpn"), opts.PlatformInterface)
@@ -586,6 +590,11 @@ func (r *LocalBackend) Close() {
 		r.selectionMu.Lock()
 		r.selectionClosed = true
 		r.selectionMu.Unlock()
+		// Waits out a split-tunnel save and turns away later ones, so a replacement backend loads the final rule file.
+		if r.splitTunnelMu.lock(splitTunnelLockTimeout) {
+			r.splitTunnelClosed = true
+			r.splitTunnelMu.unlock()
+		}
 		// Stop the activity ticker and wait for it, then count the last
 		// partial interval while sharing still runs, so nothing saves
 		// after Close returns.
@@ -1728,7 +1737,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 
 	tag = r.connectSelection(tag, r.vpnClient.Status())
 	if r.splitTunnelMgr != nil {
-		if err := r.splitTunnelMgr.ImportLegacyPolicy(vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))); err != nil {
+		if err := r.splitTunnelMgr.ImportLegacyPolicy(legacySplitTunnelPolicy()); err != nil {
 			return fmt.Errorf("prepare split-tunnel rules: %w", err)
 		}
 	}

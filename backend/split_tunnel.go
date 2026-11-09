@@ -102,6 +102,9 @@ func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 		return ErrVPNBusy
 	}
 	defer r.splitTunnelMu.unlock()
+	if r.splitTunnelClosed {
+		return ErrSplitTunnelUnavailable
+	}
 	if !r.connectMu.TryLock() {
 		return fmt.Errorf("%w: %w", ErrVPNBusy, ErrConnectInProgress)
 	}
@@ -112,6 +115,11 @@ func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 			return ErrVPNBusy
 		}
 	}
+	// Otherwise the edit would save the default policy over a legacy include.
+	if err := r.splitTunnelMgr.ImportLegacyPolicy(legacySplitTunnelPolicy()); err != nil {
+		r.connectMu.Unlock()
+		return fmt.Errorf("importing legacy split-tunnel policy: %w", err)
+	}
 	before := r.splitTunnelMgr.State()
 	err := update()
 	after := r.splitTunnelMgr.State()
@@ -119,13 +127,7 @@ func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 	if err != nil || reflect.DeepEqual(before, after) {
 		return err
 	}
-	// Older builds read split-tunnel state from settings, not the rule file.
-	if err := settings.Patch(settings.Settings{
-		settings.SplitTunnelKey:       after.Enabled,
-		settings.SplitTunnelPolicyKey: string(after.Policy),
-	}); err != nil {
-		slog.Warn("Failed to mirror split-tunnel state into settings", "error", err)
-	}
+	mirrorSplitTunnelSettings(after)
 	if !apply || r.vpnClient == nil || r.vpnClient.Status() != vpn.Connected {
 		return nil
 	}
@@ -137,6 +139,24 @@ func (r *LocalBackend) saveSplitTunnel(update func() error, apply bool) error {
 		return fmt.Errorf("split-tunnel settings saved but could not be applied: %w", err)
 	}
 	return nil
+}
+
+func legacySplitTunnelPolicy() vpn.SplitTunnelPolicy {
+	return vpn.SplitTunnelPolicy(settings.GetString(settings.SplitTunnelPolicyKey))
+}
+
+// mirrorSplitTunnelSettings copies state into settings.json, which older builds read instead of the rule file.
+func mirrorSplitTunnelSettings(state vpn.SplitTunnelState) {
+	if settings.GetBool(settings.SplitTunnelKey) == state.Enabled &&
+		legacySplitTunnelPolicy() == state.Policy {
+		return
+	}
+	if err := settings.Patch(settings.Settings{
+		settings.SplitTunnelKey:       state.Enabled,
+		settings.SplitTunnelPolicyKey: string(state.Policy),
+	}); err != nil {
+		slog.Warn("Failed to mirror split-tunnel state into settings", "error", err)
+	}
 }
 
 func splitTunnelSettings(updates settings.Settings) (*bool, *vpn.SplitTunnelPolicy, error) {

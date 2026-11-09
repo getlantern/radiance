@@ -562,6 +562,7 @@ func newPeerTestBackend(t *testing.T, fake *fakePeerController) *LocalBackend {
 }
 
 func TestPatchSettings_RejectsInvalidSplitTunnelPolicy(t *testing.T) {
+	settings.Reset()
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	ctx, cancel := context.WithCancel(context.Background())

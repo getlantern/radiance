@@ -26,16 +26,10 @@ func (c *VPNClient) ApplySplitTunnel(before SplitTunnelState, options BoxOptions
 	if !after.Enabled || reflect.DeepEqual(before, after) {
 		return nil
 	}
-	previous, err := splitTunnelRuleSummary(before)
-	if err != nil {
-		return c.Restart(options)
-	}
+	previous, prevErr := splitTunnelRuleSummary(before)
 	expected, err := splitTunnelRuleSummary(after)
-	if err != nil {
-		return c.Restart(options)
-	}
-	// Rule summaries can truncate or conflate selectors, so collisions require a rebuild.
-	if previous == expected {
+	// Rule summaries can truncate or conflate selectors, so a collision needs a rebuild.
+	if prevErr != nil || err != nil || previous == expected {
 		return c.Restart(options)
 	}
 	return c.reloadSplitTunnel(previous, expected, options)
