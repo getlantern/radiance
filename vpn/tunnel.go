@@ -99,6 +99,9 @@ type tunnel struct {
 	// personalProxyFault, if set, can fail a personal proxy group step by
 	// name. For tests.
 	personalProxyFault func(step string) error
+	// portalMasquerade is the masquerade domain the reverse portal inbound,
+	// if any, was created with. Guarded by outboundMu.
+	portalMasquerade string
 
 	// outboundMu serializes the outbound mutators.
 	outboundMu sync.Mutex
@@ -844,11 +847,28 @@ func (t *tunnel) addOutboundsLocked(list servers.ServerList) error {
 	return t.loadOutboundsLocked(list, true)
 }
 
+// applyProbeTimeoutsLocked sets the probe timeouts of list's auto-select
+// options on the auto group. A list without options leaves them alone. The
+// caller must hold t.outboundMu.
+func (t *tunnel) applyProbeTimeoutsLocked(list servers.ServerList) {
+	if list.AutoSelectOptions == nil {
+		return
+	}
+	if err := t.mutGrpMgr.SetProbeTimeouts(AutoSelectTag, list.AutoSelectOptions.ProbeTimeoutsMs); err != nil {
+		slog.Warn("Failed to set probe timeouts", "error", err)
+	}
+}
+
 // loadOutboundsLocked adds the servers in list to the tunnel, or swaps in
 // those whose options changed, and with applyOverrides sets list's bandit URL
 // overrides on the auto group. The caller must hold t.outboundMu.
 func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides bool) error {
 	list = allowedServers(list)
+	// Before any member joins the auto-select group: adding one probes it at
+	// once, with whatever timeouts the group has then.
+	if applyOverrides {
+		t.applyProbeTimeoutsLocked(list)
+	}
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 {
@@ -856,7 +876,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		return nil
 	}
 
-	slog.Info("Adding servers", "tags", list.Tags())
+	slog.Info("Adding servers", "tags", loggableTags(list.Tags()))
 	// remove duplicates from list before adding to avoid unnecessary reloads
 	newList := removeDuplicates(t.ctx, t.optsMap, list)
 	newOutbounds := newList.Outbounds()
@@ -878,7 +898,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		added     = 0
 	)
 	for _, outbound := range newOutbounds {
-		logger := t.logFactory.NewLogger("outbound/" + outbound.Tag + "[" + outbound.Type + "]")
+		logger := t.logFactory.NewLogger("outbound/" + loggableTag(outbound.Tag) + "[" + outbound.Type + "]")
 		prev := t.liveOutbound(outbound.Tag)
 		err := mutGrpMgr.CreateOutboundForGroup(
 			ctx, router, logger, ManualSelectTag, outbound.Tag, outbound.Type, outbound.Options,
@@ -892,7 +912,7 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		replaced := prev != nil && cur != nil && cur != prev
 		if replaced {
 			err = nil
-			if lbA.IsHelperTag(outbound.Tag) {
+			if lbA.IsHelperTag(outbound.Tag) || lbA.IsReverseHelperTag(outbound.Tag) {
 				if t.replacedHelpers == nil {
 					t.replacedHelpers = make(map[string]struct{})
 				}
@@ -914,9 +934,9 @@ func (t *tunnel) loadOutboundsLocked(list servers.ServerList, applyOverrides boo
 		}
 		if err != nil {
 			slog.Warn("Failed to load outbound",
-				"tag", outbound.Tag,
+				"tag", loggableTag(outbound.Tag),
 				"type", outbound.Type,
-				"error", err,
+				"error", loggableError(outbound.Tag, err),
 			)
 			errs = append(errs, err)
 		} else {
@@ -1038,7 +1058,8 @@ func (t *tunnel) updateNonSelectableOutboundsLocked(list servers.ServerList) err
 // reconcileHelpers makes the tunnel's helper outbounds those in helpers:
 // it removes the helpers in the selection groups that helpers does not name,
 // adds the missing ones and swaps in those whose options changed, all under
-// one hold of t.outboundMu. helpers must hold only helper servers.
+// one hold of t.outboundMu. helpers must hold only helper servers. Reverse
+// outbounds are left alone: setReverseOutbounds owns them.
 func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
@@ -1053,7 +1074,7 @@ func (t *tunnel) reconcileHelpers(helpers servers.ServerList) error {
 			continue
 		}
 		for _, tag := range helperTags(group.All()) {
-			if !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
+			if !lbA.IsReverseHelperTag(tag) && !slices.Contains(keep, tag) && !slices.Contains(stale, tag) {
 				stale = append(stale, tag)
 			}
 		}
@@ -1133,6 +1154,8 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	outbounds := list.Outbounds()
 	endpoints := list.Endpoints()
 	if len(outbounds) == 0 && len(endpoints) == 0 && len(list.URLOverrides) == 0 {
+		// A config with no servers still sets, or clears, the probe timeouts.
+		t.applyProbeTimeoutsLocked(list)
 		slog.Debug("No outbounds, endpoints, or bandit overrides to update, skipping")
 		return nil
 	}
@@ -1150,10 +1173,11 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 	}
 
 	// collect tags present in the current group but absent from the new config
+	// (reverse outbounds are never in a config: setReverseOutbounds owns them)
 	newTags := list.Tags()
 	var toRemove []string
 	for _, tag := range selector.All() {
-		if !slices.Contains(newTags, tag) {
+		if !lbA.IsReverseHelperTag(tag) && !slices.Contains(newTags, tag) {
 			toRemove = append(toRemove, tag)
 		}
 	}
@@ -1209,11 +1233,12 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 		deduped = append(deduped, srv)
 	}
 	if len(dropped) > 0 {
-		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", dropped)
+		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", loggableTags(dropped))
 	}
 	return servers.ServerList{
-		Servers:      deduped,
-		URLOverrides: list.URLOverrides,
+		Servers:           deduped,
+		URLOverrides:      list.URLOverrides,
+		AutoSelectOptions: list.AutoSelectOptions,
 	}
 }
 
