@@ -114,7 +114,7 @@ func TestHostInputFieldsWalksSkippedFields(t *testing.T) {
 
 // hostInputName matches JSON field names that may name a host file, directory,
 // program, socket, interface, environment variable or proxy setting.
-var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface|(^|_)env(ironment)?($|_)|(^|_)proxy($|_)`)
+var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface|env|proxy`)
 
 // reviewedFields maps an options struct type to its host-input-looking fields
 // that are allowed, and why.
