@@ -34,10 +34,6 @@ import (
 
 const tracerName = "github.com/getlantern/radiance/config"
 
-// capabilityOutlineSmartDialer mirrors common.CapabilityOutlineSmartDialer
-// (getlantern/common#47); switch to it once common is bumped here.
-const capabilityOutlineSmartDialer = "outline_smart_dialer"
-
 type Fetcher interface {
 	// fetchConfig fetches the configuration from the server. Nil is returned if no new config is available.
 	// It returns an error if the request fails.
@@ -96,8 +92,8 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		// Advertise UnboundedTuning because our lantern-box's Unbounded outbound
 		// accepts a "tuning" option, which the server withholds from older clients.
 		// Advertise OutlineSmartDialer because our lantern-box's outline outbound
-		// accepts the server's smart-dialer config (lantern-box#433).
-		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, capabilityOutlineSmartDialer},
+		// accepts the server's smart-dialer config (getlantern/lantern-box#433).
+		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer},
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred
