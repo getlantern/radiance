@@ -125,9 +125,6 @@ type widget interface {
 	Stop()
 }
 
-// newWidget builds the live broflake widget. Package var so unit
-// tests can swap it for a fake that records start/stop calls
-// without spinning up real WebRTC.
 // egressHTTPClient makes the widget's WebSocket handshake to the egress. With
 // the VPN on, the widget runs in the VPN's own process, whose sockets bypass
 // the tunnel while the system resolver points into it, so a default dial
@@ -142,6 +139,9 @@ func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (n
 	return &http.Client{Transport: transport}
 }
 
+// newWidget builds the live broflake widget. Package var so unit
+// tests can swap it for a fake that records start/stop calls
+// without spinning up real WebRTC.
 var newWidget = func(bfOpt *clientcore.BroflakeOptions, rtcOpt *clientcore.WebRTCOptions, egOpt *clientcore.EgressOptions) (widget, error) {
 	// BroflakeConn is for clients routing traffic *through* the mesh.
 	// A widget proxy only donates bandwidth, so the conn is unused —
