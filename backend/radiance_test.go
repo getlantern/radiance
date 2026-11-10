@@ -1863,6 +1863,11 @@ type fakeHelperTunnel struct {
 	onSelect func() // if set, runs as each selection is applied
 	// onRestart, if set, runs as a restart begins, before it rebuilds.
 	onRestart func()
+	// platformRestart, if set, replaces a restart's rebuild: the tunnel is
+	// torn down and reports Restarting while it runs, as a platform restart
+	// that reconnects through the backend does.
+	platformRestart func()
+	restarting      bool
 	// onConnect, if set, runs once a connect is up, before it returns, as
 	// the VPN client's Connected event does.
 	onConnect func()
@@ -2020,8 +2025,17 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 		f.onRestart()
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "restart:"+boxOptions.InitialServer)
+	if f.live != nil && f.platformRestart != nil {
+		f.live, f.restarting = nil, true
+		f.mu.Unlock()
+		f.platformRestart()
+		f.mu.Lock()
+		f.restarting = false
+		f.mu.Unlock()
+		return nil
+	}
+	defer f.mu.Unlock()
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
@@ -2033,6 +2047,18 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 	}
 	f.startOn(boxOptions.InitialServer)
 	return nil
+}
+
+func (f *fakeHelperTunnel) Status() vpn.VPNStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.restarting:
+		return vpn.Restarting
+	case f.live != nil:
+		return vpn.Connected
+	}
+	return vpn.Disconnected
 }
 
 func (f *fakeHelperTunnel) current() string {

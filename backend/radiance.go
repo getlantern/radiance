@@ -1238,6 +1238,7 @@ type liveTunnel interface {
 	RemoveOutbounds(tags []string) error
 	ReconcileHelpers(helpers servers.ServerList) error
 	Restart(boxOptions vpn.BoxOptions) error
+	Status() vpn.VPNStatus
 }
 
 func (r *LocalBackend) liveTunnel() liveTunnel {
@@ -1738,7 +1739,13 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	defer r.connectMu.Unlock()
 
-	tag = r.connectSelection(tag, r.vpnClient.Status())
+	if tag == "" || tag == vpn.AutoSelectTag {
+		tag = vpn.AutoSelectTag
+		// A platform restart reconnects through here on auto; keep the saved selection.
+		if r.liveTunnel().Status() == vpn.Restarting {
+			tag = r.savedSelectionTag()
+		}
+	}
 	if r.splitTunnelMgr != nil {
 		if err := r.splitTunnelMgr.ImportLegacyPolicy(legacySplitTunnelPolicy()); err != nil {
 			return fmt.Errorf("prepare split-tunnel rules: %w", err)
@@ -1764,17 +1771,6 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	r.persistConnectedSelection(tag)
 	return nil
-}
-
-func (r *LocalBackend) connectSelection(tag string, status vpn.VPNStatus) string {
-	if tag == "" {
-		tag = vpn.AutoSelectTag
-	}
-	// A platform restart reconnects on auto; keep the saved selection.
-	if status == vpn.Restarting && tag == vpn.AutoSelectTag {
-		return r.savedSelectionTag()
-	}
-	return tag
 }
 
 func (r *LocalBackend) setConnectPending(pending bool) {

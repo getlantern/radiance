@@ -11,7 +11,6 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
-	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/vpn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,27 +134,6 @@ func TestSplitTunnelUpdatesSerialize(t *testing.T) {
 	require.ErrorIs(t, r.ClearSplitTunnelApps(), ErrVPNBusy)
 	require.ErrorIs(t, r.RestartVPN(), ErrVPNBusy)
 	assert.Equal(t, []string{"app"}, r.SplitTunnelFilters().PackageName)
-}
-
-func TestNativeRestartConnectPreservesSelection(t *testing.T) {
-	r, dir := splitTestBackend(t)
-	var err error
-	r.srvManager, err = servers.NewManager(dir, log.NoOpLogger())
-	require.NoError(t, err)
-	require.NoError(t, r.srvManager.AddServers(servers.ServerList{
-		Servers: []*servers.Server{{Tag: "pinned", Type: "shadowsocks"}},
-	}, false))
-	r.persistSelection("pinned")
-	assert.Equal(t, "pinned", r.connectSelection(vpn.AutoSelectTag, vpn.Restarting))
-	assert.Equal(t, "pinned", r.connectSelection("", vpn.Restarting))
-	assert.Equal(t, "explicit", r.connectSelection("explicit", vpn.Restarting))
-	assert.Equal(t, vpn.AutoSelectTag, r.connectSelection(vpn.AutoSelectTag, vpn.Disconnected))
-	r.persistSelection(vpn.AutoSelectTag)
-	assert.Equal(t, vpn.AutoSelectTag, r.connectSelection(vpn.AutoSelectTag, vpn.Restarting))
-	r.persistSelection("pinned")
-	_, err = r.srvManager.RemoveServers([]string{"pinned"})
-	require.NoError(t, err)
-	assert.Equal(t, vpn.AutoSelectTag, r.connectSelection(vpn.AutoSelectTag, vpn.Restarting))
 }
 
 func TestConnectRefusesUnpersistedSplitTunnelMigration(t *testing.T) {
