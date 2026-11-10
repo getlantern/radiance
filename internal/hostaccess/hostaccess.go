@@ -40,7 +40,7 @@ var deniedFields = map[reflect.Type][]string{
 	reflect.TypeFor[lbO.ReflexOutboundOptions]():       {"cert_path", "key_path"},
 	reflect.TypeFor[lbO.TwiddleOutboundOptions]():      {"hello_pool_path", "hello_pool_device_path"},
 	// Routes the callback through the host's HTTPS_PROXY, which can carry
-	// credentials. Only proxy-side triangle responders need it.
+	// credentials. lantern-cloud sets it only for triangle responders.
 	reflect.TypeFor[lbO.BanditProbeOutboundOptions](): {"use_proxy_environment"},
 }
 

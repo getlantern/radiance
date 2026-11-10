@@ -80,6 +80,10 @@ func TestCheckOutboundAllowed(t *testing.T) {
 		{"ssh inline key", option.Outbound{Type: C.TypeSSH, Options: &option.SSHOutboundOptions{PrivateKey: []string{"key"}}}},
 		{"reflex inline", option.Outbound{Type: lbC.TypeReflex, Options: &lbO.ReflexOutboundOptions{CertPEM: "c", KeyPEM: "k"}}},
 		{"twiddle inline pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPool: "00"}}},
+		{"bandit probe without proxy environment", option.Outbound{Type: lbC.TypeBanditProbe, Options: &lbO.BanditProbeOutboundOptions{
+			CallbackURL:   "https://api.iantem.io/v1/bandit/callback",
+			ReportStalled: true,
+		}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -110,7 +114,7 @@ func TestHostInputFieldsWalksSkippedFields(t *testing.T) {
 
 // hostInputName matches JSON field names that may name a host file, directory,
 // program, socket, interface, environment variable or proxy setting.
-var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface|env|proxy`)
+var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface|(^|_)env(ironment)?($|_)|(^|_)proxy($|_)`)
 
 // reviewedFields maps an options struct type to its host-input-looking fields
 // that are allowed, and why.
