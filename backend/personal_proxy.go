@@ -18,22 +18,31 @@ import (
 // friendReach is how the server manager and the ticket source can reach one
 // friend.
 type friendReach struct {
-	direct   bool // the friend's direct outbound is a managed server
-	consumer bool // a rooms consumer is
-	tickets  bool // the ticket source holds an inviter ticket for the friend's pairing
-	answered bool // the ticket source has been answered
+	direct  bool // the friend's direct outbound is a managed server
+	reverse bool // the VPN client keeps the friend's reverse tag
+	// reverseKnown: r.reverseFriends holds the friend, whose pairing has had a
+	// reverse outbound and has not ended.
+	reverseKnown bool
+	consumer     bool // a rooms consumer is
+	tickets      bool // the ticket source holds an inviter ticket for the friend's pairing
+	answered     bool // the ticket source has been answered
 }
 
 // live reports whether a selection of the friend stands. Before the ticket
 // source is first answered a consumer counts, so a selection persisted across
 // a restart is not dropped before its tickets can arrive.
-func (f friendReach) live() bool {
-	return f.direct || (f.consumer && (f.tickets || !f.answered))
+func (f friendReach) live() bool { return f.routable() || f.reverseKnown }
+
+// routable reports whether the tunnel's group for the friend has a member:
+// the friend's direct or reverse outbound, or a rooms consumer the tunnel
+// admits, by the rule of vpn's roomsReachable.
+func (f friendReach) routable() bool {
+	return f.direct || f.reverse || (f.consumer && (f.tickets || !f.answered))
 }
 
 // selectable reports whether the friend may be newly selected.
 func (f friendReach) selectable() bool {
-	return f.direct || (f.consumer && f.tickets)
+	return f.direct || f.reverse || f.reverseKnown || (f.consumer && f.tickets)
 }
 
 func (r *LocalBackend) friendReach(friend string) friendReach {
@@ -48,6 +57,8 @@ func (r *LocalBackend) friendReach(friend string) friendReach {
 			f.direct = true
 		}
 	}
+	f.reverse = slices.Contains(r.reverseOutbounds(), lbA.ReverseHelperTag(friend))
+	f.reverseKnown = r.reverseFriends.has(friend)
 	f.answered = true
 	if f.consumer && r.helperTickets != nil {
 		var tickets []string
@@ -86,7 +97,8 @@ func (r *LocalBackend) checkConnectSelection(tag string) error {
 }
 
 // PersonalProxyStatus returns the status of every friend this device invited
-// that it can reach directly or has a ticket for, ordered by tag.
+// that it can reach directly or by reverse outbound, or has a ticket for,
+// ordered by tag.
 func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	if r.srvManager == nil {
 		return []vpn.PersonalProxyStatus{}
@@ -97,6 +109,12 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 			tags = append(tags, srv.Tag)
 		}
 	}
+	for _, reverse := range r.reverseOutbounds() {
+		if friend, ok := lbA.HelperTagOfReverse(reverse); ok {
+			tags = append(tags, friend)
+		}
+	}
+	tags = append(tags, r.reverseFriends.friends()...)
 	if r.helperTickets != nil {
 		tags = append(tags, r.helperTickets.InviterTags()...)
 	}
@@ -105,7 +123,7 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	statuses := make([]vpn.PersonalProxyStatus, 0, len(tags))
 	for _, tag := range tags {
 		f := r.friendReach(tag)
-		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Rooms: f.consumer && f.tickets}
+		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Reverse: f.reverse && r.reverseSessionLive(tag), Rooms: f.consumer && f.tickets}
 		if f.direct && r.vpnClient != nil {
 			status.DirectDelayMs = r.vpnClient.PersonalProxyMember(tag).DirectDelay
 		}
@@ -114,14 +132,27 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	return statuses
 }
 
+// reverseSessionLive reports whether the running tunnel holds a live session
+// on friend's reverse outbound. Selection uses the configured reverse
+// outbounds instead, so a friend whose bridge is between sessions stays
+// selected.
+func (r *LocalBackend) reverseSessionLive(friend string) bool {
+	return r.vpnClient != nil && r.vpnClient.ReverseSessionLive(lbA.ReverseHelperTag(friend))
+}
+
+func (r *LocalBackend) reverseOutbounds() []string {
+	if r.vpnClient == nil {
+		return nil
+	}
+	return r.vpnClient.ReverseOutbounds()
+}
+
 // fallbackFor is where a selection of tag goes once the manager no longer
 // offers it: a friend's personal proxy falls back to the personal proxies
 // group while it exists, and everything else to auto-select.
 func (r *LocalBackend) fallbackFor(tag string) string {
-	if _, ok := vpn.ParsePersonalProxySelection(tag); ok {
-		if _, found := r.personalProxiesServer(); found {
-			return vpn.PersonalProxiesTag
-		}
+	if _, ok := vpn.ParsePersonalProxySelection(tag); ok && r.personalProxiesLive() {
+		return vpn.PersonalProxiesTag
 	}
 	return vpn.AutoSelectTag
 }
@@ -154,4 +185,5 @@ func (r *LocalBackend) reconcilePersonalProxy() {
 	if err := r.reconcileLiveHelpersLocked(); err != nil {
 		slog.Warn("Failed to reconcile helpers after the inviter tickets changed", "error", err)
 	}
+	r.restoreSavedSelectionLocked()
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/sagernet/sing-box/option"
 	"github.com/stretchr/testify/assert"
@@ -317,6 +318,24 @@ func TestPersonalProxyStatus(t *testing.T) {
 	}, r.PersonalProxyStatus())
 }
 
+// A friend's reverse outbound is part of that friend, never a friend of its
+// own, and alone makes the friend selectable. The status reports it only with
+// a live session, which no tunnel means there is not.
+func TestPersonalProxyStatusFoldsReverseOutboundsIntoTheirFriend(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers(ppFriendA, "lantern-1"), false))
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{
+		lbA.ReverseHelperTag(ppFriendA), lbA.ReverseHelperTag(ppFriendB),
+	}))
+	assert.Equal(t, []vpn.PersonalProxyStatus{
+		{Tag: ppFriendA, Direct: true},
+		{Tag: ppFriendB},
+	}, r.PersonalProxyStatus(), "configured, but no session")
+	_, found := r.GetServerByTag(vpn.PersonalProxySelection(ppFriendB))
+	assert.True(t, found)
+	assert.NoError(t, r.checkConnectSelection(vpn.PersonalProxySelection(ppFriendB)))
+}
+
 // A connect may restore the persisted friend before its tickets are known,
 // but a friend it newly chooses must be selectable, as SelectServer requires.
 func TestConnectRefusesANewFriendWithoutAMember(t *testing.T) {
@@ -516,6 +535,40 @@ func TestRestartKeepsTheSavedSelection(t *testing.T) {
 	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
 }
 
+// A platform restart reconnects through ConnectVPN on auto. The saved manual
+// selection must survive it, both saved and on the rebuilt tunnel.
+func TestPlatformRestartKeepsTheManualSelection(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, "lantern-1"))
+
+	tun.platformRestart = func() {
+		require.NoError(t, r.ConnectVPN(ctx, vpn.AutoSelectTag))
+	}
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, "lantern-1", selectedTag(t))
+	assert.Equal(t, "lantern-1", tun.current())
+}
+
+// Outside a restart, an auto connect is how a manual selection is replaced
+// with auto, so it must not be redirected to the saved selection.
+func TestAutoConnectReplacesTheManualSelection(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	r.persistSelection("lantern-1")
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, vpn.AutoSelectTag))
+	assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
+	assert.Equal(t, vpn.AutoSelectTag, tun.current())
+}
+
 // A server added and selected while a restart captures its options must not
 // become the initial selection of options that lack it.
 func TestRestartOptionsPairTheSelectionWithItsOutbounds(t *testing.T) {
@@ -569,6 +622,25 @@ func TestRestartAppliesASelectionSavedDuringIt(t *testing.T) {
 	require.NoError(t, r.RestartVPN())
 	assert.Equal(t, "lantern-2", selectedTag(t))
 	assert.Equal(t, "lantern-2", tun.current(), "the rebuilt tunnel carries the stale selection")
+}
+
+// A personal proxies group saved during a restart while it has no member is
+// applied as auto-select, which the rebuilt tunnel can carry, and stays saved.
+func TestRestartAppliesAnEmptyGroupSavedDuringItAsAuto(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	r.reverseFriends = &reverseFriends{byPairing: map[string]string{pairingHash(reversePairing): ppFriendB}}
+	tun := &fakeHelperTunnel{refuseGroup: true}
+	tun.attach(r)
+	tun.up()
+	require.NoError(t, r.updateServers(directServers("lantern-1"), true))
+	require.NoError(t, r.SelectServer("lantern-1"))
+	tun.onRestart = func() {
+		tun.onRestart = nil
+		r.persistSelection(vpn.PersonalProxiesTag)
+	}
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, vpn.AutoSelectTag, tun.current())
+	assert.Equal(t, vpn.PersonalProxiesTag, selectedTag(t))
 }
 
 // A tunnel built while the selected friend had no member starts on the

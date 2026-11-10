@@ -90,6 +90,9 @@ type BoxOptions struct {
 	// default probe URL for each specific outbound, allowing the server to
 	// detect which proxies successfully connected.
 	BanditURLOverrides map[string]string `json:"bandit_url_overrides,omitempty"`
+	// AutoSelectOptions are server-sent settings for the auto-select group,
+	// from DecodeAutoSelectOptions. Nil keeps lantern-box's defaults.
+	AutoSelectOptions *lbO.MutableAutoSelectOutboundOptions `json:"auto_select_options,omitempty"`
 	// SelectionHistorySeed seeds the tunnel's AutoSelectHistoryStorage
 	// at startup with the latest persisted snapshot per tag.
 	SelectionHistorySeed map[string]lbA.TagHistory `json:"tag_history"`
@@ -103,6 +106,11 @@ type BoxOptions struct {
 	// personalProxyRooms reports whether a rooms consumer may reach the
 	// friend InitialServer selects; the VPN client sets it.
 	personalProxyRooms bool
+	// reversePortal reports whether the tunnel starts with the reverse
+	// portal inbound, created for reverseMasquerade; the VPN client sets
+	// both.
+	reversePortal     bool
+	reverseMasquerade string
 }
 
 // isGlobalIPv6 reports whether ip is in 2000::/3. Not net.IP.IsGlobalUnicast,
@@ -448,6 +456,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	if bOptions.reversePortal {
+		opts.Inbounds = append(opts.Inbounds, reversePortalInbound(bOptions.reverseMasquerade))
+	}
 	helpers := helperTags(tags)
 	// The manual selector also offers the personal proxies group, which
 	// exists only while a helper outbound does: a url-test group must never
@@ -471,6 +482,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 			initial = AutoSelectTag
 		}
 	}
+	// The last helper can go, a reverse one asynchronously, between the
+	// caller picking the group and these options being built. The tunnel
+	// then starts on auto-select, as with no member at all.
+	if initial == PersonalProxiesTag && len(helpers) == 0 {
+		initial = AutoSelectTag
+	}
 	if initial == "" || initial == AutoSelectTag {
 		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
 	} else {
@@ -488,7 +505,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	}
 
 	// add mode selector outbounds and rules
-	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides))
+	opts.Outbounds = append(opts.Outbounds, urlTestOutbound(AutoSelectTag, tags, bOptions.BanditURLOverrides, bOptions.AutoSelectOptions))
 	if len(helpers) > 0 {
 		opts.Outbounds = append(opts.Outbounds, personalProxiesOutbound(helpers))
 	}
@@ -607,16 +624,45 @@ func normalizeAdBlockRules(rules lcommon.AdBlockRules) lcommon.AdBlockRules {
 	return normalized
 }
 
-func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string) O.Outbound {
+// DecodeAutoSelectOptions decodes the config response's auto_select_options.
+// It never fails: an absent field gives empty options, and so does one that
+// doesn't decode, so a bad server value costs the overrides, not the config.
+// A switch_tolerance_percent over 100, which lantern-box refuses to build a
+// group with, is dropped.
+func DecodeAutoSelectOptions(raw []byte) *lbO.MutableAutoSelectOutboundOptions {
+	opts := &lbO.MutableAutoSelectOutboundOptions{}
+	if len(raw) == 0 {
+		return opts
+	}
+	if err := json.Unmarshal(raw, opts); err != nil {
+		slog.Warn("Ignoring auto-select options that don't decode", "error", err)
+		return &lbO.MutableAutoSelectOutboundOptions{}
+	}
+	if p := opts.SwitchTolerancePercent; p != nil && *p > 100 {
+		slog.Warn("Ignoring switch_tolerance_percent over 100", "value", *p)
+		opts.SwitchTolerancePercent = nil
+	}
+	return opts
+}
+
+// urlTestOutbound builds an auto-select group over outbounds. base supplies
+// server-sent settings; the members, probe URLs and URL overrides are always
+// radiance's.
+func urlTestOutbound(tag string, outbounds []string, urlOverrides map[string]string, base *lbO.MutableAutoSelectOutboundOptions) O.Outbound {
+	var opts lbO.MutableAutoSelectOutboundOptions
+	if base != nil {
+		opts = *base
+	}
+	opts.Outbounds = outbounds
+	opts.URL = "https://google.com/generate_204"
+	opts.URLOverrides = urlOverrides
+	if opts.BackgroundIntervalSeconds == 0 {
+		opts.BackgroundIntervalSeconds = uint32(urlTestInterval / time.Second)
+	}
 	return O.Outbound{
-		Type: lbC.TypeMutableAutoSelect,
-		Tag:  tag,
-		Options: &lbO.MutableAutoSelectOutboundOptions{
-			Outbounds:                 outbounds,
-			URL:                       "https://google.com/generate_204",
-			URLOverrides:              urlOverrides,
-			BackgroundIntervalSeconds: uint32(urlTestInterval / time.Second),
-		},
+		Type:    lbC.TypeMutableAutoSelect,
+		Tag:     tag,
+		Options: &opts,
 	}
 }
 
@@ -630,11 +676,12 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	}
 }
 
-// helperTags returns the tags in tags that are helper outbounds.
+// helperTags returns the tags in tags that are helper outbounds, reverse
+// ones included.
 func helperTags(tags []string) []string {
 	var out []string
 	for _, tag := range tags {
-		if lbA.IsHelperTag(tag) {
+		if lbA.IsHelperTag(tag) || lbA.IsReverseHelperTag(tag) {
 			out = append(out, tag)
 		}
 	}

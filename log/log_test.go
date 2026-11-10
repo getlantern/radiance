@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,36 +12,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoggerLevelAttributes(t *testing.T) {
+func TestLoggerReservedKeyAttributes(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: LevelTrace, ReplaceAttr: replaceLogAttr}))
+	builtInTime := regexp.MustCompile(`^time="\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} UTC" `)
 
-	for _, tt := range []struct {
-		name  string
-		value any
-		want  string
-	}{
-		{"string", "user-level", "level=user-level"},
-		{"integer", 7, "level=7"},
-		{"boolean", true, "level=true"},
-		{"nil", nil, "level=<nil>"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			require.NotPanics(t, func() {
-				logger.Info(tt.name, "level", tt.value)
-				logger.With("level", tt.value).Info(tt.name)
-				logger.WithGroup("user").Info(tt.name, "level", tt.value)
+	for _, key := range []string{slog.LevelKey, slog.TimeKey} {
+		for _, tt := range []struct {
+			name  string
+			value any
+			want  string
+		}{
+			{"string", "user-value", "=user-value"},
+			{"integer", 7, "=7"},
+			{"boolean", true, "=true"},
+			{"nil", nil, "=<nil>"},
+		} {
+			t.Run(key+"/"+tt.name, func(t *testing.T) {
+				buf.Reset()
+				require.NotPanics(t, func() {
+					logger.Info(tt.name, key, tt.value)
+					logger.With(key, tt.value).Info(tt.name)
+					logger.WithGroup("user").Info(tt.name, key, tt.value)
+				})
+				lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+				require.Len(t, lines, 3)
+				assert.Contains(t, lines[0], "attr."+key+tt.want)
+				assert.Contains(t, lines[1], "attr."+key+tt.want)
+				assert.Contains(t, lines[2], "user."+key+tt.want)
+				for _, line := range lines {
+					assert.Equal(t, 1, strings.Count(" "+line, " "+key+"="), line)
+					assert.Regexp(t, builtInTime, line)
+				}
 			})
-			lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
-			require.Len(t, lines, 3)
-			assert.Contains(t, lines[0], "attr."+tt.want)
-			assert.Contains(t, lines[1], "attr."+tt.want)
-			assert.Contains(t, lines[2], "user."+tt.want)
-			for _, line := range lines {
-				assert.Equal(t, 1, strings.Count(" "+line, " level="), line)
-			}
-		})
+		}
 	}
 	buf.Reset()
 	for _, level := range []slog.Level{LevelTrace, LevelDebug, LevelInfo, LevelWarn, LevelError, LevelFatal, LevelPanic} {

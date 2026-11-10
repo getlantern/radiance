@@ -97,6 +97,7 @@ const (
 	helperLiveEndpoint                  = "/helper/live"
 	helperPersonalProxiesEndpoint       = "/helper/personal-proxies"
 	helperPersonalProxyFallbackEndpoint = "/helper/personal-proxies/fallback/events"
+	helperPairingKeysEndpoint           = "/helper/pairing-keys"
 
 	// Split tunnel endpoint
 	splitTunnelEndpoint = "/split-tunnel"
@@ -300,6 +301,9 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	// exported telemetry that the device uses helper invites, and how many
 	// operations it ran.
 	mux.HandleFunc("POST "+helperRelayEndpoint, s.helperRelayHandler)
+	// Not traced either: a span would mark the device as having helper
+	// pairings, and how often they change.
+	mux.HandleFunc("POST "+helperPairingKeysEndpoint, s.helperPairingKeysHandler)
 	// Not traced either: a traced poll would mark the device as a helper
 	// volunteer in exported telemetry.
 	mux.HandleFunc("GET "+helperActivityEndpoint, s.helperActivityHandler)
@@ -1631,6 +1635,20 @@ func (s *localapi) helperRelayHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, res)
 	}
+}
+
+const maxHelperPairingKeysRequest = 256 << 10
+
+// helperPairingKeysHandler replaces the backend's helper pairing keys. Its
+// error is fixed text: it reaches logs and must not quote a key or pairing ID.
+func (s *localapi) helperPairingKeysHandler(w http.ResponseWriter, r *http.Request) {
+	var req HelperPairingKeysRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxHelperPairingKeysRequest)).Decode(&req); err != nil {
+		http.Error(w, "bad helper pairing keys request", http.StatusBadRequest)
+		return
+	}
+	s.backend(r.Context()).SetHelperPairingKeys(req.Keys)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *localapi) helperActivityHandler(w http.ResponseWriter, r *http.Request) {

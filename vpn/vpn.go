@@ -4,12 +4,15 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +23,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 	"go.opentelemetry.io/otel"
@@ -27,6 +31,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
+	lbO "github.com/getlantern/lantern-box/option"
+	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal/redact"
@@ -86,6 +93,13 @@ type VPNClient struct {
 	// device's helper inviter tickets. Guarded by mu.
 	inviterTickets InviterTickets
 
+	// reversePortal, reverseMasquerade and reverseTags are the reverse direct
+	// state each tunnel is given when it comes up. Written under mu;
+	// reverseTags is read lock-free so the backend never waits out a connect.
+	reversePortal     *samizdatreverse.PortalConfig
+	reverseMasquerade string
+	reverseTags       atomic.Pointer[[]string]
+
 	mu sync.RWMutex
 }
 
@@ -117,6 +131,7 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
 		initialLanternTags:   boxOptions.LanternServerTags,
 		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		portalMasquerade:     boxOptions.reverseMasquerade,
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
 	}
@@ -131,6 +146,27 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
 func (c *VPNClient) withPersonalProxyRooms(boxOptions BoxOptions) BoxOptions {
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
 		boxOptions.personalProxyRooms = roomsReachable(c.inviterTickets, friend)
+	}
+	return boxOptions
+}
+
+// withReverse adds the kept reverse outbounds, and the portal when one is
+// configured, to boxOptions, so a selection that depends on them can start.
+// Caller holds c.mu.
+func (c *VPNClient) withReverse(boxOptions BoxOptions) BoxOptions {
+	tags := c.ReverseOutbounds()
+	if len(tags) > 0 {
+		outbounds := slices.Clone(boxOptions.Options.Outbounds)
+		for _, tag := range tags {
+			if !slices.ContainsFunc(outbounds, func(o option.Outbound) bool { return o.Tag == tag }) {
+				outbounds = append(outbounds, reverseServer(tag).Options.(option.Outbound))
+			}
+		}
+		boxOptions.Options.Outbounds = outbounds
+	}
+	if c.reversePortal != nil {
+		boxOptions.reversePortal = true
+		boxOptions.reverseMasquerade = c.reverseMasquerade
 	}
 	return boxOptions
 }
@@ -201,7 +237,7 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 	}
 
 	c.logger.Info("Connecting VPN")
-	boxOptions = c.withPersonalProxyRooms(boxOptions)
+	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
@@ -241,6 +277,10 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
 			c.tunnel = t
+			if err := c.restoreReverseLocked(); err != nil {
+				// The error can name a reverse tag or the portal's port.
+				c.logger.Warn("Failed to restore reverse direct state on the new tunnel")
+			}
 			c.setStatus(Connected, nil)
 			c.logger.Debug("Tunnel started")
 			return nil
@@ -313,7 +353,7 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 	if err := c.close(); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
-	boxOptions = c.withPersonalProxyRooms(boxOptions)
+	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
 	options, err := buildOptions(boxOptions)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
@@ -502,6 +542,133 @@ func (c *VPNClient) ReconcileHelpers(helpers servers.ServerList) error {
 	return c.tunnel.reconcileHelpers(helpers)
 }
 
+// SetReversePortal configures the running tunnel's portal, creating it if the
+// tunnel has none, with probes that fail authentication forwarded to
+// masqueradeDomain. A portal created for another masqueradeDomain is replaced,
+// ending its sessions. A nil cfg removes the portal and every reverse outbound,
+// and forgets the tags SetReverseOutbounds kept. A copy of cfg, and
+// masqueradeDomain, are kept and applied to each tunnel that comes up; with no
+// tunnel running they are only kept, and SetReversePortal returns nil. A
+// configure error leaves them kept.
+func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig, masqueradeDomain string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cfg == nil {
+		c.reversePortal, c.reverseMasquerade = nil, ""
+		c.reverseTags.Store(nil)
+	} else {
+		kept := *cfg
+		kept.Pairings = maps.Clone(cfg.Pairings)
+		kept.PrivateKey = bytes.Clone(cfg.PrivateKey)
+		kept.CertPEM = bytes.Clone(cfg.CertPEM)
+		kept.KeyPEM = bytes.Clone(cfg.KeyPEM)
+		if cfg.Previous != nil {
+			prev := *cfg.Previous
+			prev.PrivateKey = bytes.Clone(prev.PrivateKey)
+			prev.CertPEM = bytes.Clone(prev.CertPEM)
+			prev.KeyPEM = bytes.Clone(prev.KeyPEM)
+			kept.Previous = &prev
+		}
+		c.reversePortal, c.reverseMasquerade = &kept, masqueradeDomain
+	}
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.setReversePortal(c.reversePortal, c.reverseMasquerade)
+}
+
+// SetReverseOutbounds makes the reverse outbounds exactly this set of
+// reverse tags (lbA.IsReverseHelperTag), adding and removing as needed, and
+// resyncs the groups. Like SetReversePortal, it keeps tags for later tunnels
+// and returns nil with no tunnel running. A set holding any other tag is
+// refused and changes nothing.
+func (c *VPNClient) SetReverseOutbounds(tags []string) error {
+	for _, tag := range tags {
+		if !lbA.IsReverseHelperTag(tag) {
+			return errors.New("not a reverse helper tag")
+		}
+	}
+	tags = slices.Compact(slices.Sorted(slices.Values(tags)))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reverseTags.Store(&tags)
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.setReverseOutbounds(tags)
+}
+
+// ReverseOutbounds returns the reverse tags last given to SetReverseOutbounds,
+// whether or not a tunnel holds them.
+func (c *VPNClient) ReverseOutbounds() []string {
+	tags := c.reverseTags.Load()
+	if tags == nil {
+		return nil
+	}
+	return slices.Clone(*tags)
+}
+
+// RebindReversePortal rebinds the running portal's listener to the current
+// default interface (see samizdatreverse.Portal.Rebind). No-op without a
+// tunnel or portal.
+func (c *VPNClient) RebindReversePortal() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.rebindReversePortal()
+}
+
+// ReversePortalListening reports whether the running tunnel's portal holds a
+// listener. It is false with no tunnel or no portal.
+func (c *VPNClient) ReversePortalListening() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tunnel != nil && c.tunnel.reversePortalListening()
+}
+
+// ReverseSessionLive reports whether the running tunnel's portal holds a
+// session for reverseTag that can carry traffic now: one the friend's bridge
+// dialed in that is neither closed nor replaced. It is false with no tunnel
+// or no portal, whatever SetReverseOutbounds was given.
+func (c *VPNClient) ReverseSessionLive(reverseTag string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tunnel != nil && c.tunnel.reverseSessionLive(reverseTag)
+}
+
+// PhysicalInterfaceControl returns a socket control that binds a dial to the
+// running tunnel's underlying default interface, so the dial bypasses the
+// tunnel. It is nil with no tunnel running or no interface monitor to bind by.
+func (c *VPNClient) PhysicalInterfaceControl() control.Func {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	nm := service.FromContext[adapter.NetworkManager](c.tunnel.ctx)
+	if nm == nil {
+		return nil
+	}
+	return nm.AutoDetectInterfaceFunc()
+}
+
+// restoreReverseLocked gives the tunnel the kept reverse direct state. The
+// caller must hold c.mu.
+func (c *VPNClient) restoreReverseLocked() error {
+	tags := c.ReverseOutbounds()
+	if c.reversePortal == nil && len(tags) == 0 {
+		return nil
+	}
+	var errs []error
+	if c.reversePortal != nil {
+		errs = append(errs, c.tunnel.setReversePortal(c.reversePortal, c.reverseMasquerade))
+	}
+	errs = append(errs, c.tunnel.setReverseOutbounds(tags))
+	return errors.Join(errs...)
+}
+
 func (c *VPNClient) RemoveOutbounds(tags []string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -677,6 +844,24 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
+// ManualSelection returns the manual selector's choice and true while the
+// tunnel is in manual mode, and "" and false in auto mode or with no tunnel.
+func (c *VPNClient) ManualSelection() (string, bool) {
+	if !c.isOpen() {
+		return "", false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil || c.tunnel.clashServer.selectedMode() != ManualSelectTag {
+		return "", false
+	}
+	outbound, loaded := c.tunnel.outboundMgr.Outbound(ManualSelectTag)
+	if !loaded {
+		return "", false
+	}
+	return outbound.(adapter.OutboundGroup).Now(), true
+}
+
 const (
 	rapidPollInterval  = 500 * time.Millisecond
 	rapidPollWindow    = 15 * time.Second
@@ -760,7 +945,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 //
 // Tests are cancelled and results discarded if ctx is cancelled or
 // [VPNClient.Connect] is called while they are running.
-func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string) (results map[string]uint16, err error) {
+func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, outbounds []option.Outbound, banditURLs map[string]string, autoSelect *lbO.MutableAutoSelectOutboundOptions) (results map[string]uint16, err error) {
 	defer func() {
 		if err != nil {
 			results = nil
@@ -797,7 +982,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 	for _, ob := range outbounds {
 		tags = append(tags, ob.Tag)
 	}
-	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs))
+	outbounds = append(outbounds, urlTestOutbound("offline-test", tags, banditURLs, autoSelect))
 	// CacheFile must stay disabled: enabling it holds an exclusive flock on
 	// a file in the iOS App Group container, which the OS kills across
 	// suspend with 0xdead10cc.
@@ -875,6 +1060,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 func AttemptFixNetState() {
 	options := baseOpts("")
 	options = option.Options{
+		Log:      &option.LogOptions{Disabled: true},
 		DNS:      options.DNS,
 		Inbounds: options.Inbounds,
 		Route: &option.RouteOptions{

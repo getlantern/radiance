@@ -227,7 +227,9 @@ type stubServer struct {
 	// each time). When non-nil, takes precedence over registerResp.
 	registerRespFn  func() RegisterResponse
 	heartbeatStatus int
-	// onHeartbeat and onDeregister run before the request is answered.
+	// onRegister, onHeartbeat and onDeregister run before the request is
+	// answered.
+	onRegister   func()
 	onHeartbeat  func()
 	onDeregister func()
 	// onVerify, when set, runs before verify is answered; a non-zero return
@@ -287,6 +289,9 @@ func newStubServer(t *testing.T) *stubServer {
 		var req RegisterRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		s.lastRegisterReq.Store(req)
+		if s.onRegister != nil {
+			s.onRegister()
+		}
 		if s.registerStatus != http.StatusOK {
 			http.Error(w, "register failed", s.registerStatus)
 			return
@@ -612,12 +617,18 @@ func TestClient_Start_RenewsFromMappingAndStopsOnRollback(t *testing.T) {
 	box := &fakeBoxService{}
 	srv := newStubServer(t)
 	srv.registerStatus = http.StatusUnprocessableEntity
+	var renewingWhileRegistering atomic.Bool
+	srv.onRegister = func() {
+		fwd.mu.Lock()
+		defer fwd.mu.Unlock()
+		renewingWhileRegistering.Store(fwd.renewals == 1)
+	}
 	c := newTestClient(t, fwd, box, srv)
 
 	require.Error(t, c.Start(context.Background()))
+	assert.True(t, renewingWhileRegistering.Load(), "renewal must already run while registering")
 	fwd.mu.Lock()
 	defer fwd.mu.Unlock()
-	assert.Equal(t, 1, fwd.renewals, "renewal must already run when registering")
 	assert.True(t, fwd.renewStopped, "rollback must stop renewal")
 }
 

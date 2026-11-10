@@ -66,7 +66,7 @@ func TestRunOfflineURLTestsDoesNotExecute(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, _ = c.RunOfflineURLTests(ctx, t.TempDir(), []O.Outbound{direct, out}, nil)
+	_, _ = c.RunOfflineURLTests(ctx, t.TempDir(), []O.Outbound{direct, out}, nil, nil)
 	assert.NoFileExists(t, marker)
 }
 

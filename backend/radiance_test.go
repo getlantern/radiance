@@ -400,6 +400,13 @@ func TestEndedHelpersAreThoseTheConfigNoLongerCarries(t *testing.T) {
 		"Lantern helpers the config dropped; a user server is not the config's to end")
 }
 
+// Reverse outbounds belong to the reverse client, not to the config.
+func TestEndedHelpersExcludeReverseOutbounds(t *testing.T) {
+	rev := lbA.ReverseHelperTag("helper-0123456789ab")
+	existing := []*servers.Server{newTestServer(rev, true, false, time.Time{})}
+	assert.Empty(t, endedHelpers(existing, map[string]struct{}{}))
+}
+
 func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
 	options := option.Options{
 		Outbounds: []option.Outbound{
@@ -502,9 +509,14 @@ type fakePeerController struct {
 	// reregisterFn, when set, answers Reregister; it gets the call's number,
 	// from 1.
 	reregisterFn atomic.Pointer[func(context.Context, int64) error]
+	// onStart, if set, runs at the top of each Start.
+	onStart func()
 }
 
 func (f *fakePeerController) Start(_ context.Context) error {
+	if f.onStart != nil {
+		f.onStart()
+	}
 	if f.startCalls.Add(1) == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
@@ -559,6 +571,7 @@ func TestPatchSettings_RejectsInvalidSplitTunnelPolicy(t *testing.T) {
 	err := r.PatchSettings(settings.Settings{settings.SplitTunnelPolicyKey: "bogus"})
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "invalid")
+	assert.NotContains(t, err.Error(), "bogus", "the error must not echo the client-supplied value")
 	assert.Empty(t, settings.GetString(settings.SplitTunnelPolicyKey),
 		"an invalid policy must not be persisted")
 }
@@ -1565,6 +1578,17 @@ func TestPersonalProxiesServerExistsWhileAHelperDoes(t *testing.T) {
 	}
 }
 
+func TestPersonalProxiesServerExistsWhileAReverseOutboundDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "lantern-1")
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{lbA.ReverseHelperTag("helper-0123456789ab")}))
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.True(t, found)
+	require.NoError(t, r.vpnClient.SetReverseOutbounds(nil))
+	_, found = r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found)
+}
+
 func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	addDirectServer(t, r, "helper-0123456789ab")
@@ -1854,6 +1878,18 @@ type fakeHelperTunnel struct {
 	onSelect func() // if set, runs as each selection is applied
 	// onRestart, if set, runs as a restart begins, before it rebuilds.
 	onRestart func()
+	// platformRestart, if set, replaces a restart's rebuild: the tunnel is
+	// torn down and reports Restarting while it runs, as a platform restart
+	// that reconnects through the backend does.
+	platformRestart func()
+	restarting      bool
+	// onConnect, if set, runs once a connect is up, before it returns, as
+	// the VPN client's Connected event does.
+	onConnect func()
+	// connectErr, if set, fails every connect.
+	connectErr error
+	// autoChoice is the server auto mode reports having chosen.
+	autoChoice string
 	// selected is the selection the tunnel last applied.
 	selected string
 	// friend is the friend whose group the tunnel has selected, or "".
@@ -1862,6 +1898,8 @@ type fakeHelperTunnel struct {
 	// personal proxies group, as a tunnel built while the friend had no
 	// member does; refuseFriend refuses every selection of a friend.
 	friendless, refuseFriend bool
+	// refuseGroup refuses a selection of the personal proxies group.
+	refuseGroup bool
 	// rebuild makes a restart hold only the outbounds in its options, and a
 	// selection of a friend require the friend's outbound.
 	rebuild bool
@@ -1882,12 +1920,19 @@ func (f *fakeHelperTunnel) startOn(initial string) {
 
 func (f *fakeHelperTunnel) Connect(_ context.Context, boxOptions vpn.BoxOptions) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "connect:"+boxOptions.InitialServer)
+	if f.connectErr != nil {
+		f.mu.Unlock()
+		return f.connectErr
+	}
 	if f.live == nil {
 		f.live = make(map[string]string)
 	}
 	f.startOn(boxOptions.InitialServer)
+	f.mu.Unlock()
+	if f.onConnect != nil {
+		f.onConnect()
+	}
 	return nil
 }
 
@@ -1901,6 +1946,33 @@ func (f *fakeHelperTunnel) SelectedPersonalProxy() string {
 }
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
+
+func (f *fakeHelperTunnel) CurrentAutoSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.autoChoice, nil
+}
+
+func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil {
+		return "", nil
+	}
+	if f.selected == vpn.AutoSelectTag && f.autoChoice != "" {
+		return f.autoChoice, nil
+	}
+	return f.selected, nil
+}
+
+func (f *fakeHelperTunnel) ManualSelection() (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil || f.selected == "" || f.selected == vpn.AutoSelectTag {
+		return "", false
+	}
+	return f.selected, true
+}
 
 func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }
 
@@ -1953,6 +2025,9 @@ func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	if isFriend && f.refuseFriend {
 		return vpn.ErrPersonalProxyUnavailable
 	}
+	if tag == vpn.PersonalProxiesTag && f.refuseGroup {
+		return vpn.ErrPersonalProxiesUnavailable
+	}
 	if _, held := f.live[friend]; isFriend && f.rebuild && !held {
 		return vpn.ErrPersonalProxyUnavailable
 	}
@@ -1965,8 +2040,17 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 		f.onRestart()
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "restart:"+boxOptions.InitialServer)
+	if f.live != nil && f.platformRestart != nil {
+		f.live, f.restarting = nil, true
+		f.mu.Unlock()
+		f.platformRestart()
+		f.mu.Lock()
+		f.restarting = false
+		f.mu.Unlock()
+		return nil
+	}
+	defer f.mu.Unlock()
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
@@ -1978,6 +2062,18 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 	}
 	f.startOn(boxOptions.InitialServer)
 	return nil
+}
+
+func (f *fakeHelperTunnel) Status() vpn.VPNStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.restarting:
+		return vpn.Restarting
+	case f.live != nil:
+		return vpn.Connected
+	}
+	return vpn.Disconnected
 }
 
 func (f *fakeHelperTunnel) current() string {
@@ -2321,4 +2417,16 @@ func TestRemovalCleansUpAServerAddedConcurrently(t *testing.T) {
 	assert.False(t, held)
 	assert.False(t, tun.holds("late"), "the removed server leaves the tunnel")
 	assert.True(t, tun.holds("lantern-1"))
+}
+
+func TestServerListFromConfig_AutoSelectOptions(t *testing.T) {
+	list := serverListFromConfig(&config.Config{
+		AutoSelectOptions: json.RawMessage(`{"probe_timeouts_ms": {"hysteria2x": 3000}}`),
+	})
+	require.NotNil(t, list.AutoSelectOptions)
+	assert.Equal(t, map[string]uint32{"hysteria2x": 3000}, map[string]uint32(list.AutoSelectOptions.ProbeTimeoutsMs))
+
+	list = serverListFromConfig(&config.Config{})
+	require.NotNil(t, list.AutoSelectOptions, "a config without the field must still clear earlier timeouts")
+	assert.Empty(t, list.AutoSelectOptions.ProbeTimeoutsMs)
 }
