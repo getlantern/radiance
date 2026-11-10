@@ -1229,6 +1229,7 @@ type liveTunnel interface {
 	RemoveOutbounds(tags []string) error
 	ReconcileHelpers(helpers servers.ServerList) error
 	Restart(boxOptions vpn.BoxOptions) error
+	Status() vpn.VPNStatus
 }
 
 func (r *LocalBackend) liveTunnel() liveTunnel {
@@ -1729,8 +1730,12 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	defer r.connectMu.Unlock()
 
-	if tag == "" {
+	if tag == "" || tag == vpn.AutoSelectTag {
 		tag = vpn.AutoSelectTag
+		// A platform restart reconnects through here on auto; keep the saved selection.
+		if r.liveTunnel().Status() == vpn.Restarting {
+			tag = r.savedSelectionTag()
+		}
 	}
 	if err := r.awaitConnectable(ctx, tag); err != nil {
 		return err
