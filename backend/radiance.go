@@ -1142,18 +1142,20 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 			incomingHelpers[srv.Tag] = struct{}{}
 		}
 	}
-	// A helper's tag is stable per pairing and route while the credentials in
-	// its options rotate, so a known helper tag with new options replaces the
-	// stored server. Other known tags keep the server first offered.
+	// A known Lantern tag whose options changed replaces the stored server.
+	// The config repeats tags across batches while rotating the credentials
+	// behind them; keeping the first-offered options forever left servers dead
+	// in the list until the tag was finally evicted. SelectionHistory carries
+	// over so the refresh does not disturb probe ranking.
 	var refreshed []*servers.Server
 	offeredTags := make(map[string]struct{}, len(list.Servers))
 	list.Servers = slices.DeleteFunc(list.Servers, func(srv *servers.Server) bool {
 		if _, exists := existingTags[srv.Tag]; exists {
 			offeredTags[srv.Tag] = struct{}{}
 			if stored, found := r.srvManager.GetServerByTag(srv.Tag); found &&
-				stored.IsLantern && lbA.IsHelperTag(srv.Tag) && !r.srvManager.HasOptions(srv) {
+				stored.IsLantern && !r.srvManager.HasOptions(srv) {
 				if err := srv.CheckHostAccess(); err != nil {
-					slog.Warn("Not refreshing helper server whose options grant host access", "tag", srv.Tag, "error", err)
+					slog.Warn("Not refreshing known server whose options grant host access", "tag", srv.Tag, "error", err)
 					return true
 				}
 				refresh := srv.Clone()
@@ -2036,12 +2038,46 @@ func (r *LocalBackend) ClearTunnelCache() error {
 	return err
 }
 
+// offlineProbeOrder orders servers for the offline pre-warm so shared probe
+// budget reaches the whole list: never-probed servers first, then servers
+// probed without a success (next chance to recover), then servers that have
+// ever succeeded and already rank in the auto group. Each group keeps manager
+// order.
+func offlineProbeOrder(in []*servers.Server) []*servers.Server {
+	order := func(srv *servers.Server) int {
+		switch {
+		case srv.SelectionHistory == nil:
+			return 0
+		case srv.SelectionHistory.LastSuccessDelayMs == 0:
+			return 1
+		default:
+			return 2
+		}
+	}
+	out := make([]*servers.Server, 0, len(in))
+	for _, srv := range in {
+		out = append(out, srv)
+	}
+	slices.SortStableFunc(out, func(a, b *servers.Server) int {
+		return order(a) - order(b)
+	})
+	return out
+}
+
 func (r *LocalBackend) RunOfflineURLTests() error {
 	cfg, err := r.confHandler.GetConfig()
 	if err != nil {
 		return fmt.Errorf("no config available: %w", err)
 	}
 	svrs := r.srvManager.AllServers()
+	// Probe order decides coverage: MutableURLTest sweeps with bounded
+	// concurrency under the shared offlineURLTestTimeout, and Go map order
+	// would otherwise starve the tail of the list on every pass. Never-probed
+	// servers go first so a fresh config batch gains a usable history in the
+	// first pre-warm; previously-failed servers come next (another chance to
+	// recover); known-good servers, which already rank in the auto group, are
+	// retested last.
+	svrs = offlineProbeOrder(svrs)
 	slog.Debug("Running offline URL tests", "server_count", len(svrs), "url_override_count", len(cfg.BanditURLOverrides))
 	results, err := r.vpnClient.RunOfflineURLTests(
 		// Backend shutdown must stop probes before they use a tunnel started by another process.

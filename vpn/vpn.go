@@ -36,8 +36,13 @@ import (
 )
 
 const (
-	tracerName            = "github.com/getlantern/radiance/vpn"
-	offlineURLTestTimeout = 30 * time.Second
+	tracerName = "github.com/getlantern/radiance/vpn"
+	// The offline pre-warm shares one budget across every outbound via
+	// bounded-concurrency probing. 30s left the tail of a full batch (60
+	// servers) unprobed, so those servers surfaced with no selection history.
+	// 60s covers the full sweep while remaining a background-only window:
+	// the test runs only while disconnected and is cancelled by Connect.
+	offlineURLTestTimeout = 60 * time.Second
 )
 
 var (
