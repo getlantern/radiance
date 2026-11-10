@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"sync"
@@ -969,4 +971,40 @@ func TestRunHookFollowsTheWorker(t *testing.T) {
 	manager.start()
 	require.Eventually(t, func() bool { return len(heardSoFar()) == 2 }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, []bool{true, false}, heardSoFar())
+}
+
+func TestWidgetDialsTheEgressAroundTheTunnel(t *testing.T) {
+	received := make(chan *http.Client, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
+		received <- eg.HTTPClient
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	primeManager(t, testCfg())
+	manager.start()
+	select {
+	case client := <-received:
+		require.Same(t, egressHTTPClient, client)
+	case <-time.After(time.Second):
+		t.Fatal("donor startup blocked")
+	}
+}
+
+func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The name doesn't resolve, so only a dial through the client's dialer,
+	// which sends every connection to the test server, reaches it.
+	var dialer net.Dialer
+	client := newEgressHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, srv.Listener.Addr().String())
+	})
+	require.Zero(t, client.Timeout, "websocket.Dial bounds the dial with its own context")
+	resp, err := client.Get("http://egress.invalid/ws")
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusTeapot, resp.StatusCode)
 }
