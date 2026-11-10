@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 
 	sbox "github.com/sagernet/sing-box"
@@ -33,11 +35,17 @@ const bridgeLogName = "inbound/helper[" + lbC.TypeSamizdatBridge + "]"
 // NewBridgeBox builds a stopped sing-box instance, outside the VPN tunnel, for
 // a helper's bridges, from lantern-cloud's bridge config. It refuses a config
 // without direct mode's abuse rules (validateAbuseRules). Its dials bind to
-// the physical interface, it logs only warnings and errors, and it calls count
-// with a bridge's tag for the bytes each of its connections relays.
+// the physical interface, it logs only its bridges' own records below warnings
+// (see bridgeLogFilter), and it calls count with a bridge's tag for the bytes
+// each of its connections relays.
 func NewBridgeBox(ctx context.Context, bridgeConfig string, count func(tag string, n int64)) (helper.BridgeBox, error) {
-	// The direct outbound logs each destination at info.
-	ctx = newBoxContextLoggingTo(ctx, minLevelHandler{Handler: slog.Default().Handler(), min: slog.LevelWarn})
+	return newBridgeBox(ctx, slog.Default().Handler(), bridgeConfig, count)
+}
+
+// newBridgeBox is NewBridgeBox with the box logging to base, through
+// bridgeLogFilter.
+func newBridgeBox(ctx context.Context, base slog.Handler, bridgeConfig string, count func(tag string, n int64)) (helper.BridgeBox, error) {
+	ctx = newBoxContextLoggingTo(ctx, bridgeLogFilter{Handler: base})
 	opts, err := bridgeBoxOptions(ctx, bridgeConfig)
 	if err != nil {
 		return nil, err
@@ -142,27 +150,47 @@ func (t bridgeTracker) counter(tag string) []N.CountFunc {
 	return []N.CountFunc{func(n int64) { t.count(tag, n) }}
 }
 
-// minLevelHandler drops records below min.
-type minLevelHandler struct {
+// bridgeLogFilter passes the bridges' own records at the level the handler it
+// wraps allows, and drops every other record below warnings: the direct
+// outbound logs each destination of the friend's traffic at info, and the
+// router and DNS at debug. A bridge's own records name no destination, and
+// the log writer redacts addresses on them (see bridgeLogName). They are told
+// by their message as well as their tag: the bridge's UoT router logs each
+// destination under the same tag. sing-box asks Enabled before a record
+// carries its tag, so Handle decides.
+type bridgeLogFilter struct {
 	slog.Handler
-	min slog.Level
+	// bridge is whether WithAttrs gave every record the bridges' tag.
+	bridge bool
 }
 
-func (h minLevelHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return level >= h.min && h.Handler.Enabled(ctx, level)
-}
-
-func (h minLevelHandler) Handle(ctx context.Context, r slog.Record) error {
-	if r.Level < h.min {
+func (h bridgeLogFilter) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level < slog.LevelWarn && !h.isBridgeRecord(r) {
 		return nil
 	}
 	return h.Handler.Handle(ctx, r)
 }
 
-func (h minLevelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return minLevelHandler{Handler: h.Handler.WithAttrs(attrs), min: h.min}
+func (h bridgeLogFilter) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return bridgeLogFilter{Handler: h.Handler.WithAttrs(attrs), bridge: h.bridge || slices.ContainsFunc(attrs, isBridgeTag)}
 }
 
-func (h minLevelHandler) WithGroup(name string) slog.Handler {
-	return minLevelHandler{Handler: h.Handler.WithGroup(name), min: h.min}
+func (h bridgeLogFilter) WithGroup(name string) slog.Handler {
+	return bridgeLogFilter{Handler: h.Handler.WithGroup(name), bridge: h.bridge}
+}
+
+func (h bridgeLogFilter) isBridgeRecord(r slog.Record) bool {
+	if !strings.HasPrefix(r.Message, lbC.TypeSamizdatBridge) {
+		return false
+	}
+	bridge := h.bridge
+	r.Attrs(func(a slog.Attr) bool {
+		bridge = bridge || isBridgeTag(a)
+		return !bridge
+	})
+	return bridge
+}
+
+func isBridgeTag(a slog.Attr) bool {
+	return a.Key == "tag" && a.Value.String() == bridgeLogName
 }
