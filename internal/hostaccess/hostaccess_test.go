@@ -41,6 +41,7 @@ func TestCheckOutboundDenied(t *testing.T) {
 		{"reflex key", option.Outbound{Type: lbC.TypeReflex, Options: &lbO.ReflexOutboundOptions{KeyPath: "/etc/key.pem"}}},
 		{"twiddle hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolPath: "/etc/shadow"}}},
 		{"twiddle device hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolDevicePath: "/etc/shadow"}}},
+		{"bandit probe proxy environment", option.Outbound{Type: lbC.TypeBanditProbe, Options: &lbO.BanditProbeOutboundOptions{UseProxyEnvironment: true}}},
 		{"dialer protect path", option.Outbound{Type: C.TypeShadowsocks, Options: &option.ShadowsocksOutboundOptions{
 			DialerOptions: option.DialerOptions{ProtectPath: "/run/protect.sock"},
 		}}},
@@ -108,8 +109,8 @@ func TestHostInputFieldsWalksSkippedFields(t *testing.T) {
 }
 
 // hostInputName matches JSON field names that may name a host file, directory,
-// program, socket or interface.
-var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface`)
+// program, socket, interface, environment variable or proxy setting.
+var hostInputName = regexp.MustCompile(`path|dir|file|exec|args|command|socket|netns|listen|system|interface|env|proxy`)
 
 // reviewedFields maps an options struct type to its host-input-looking fields
 // that are allowed, and why.
@@ -154,6 +155,7 @@ var reviewedFields = map[reflect.Type]map[string]string{
 		"auto_detect_interface": "selects an existing interface",
 		"default_interface":     "selects an existing interface",
 	},
+	reflect.TypeFor[option.DirectOutboundOptions](): {"proxy_protocol": "PROXY protocol version number; deprecated and ignored"},
 }
 
 // TestRegisteredOptionFieldsReviewed fails when a registered outbound,
