@@ -30,6 +30,7 @@ import (
 	"maps"
 	"math/rand"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -41,6 +42,7 @@ import (
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -126,6 +128,20 @@ type widget interface {
 // newWidget builds the live broflake widget. Package var so unit
 // tests can swap it for a fake that records start/stop calls
 // without spinning up real WebRTC.
+// egressHTTPClient makes the widget's WebSocket handshake to the egress. With
+// the VPN on, the widget runs in the VPN's own process, whose sockets bypass
+// the tunnel while the system resolver points into it, so a default dial
+// can't resolve the egress. The bypass proxy resolves and routes around the
+// tunnel, and bypass.DialContext dials directly when the VPN isn't running.
+var egressHTTPClient = newEgressHTTPClient(bypass.DialContext)
+
+func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dial
+	return &http.Client{Transport: transport}
+}
+
 var newWidget = func(bfOpt *clientcore.BroflakeOptions, rtcOpt *clientcore.WebRTCOptions, egOpt *clientcore.EgressOptions) (widget, error) {
 	// BroflakeConn is for clients routing traffic *through* the mesh.
 	// A widget proxy only donates bandwidth, so the conn is unused —
@@ -930,6 +946,7 @@ func (m *unboundedManager) startLocked() {
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
+		egOpt.HTTPClient = egressHTTPClient
 		if ucfg != nil {
 			if ucfg.EgressAddr != "" {
 				egOpt.Addr = ucfg.EgressAddr
