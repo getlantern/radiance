@@ -1620,6 +1620,33 @@ func TestClient_RegisterSendsServePool(t *testing.T) {
 	assert.False(t, *sp)
 }
 
+// A run for pairings only registers serve_pool=false even when "help others
+// too" is on, and follows the setting again once it isn't pairings-only.
+func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, true))
+	var pairingsOnly atomic.Bool
+	pairingsOnly.Store(true)
+	srv := newStubServer(t)
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
+	require.NotNil(t, sp)
+	assert.False(t, *sp)
+
+	pairingsOnly.Store(false)
+	require.NoError(t, c.Reregister(ctx))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
+		"sharing takes over the same run and serves the pool again")
+}
+
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {

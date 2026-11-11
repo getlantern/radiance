@@ -51,7 +51,7 @@ func (r *LocalBackend) newReverseClient(deviceID string) *peer.ReverseClient {
 		Keys:            r.helperPairingKeys,
 		Box:             reverseBox{r: r},
 		OnTags:          r.reverseFriends.setTags,
-		PeerShareActive: peerShareOn,
+		PeerShareActive: r.peerShareActive,
 		LocalIPControl:  r.vpnClient.PhysicalInterfaceControl,
 	})
 }
@@ -73,6 +73,7 @@ func (r *LocalBackend) useReverseClient(c reverseController) {
 }
 
 func (r *LocalBackend) pairingKeysChanged() {
+	r.syncPairingRoute()
 	if r.reverseClient != nil {
 		r.reverseClient.PairingsChanged()
 		go r.pruneReverseFriends()

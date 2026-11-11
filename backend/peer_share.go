@@ -48,12 +48,13 @@ var peerShareUnsupported = common.IsIOS
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
-func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Client, error) {
+func newPeerClient(platformDeviceID string, onSelfStop func(error), pairingsOnly func() bool) (*peer.Client, error) {
 	api := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
 	client, err := peer.NewClient(peer.Config{
 		API:            api,
 		RejectionsPath: filepath.Join(settings.GetString(settings.DataPathKey), "peer-rejections.json"),
 		OnSelfStop:     onSelfStop,
+		PairingsOnly:   pairingsOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer client: %w", err)
@@ -108,10 +109,21 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	defer cancel()
 	if !enabled {
 		persistErr := persistPeerShare(false)
+		if r.peerClient.IsActive() && r.hasVolunteerPairings() {
+			// A volunteer keeps serving its pairings on the same port mapping:
+			// re-registering sends serve_pool=false and rotates the
+			// credentials, so strangers are cut off.
+			r.peerForPairings.Store(true)
+			r.reregisterPeer()
+			return false, persistErr
+		}
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
 		}
+		r.peerForPairings.Store(false)
 		r.restartYieldedReverse()
+		// A volunteer that wasn't running keeps trying to serve its pairings.
+		r.syncPairingRoute()
 		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
@@ -120,8 +132,16 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	// A second "on" that queued behind an in-flight Start must not fail on
 	// "already active" and roll the toggle back under a running peer.
 	if r.peerClient.IsActive() {
+		// A pairings-only run becomes the shared one: re-register so
+		// serve_pool follows "help others too" again.
+		if r.peerForPairings.Swap(false) {
+			r.resetPairingRouteRetry()
+			r.reregisterPeer()
+		}
 		return false, nil
 	}
+	r.peerForPairings.Store(false)
+	r.resetPairingRouteRetry()
 	// The reverse client may hold the manual port peer sharing binds. Once
 	// resumed it picks its port from the setting persisted above.
 	resume := r.pauseReverse(toggleCtx)
@@ -266,6 +286,13 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	if r.peerClient == nil || r.peerClient.IsActive() {
 		return
 	}
+	if r.peerForPairings.Swap(false) {
+		// A pairings-only run never set the toggle; try again later.
+		slog.Warn("pairing route stopped itself; retrying later", "reason", reason)
+		r.restartYieldedReverse()
+		r.schedulePairingRouteRetry()
+		return
+	}
 	slog.Warn("peer share stopped itself; turning the toggle off", "reason", reason)
 	if err := persistPeerShare(false); err != nil {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
@@ -324,8 +351,10 @@ func (r *LocalBackend) closePeerClient() {
 	r.peerWGMu.Lock()
 	r.peerClosing = true
 	r.peerWGMu.Unlock()
-	// A re-register retry may be waiting out its backoff.
+	// A re-register retry may be waiting out its backoff, and a pairings-only
+	// start its retry.
 	r.cancelPeerRereg()
+	r.resetPairingRouteRetry()
 	r.peerWG.Wait()
 	if !r.peerClient.IsActive() {
 		return

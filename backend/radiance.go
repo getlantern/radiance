@@ -97,6 +97,15 @@ type LocalBackend struct {
 	peerReregCancel        context.CancelFunc
 	peerReregAttemptCtx    context.Context
 	peerReregAttemptCancel context.CancelFunc
+	// peerForPairings is set while the peer client runs, with Share My
+	// Connection off, only to serve this device's volunteer pairings. See
+	// peer_pairings.go.
+	peerForPairings atomic.Bool
+	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
+	// pairings-only starts. Guarded by pairingRetryMu.
+	pairingRetryMu    sync.Mutex
+	pairingRetryTimer *time.Timer
+	pairingRetryWait  time.Duration
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -249,6 +258,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		if backend != nil {
 			backend.onPeerSelfStop(reason)
 		}
+	}, func() bool {
+		return backend != nil && backend.peerForPairings.Load()
 	})
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
@@ -411,6 +422,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	r.syncPairingRoute()
 	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
@@ -2047,6 +2059,7 @@ func (r *LocalBackend) savedSelectionTag() string {
 func (r *LocalBackend) ResetNetwork() {
 	r.vpnClient.ResetNetwork()
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
@@ -2054,6 +2067,7 @@ func (r *LocalBackend) ResetNetwork() {
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	r.vpnClient.ResetNetworkForMonitor(listener)
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // Pause pauses the VPN for a device sleep.

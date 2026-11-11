@@ -154,6 +154,11 @@ type Config struct {
 	// Live receives the connections that came through a helper pairing, for
 	// the volunteer's live per-friend status. Nil means helper.DefaultLive.
 	Live *helper.LiveTracker
+	// PairingsOnly, if set, reports whether this run serves only the device's
+	// helper pairings, whatever "help others too" says: the volunteer runs
+	// for its pairings with Share My Connection off. It is read at each
+	// registration, like the setting.
+	PairingsOnly func() bool
 }
 
 // liveOwner groups this package's connections in the LiveTracker.
@@ -522,7 +527,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
-		ServePool:    servePool(),
+		ServePool:    c.servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
@@ -1278,7 +1283,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
-		ServePool:    servePool(),
+		ServePool:    c.servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
@@ -1705,11 +1710,13 @@ func internalPortSkipping(i int, avoid uint16) uint16 {
 
 // servePool returns nil when this peer also serves the general pool, so the
 // register request leaves serve_pool out and the server applies its default,
-// and a pointer to false when the user has limited it to helper pairings.
-// It is read at each registration, so a change takes effect at the next one:
-// the next Start or the hourly credential rotation.
-func servePool() *bool {
-	if settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey) {
+// and a pointer to false when it serves only helper pairings: the user limited
+// it to them, or it runs only for them (Config.PairingsOnly). It is read at
+// each registration, so a change takes effect at the next one: the next Start
+// or the hourly credential rotation.
+func (c *Client) servePool() *bool {
+	pairingsOnly := c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
+	if !pairingsOnly && (settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)) {
 		return nil
 	}
 	off := false
