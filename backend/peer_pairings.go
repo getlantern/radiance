@@ -49,12 +49,6 @@ func (r *LocalBackend) peerShareActive() bool {
 // syncPairingRoute reconciles the pairings-only route in the background:
 // mapping a port and registering take seconds.
 func (r *LocalBackend) syncPairingRoute() {
-	r.queuePairingRoute(r.reconcilePairingRouteLocked)
-}
-
-// queuePairingRoute runs reconcile(true) in the background under
-// peerToggleMu.
-func (r *LocalBackend) queuePairingRoute(reconcile func(startNow bool)) {
 	if r.peerClient == nil || peerShareUnsupported() || !r.addPeerWork() {
 		return
 	}
@@ -65,7 +59,7 @@ func (r *LocalBackend) queuePairingRoute(reconcile func(startNow bool)) {
 		}
 		r.peerToggleMu.Lock()
 		defer r.peerToggleMu.Unlock()
-		reconcile(true)
+		r.reconcilePairingRouteLocked(true)
 	}()
 }
 
@@ -113,9 +107,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	case want && !active && startNow:
 		r.startPairingRouteLocked()
 	case want && !active:
-		// Queued as sharing-off too: the persisted setting a failed write
-		// left on mustn't stop it.
-		r.queuePairingRoute(r.reconcileSharingOffLocked)
+		r.syncPairingRoute()
 	}
 }
 
@@ -257,7 +249,8 @@ func (r *LocalBackend) notePairingRouteAttempt() {
 // the new network's router may map a port the last one wouldn't, but no more
 // often than pairingRouteRetryFirst: network events can come in bursts.
 func (r *LocalBackend) pairingRouteNetworkChanged() {
-	if r.peerClient == nil || r.peerClient.IsActive() || !r.hasVolunteerPairings() {
+	if r.peerClient == nil || r.peerClient.IsActive() || !r.hasVolunteerPairings() ||
+		settings.GetBool(settings.PeerShareEnabledKey) {
 		return
 	}
 	// The attempt is reserved here, not when it runs, so a burst of events
@@ -271,6 +264,6 @@ func (r *LocalBackend) pairingRouteNetworkChanged() {
 	if recent {
 		return
 	}
-	r.resetPairingRouteRetry()
+	// A pending backoff retry is left armed, in case this attempt is a no-op.
 	r.syncPairingRoute()
 }

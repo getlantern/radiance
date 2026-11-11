@@ -102,10 +102,6 @@ type LocalBackend struct {
 	// Connection off, only to serve this device's volunteer pairings. See
 	// peer_pairings.go.
 	peerForPairings atomic.Bool
-	// lastSharingStatus is a sharing run's last status when it failed or
-	// stopped itself and a pairings-only run took the client over, so
-	// PeerStatus keeps showing why sharing ended. Nil otherwise.
-	lastSharingStatus atomic.Pointer[peer.Status]
 	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
 	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
 	// network change forces. Guarded by pairingRetryMu.
@@ -2381,8 +2377,8 @@ func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
 	ps := peer.Snapshot{}
 	if r.peerClient != nil {
 		ps = r.peerClient.RelaySnapshot()
+		ps.Running = ps.Running && !r.peerClient.CurrentStatus().PairingsOnly
 	}
-	ps.Running = r.PeerRelaySnapshot().Running
 	us := unbounded.CurrentSnapshot()
 	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
 }

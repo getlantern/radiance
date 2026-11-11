@@ -454,30 +454,3 @@ func TestPairingRoute_NetworkBurstQueuesOneAttempt(t *testing.T) {
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(2), fake.startCalls.Load(), "one attempt for the burst")
 }
-
-// When a sharing start fails and a pairings-only run takes the client over,
-// the sharing status keeps saying why sharing failed rather than going blank.
-func TestPairingRoute_SharingFailureStaysVisible(t *testing.T) {
-	fake := &fakePeerController{}
-	r := newPairingRouteTestBackend(t, fake)
-	fake.onStart = func() {
-		if settings.GetBool(settings.PeerShareEnabledKey) {
-			fake.startErr = errors.New("register 4xx")
-		} else {
-			fake.startErr = nil
-		}
-	}
-	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
-	waitPeerWork(t, r)
-	require.NoError(t, r.applyPeerShare(false))
-	waitPeerWork(t, r)
-	fake.active.Store(false)
-	r.peerForPairings.Store(false)
-
-	require.Error(t, r.applyPeerShare(true))
-	waitPeerWork(t, r)
-	require.True(t, fake.CurrentStatus().PairingsOnly, "a pairings-only run took the client over")
-	st := r.PeerStatus()
-	assert.Equal(t, peer.PhaseError, st.Phase)
-	assert.Equal(t, "register 4xx", st.Error)
-}

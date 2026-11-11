@@ -957,13 +957,27 @@ func (c *Client) pairingsOnly() bool {
 	return c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
 }
 
-// errorTypes lists the dynamic types along err's wrap chain, outermost first:
-// enough to tell which error to classify without its text.
+// errorTypes lists the dynamic types in err's wrap tree, depth first,
+// following joined and multi-%w errors too: enough to tell which error to
+// classify without its text.
 func errorTypes(err error) string {
 	var types []string
-	for ; err != nil && len(types) < 8; err = errors.Unwrap(err) {
-		types = append(types, fmt.Sprintf("%T", err))
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil || len(types) >= 12 {
+			return
+		}
+		types = append(types, fmt.Sprintf("%T", e))
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, c := range u.Unwrap() {
+				walk(c)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
 	}
+	walk(err)
 	return strings.Join(types, " > ")
 }
 

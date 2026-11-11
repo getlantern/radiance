@@ -1970,3 +1970,14 @@ func TestAPIFollowsSameOriginRedirects(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 2.0}, got)
 }
+
+// errorTypes names every error in a wrap tree, through joins and multi-%w, so
+// an unclassified failure can be classified from its log without its text.
+func TestErrorTypes_WalksJoinedErrors(t *testing.T) {
+	leaf := &APIError{}
+	err := fmt.Errorf("start: %w", errors.Join(context.DeadlineExceeded, leaf))
+	got := errorTypes(err)
+	assert.Contains(t, got, "*errors.joinError")
+	assert.Contains(t, got, "*peer.APIError")
+	assert.Contains(t, got, "context.deadlineExceededError")
+}
