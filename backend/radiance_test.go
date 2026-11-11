@@ -582,7 +582,13 @@ func (f *fakePeerController) setReregister(fn func(context.Context, int64) error
 }
 
 func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
-func (f *fakePeerController) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
+func (f *fakePeerController) CurrentStatus() peer.Status {
+	// As the real client: a failed Start leaves its error phase behind.
+	if !f.active.Load() && f.startErr != nil && f.startCalls.Load() > 0 {
+		return peer.Status{Phase: peer.PhaseError, Error: f.startErr.Error()}
+	}
+	return peer.Status{Active: f.active.Load()}
+}
 func (f *fakePeerController) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
 
 // newPeerTestBackend wires a minimal LocalBackend with only the fields

@@ -40,6 +40,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -101,6 +102,10 @@ type LocalBackend struct {
 	// Connection off, only to serve this device's volunteer pairings. See
 	// peer_pairings.go.
 	peerForPairings atomic.Bool
+	// peerStatusPairings is set while the peer client's status belongs to a
+	// pairings-only run, current or last, so a failed one's error in retry
+	// backoff isn't shown as Share My Connection's.
+	peerStatusPairings atomic.Bool
 	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
 	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
 	// network change forces. Guarded by pairingRetryMu.
@@ -2370,7 +2375,12 @@ func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) 
 // sharingCounters reads both sharing modes' snapshots for the activity
 // tracker.
 func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
-	ps := r.PeerRelaySnapshot()
+	// Unfiltered: helper activity counts paired traffic too, and a hand-off
+	// between sharing and pairings-only mustn't look like a counter reset.
+	ps := peer.Snapshot{}
+	if r.peerClient != nil {
+		ps = r.peerClient.RelaySnapshot()
+	}
 	us := unbounded.CurrentSnapshot()
 	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
 }

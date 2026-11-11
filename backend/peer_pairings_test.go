@@ -414,3 +414,43 @@ func TestPairingRoute_EnteringSharingFollowsTheSetting(t *testing.T) {
 		})
 	}
 }
+
+// A failed pairings-only start leaves its error on the client; that isn't a
+// Share My Connection failure, so it stays hidden through the retry backoff
+// until sharing takes over.
+func TestPairingRoute_FailedStartDoesntShowAsSharingError(t *testing.T) {
+	fake := &fakePeerController{startErr: errors.New("no upnp")}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.False(t, r.peerForPairings.Load())
+	require.Equal(t, peer.PhaseError, fake.CurrentStatus().Phase)
+	assert.Equal(t, peer.Status{}, r.PeerStatus())
+
+	fake.startErr = nil
+	require.NoError(t, r.applyPeerShare(true))
+	assert.True(t, r.PeerStatus().Active, "a sharing run's status shows again")
+}
+
+// A burst of network events reserves one attempt: the cooldown holds even when
+// they arrive while a start is still waiting for the toggle lock.
+func TestPairingRoute_NetworkBurstQueuesOneAttempt(t *testing.T) {
+	first := pairingRouteRetryFirst
+	pairingRouteRetryFirst = time.Hour
+	t.Cleanup(func() { pairingRouteRetryFirst = first })
+	fake := &fakePeerController{startErr: errors.New("no upnp")}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.Equal(t, int64(1), fake.startCalls.Load())
+	r.pairingRetryMu.Lock()
+	r.pairingLastAttempt = time.Now().Add(-2 * time.Hour)
+	r.pairingRetryMu.Unlock()
+
+	r.peerToggleMu.Lock()
+	r.pairingRouteNetworkChanged()
+	r.pairingRouteNetworkChanged()
+	r.peerToggleMu.Unlock()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(2), fake.startCalls.Load(), "one attempt for the burst")
+}

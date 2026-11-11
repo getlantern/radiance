@@ -90,6 +90,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
 	if active && want && !r.peerForPairings.Load() {
 		r.peerForPairings.Store(true)
+		r.peerStatusPairings.Store(true)
 		if r.handOverToPairingsLocked() {
 			r.notePairingRunStart()
 			r.emitSharingStatus()
@@ -140,6 +141,7 @@ func (r *LocalBackend) startPairingRouteLocked() {
 	}
 	r.notePairingRouteAttempt()
 	r.peerForPairings.Store(true)
+	r.peerStatusPairings.Store(true)
 	if err := r.peerClient.Start(ctx); err != nil {
 		r.peerForPairings.Store(false)
 		// Fixed text: the error can quote an API body or URL.
@@ -251,8 +253,13 @@ func (r *LocalBackend) pairingRouteNetworkChanged() {
 	if r.peerClient == nil || r.peerClient.IsActive() || !r.hasVolunteerPairings() {
 		return
 	}
+	// The attempt is reserved here, not when it runs, so a burst of events
+	// queues one.
 	r.pairingRetryMu.Lock()
 	recent := time.Since(r.pairingLastAttempt) < pairingRouteRetryFirst
+	if !recent {
+		r.pairingLastAttempt = time.Now()
+	}
 	r.pairingRetryMu.Unlock()
 	if recent {
 		return

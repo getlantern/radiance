@@ -488,14 +488,16 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 					slog.Info("peer: start canceled before it finished",
 						"phase", failedPhase, "err", retErr)
 				} else {
-					// A pairings-only start is a background attempt that is
-					// retried, and routers without UPnP fail it routinely.
-					level := slog.LevelError
 					if c.pairingsOnly() {
-						level = slog.LevelWarn
+						// A background attempt that is retried and that
+						// routers without UPnP fail routinely; the error can
+						// quote an API body, so it's left out.
+						slog.Warn("peer: pairings-only start failed", "phase", failedPhase,
+							"reason", named.Reason)
+					} else {
+						slog.Error("peer: start failed", "phase", failedPhase,
+							"reason", named.Reason, "err", retErr)
 					}
-					slog.Log(context.Background(), level, "peer: start failed", "phase", failedPhase,
-						"reason", named.Reason, "err", retErr)
 				}
 				reason = named.Reason
 				retErr = named
@@ -503,8 +505,13 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 				// Unnamed, so the raw wrap is all the user gets — worth a
 				// log line of its own, since a reason we cannot classify is
 				// the signal that this list needs another entry.
-				slog.Error("peer: start failed with an unclassified error",
-					"phase", failedPhase, "err", retErr)
+				if c.pairingsOnly() {
+					slog.Warn("peer: pairings-only start failed with an unclassified error",
+						"phase", failedPhase)
+				} else {
+					slog.Error("peer: start failed with an unclassified error",
+						"phase", failedPhase, "err", retErr)
+				}
 			}
 			errMsg = retErr.Error()
 		}

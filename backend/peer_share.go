@@ -123,6 +123,7 @@ func (r *LocalBackend) applyPeerShareRegistered(enabled bool) (registered bool, 
 	if r.peerClient.IsActive() {
 		// A pairings-only run becomes the shared one.
 		if r.peerForPairings.Swap(false) {
+			r.peerStatusPairings.Store(false)
 			r.resetPairingRouteRetry()
 			r.clearPairingRunStart()
 			// Only "help others too" changes its serve_pool=false registration.
@@ -137,6 +138,7 @@ func (r *LocalBackend) applyPeerShareRegistered(enabled bool) (registered bool, 
 		return false, nil
 	}
 	r.peerForPairings.Store(false)
+	r.peerStatusPairings.Store(false)
 	r.resetPairingRouteRetry()
 	// The reverse client may hold the manual port peer sharing binds. Once
 	// resumed it picks its port from the setting persisted above.
@@ -377,7 +379,7 @@ func (r *LocalBackend) closePeerClient() {
 // handler serves this on every GET /peer/status.
 func (r *LocalBackend) PeerStatus() peer.Status {
 	// A pairings-only run is not Share My Connection, which is off.
-	if r.peerClient == nil || r.peerForPairings.Load() {
+	if r.peerClient == nil || r.peerStatusPairings.Load() {
 		return peer.Status{}
 	}
 	return r.peerClient.CurrentStatus()
@@ -388,7 +390,7 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 // reports an empty snapshot, as PeerStatus does.
 func (r *LocalBackend) PeerRelaySnapshot() peer.Snapshot {
 	// A pairings-only run is not Share My Connection, which is off.
-	if r.peerClient == nil || r.peerForPairings.Load() {
+	if r.peerClient == nil || r.peerStatusPairings.Load() {
 		return peer.Snapshot{Peers: []string{}, PeerBytes: []peer.PeerBytes{}}
 	}
 	return r.peerClient.RelaySnapshot()
