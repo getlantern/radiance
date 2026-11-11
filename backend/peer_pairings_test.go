@@ -563,3 +563,30 @@ func TestPairingRoute_StaleWorkerWaitsForTheBackoff(t *testing.T) {
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(2), fake.startCalls.Load(), "a new pairing tries at once")
 }
+
+// TestPairingRoute_ShareOffCancelsAQueuedReregister checks that a re-register
+// an "on" queued for sharing, still waiting for the toggle lock when an "off"
+// hands the run back to pairings-only, never runs: it would rotate the
+// credentials and drop the friends' sessions for nothing.
+func TestPairingRoute_ShareOffCancelsAQueuedReregister(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, r.peerForPairings.Load())
+
+	// As an "on" over the pairings-only run left things: sharing owns the run
+	// and a re-register waits for the lock.
+	r.peerToggleMu.Lock()
+	require.NoError(t, settings.Set(settings.PeerShareEnabledKey, true))
+	r.peerForPairings.Store(false)
+	r.reregisterPeer()
+	// Then an "off" gets the lock first.
+	require.NoError(t, settings.Set(settings.PeerShareEnabledKey, false))
+	r.reconcileSharingOffLocked(false)
+	r.peerToggleMu.Unlock()
+	waitPeerWork(t, r)
+
+	assert.Zero(t, fake.reregisterCalls.Load())
+	assert.True(t, r.peerForPairings.Load())
+}

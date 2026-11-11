@@ -96,6 +96,10 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	if r.peerClient == nil || peerShareUnsupported() {
 		return
 	}
+	// A re-register queued for sharing, by an "on" that took the lock between
+	// an "off" cancelling it and this, would rotate a run sharing no longer
+	// owns.
+	r.cancelPeerRereg()
 	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
 	if !active {
 		// A self-stop clears active before its teardown deregisters and
