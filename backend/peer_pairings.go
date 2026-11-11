@@ -100,8 +100,11 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 		active = false
 	}
 	switch {
-	case active && !want:
-		r.stopPeerLocked()
+	case !want:
+		if active {
+			r.stopPeerLocked()
+		}
+		// A later pairing starts its backoff afresh.
 		r.resetPairingRouteRetry()
 	case want && !active && startNow:
 		r.startPairingRouteLocked()

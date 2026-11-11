@@ -1620,7 +1620,7 @@ func TestClient_RegisterSendsServePool(t *testing.T) {
 	assert.False(t, *sp)
 }
 
-// A run for pairings only registers serve_pool=false even when "help others
+// TestClient_PairingsOnlyRegistersWithoutThePool checks that a run for pairings only registers serve_pool=false even when "help others
 // too" is on, and follows the setting again once it isn't pairings-only.
 func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	require.NoError(t, settings.InitSettings(t.TempDir()))
@@ -1652,7 +1652,7 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	assert.True(t, c.MayServePool())
 }
 
-// MayServePool errs toward true while a box serves: a registration in flight
+// TestClient_MayServePoolErrsTowardThePool checks that MayServePool errs toward true while a box serves: a registration in flight
 // reads true, a failed pool registration leaves it true and a pool-free one
 // can't add it. A committed pool-free registration clears it, as does no box
 // serving: a stop or a failed Start.
@@ -1971,7 +1971,7 @@ func TestAPIFollowsSameOriginRedirects(t *testing.T) {
 	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 2.0}, got)
 }
 
-// errorTypes names every error in a wrap tree, through joins and multi-%w, so
+// TestErrorTypes_WalksJoinedErrors checks that errorTypes names every error in a wrap tree, through joins and multi-%w, so
 // an unclassified failure can be classified from its log without its text.
 func TestErrorTypes_WalksJoinedErrors(t *testing.T) {
 	leaf := &APIError{}

@@ -38,7 +38,7 @@ func pairingKeys(roles ...helperticket.Role) map[string]helper.PairingKey {
 	return keys
 }
 
-// A volunteer with Share My Connection off starts its route for its pairings,
+// TestPairingRoute_FollowsVolunteerPairings checks that a volunteer with Share My Connection off starts its route for its pairings,
 // pairings-only, and stops it when the last pairing ends.
 func TestPairingRoute_FollowsVolunteerPairings(t *testing.T) {
 	fake := &fakePeerController{}
@@ -59,7 +59,7 @@ func TestPairingRoute_FollowsVolunteerPairings(t *testing.T) {
 	assert.False(t, r.peerForPairings.Load())
 }
 
-// Only being someone's volunteer starts the route; an inviter pairing doesn't.
+// TestPairingRoute_InviterPairingDoesNotStart checks that only being someone's volunteer starts the route; an inviter pairing doesn't.
 func TestPairingRoute_InviterPairingDoesNotStart(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
@@ -69,7 +69,7 @@ func TestPairingRoute_InviterPairingDoesNotStart(t *testing.T) {
 	assert.Zero(t, fake.startCalls.Load())
 }
 
-// A router that won't map a port fails the start; it is tried again later,
+// TestPairingRoute_RetriesAFailedStart checks that a router that won't map a port fails the start; it is tried again later,
 // and the share toggle is never touched.
 func TestPairingRoute_RetriesAFailedStart(t *testing.T) {
 	first := pairingRouteRetryFirst
@@ -88,7 +88,7 @@ func TestPairingRoute_RetriesAFailedStart(t *testing.T) {
 	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
 }
 
-// A network change retries at once rather than waiting out the backoff, but
+// TestPairingRoute_NetworkChangeRetriesNow checks that a network change retries at once rather than waiting out the backoff, but
 // not again until pairingRouteRetryFirst has passed since the last attempt.
 func TestPairingRoute_NetworkChangeRetriesNow(t *testing.T) {
 	first := pairingRouteRetryFirst
@@ -115,7 +115,7 @@ func TestPairingRoute_NetworkChangeRetriesNow(t *testing.T) {
 	assert.True(t, r.peerForPairings.Load())
 }
 
-// Share My Connection and the pairings-only route are one client on one port
+// TestPairingRoute_HandsOffWithShareToggle checks that Share My Connection and the pairings-only route are one client on one port
 // mapping: turning sharing on takes over a pairings-only run, and turning it
 // off hands back, each by re-registering rather than restarting.
 func TestPairingRoute_HandsOffWithShareToggle(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPairingRoute_HandsOffWithShareToggle(t *testing.T) {
 	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
 }
 
-// Turning sharing off fails closed: if the re-register that drops the pool
+// TestPairingRoute_ShareOffFailsClosed checks that turning sharing off fails closed: if the re-register that drops the pool
 // fails, the client stops rather than leaving a pool route up, and the
 // pairings-only run starts afresh, registering serve_pool=false from the start.
 func TestPairingRoute_ShareOffFailsClosed(t *testing.T) {
@@ -159,7 +159,7 @@ func TestPairingRoute_ShareOffFailsClosed(t *testing.T) {
 	assert.True(t, r.peerForPairings.Load())
 }
 
-// With no volunteer pairing, turning sharing off stops the client as before.
+// TestPairingRoute_ShareOffWithoutPairingsStops checks that with no volunteer pairing, turning sharing off stops the client as before.
 func TestPairingRoute_ShareOffWithoutPairingsStops(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
@@ -172,7 +172,7 @@ func TestPairingRoute_ShareOffWithoutPairingsStops(t *testing.T) {
 	assert.False(t, r.peerForPairings.Load())
 }
 
-// With sharing on, its toggle governs the client: pairing changes don't stop it.
+// TestPairingRoute_LeavesSharingAlone checks that with sharing on, its toggle governs the client: pairing changes don't stop it.
 func TestPairingRoute_LeavesSharingAlone(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
@@ -187,7 +187,7 @@ func TestPairingRoute_LeavesSharingAlone(t *testing.T) {
 	assert.False(t, r.peerForPairings.Load())
 }
 
-// A pairings-only run that stops itself is retried and leaves the share toggle
+// TestPairingRoute_SelfStopRetries checks that a pairings-only run that stops itself is retried and leaves the share toggle
 // as it was.
 func TestPairingRoute_SelfStopRetries(t *testing.T) {
 	first := pairingRouteRetryFirst
@@ -207,7 +207,7 @@ func TestPairingRoute_SelfStopRetries(t *testing.T) {
 	assert.True(t, r.peerForPairings.Load())
 }
 
-// A share Start that fails and rolls the toggle back leaves sharing off, so a
+// TestPairingRoute_ShareStartFailureFallsBackToPairings checks that a share Start that fails and rolls the toggle back leaves sharing off, so a
 // volunteer goes back to serving its pairings.
 func TestPairingRoute_ShareStartFailureFallsBackToPairings(t *testing.T) {
 	fake := &fakePeerController{}
@@ -233,7 +233,7 @@ func TestPairingRoute_ShareStartFailureFallsBackToPairings(t *testing.T) {
 	assert.True(t, r.peerForPairings.Load())
 }
 
-// A sharing run that stops itself turns the toggle off, and a volunteer goes
+// TestPairingRoute_ShareSelfStopFallsBackToPairings checks that a sharing run that stops itself turns the toggle off, and a volunteer goes
 // back to serving its pairings.
 func TestPairingRoute_ShareSelfStopFallsBackToPairings(t *testing.T) {
 	fake := &fakePeerController{}
@@ -251,7 +251,7 @@ func TestPairingRoute_ShareSelfStopFallsBackToPairings(t *testing.T) {
 	assert.True(t, r.peerForPairings.Load())
 }
 
-// An "off" while the run is already pairings-only, or a "help others too"
+// TestPairingRoute_RedundantChangesDontRotate checks that an "off" while the run is already pairings-only, or a "help others too"
 // change then, leaves the run alone: no credential rotation drops the friend.
 func TestPairingRoute_RedundantChangesDontRotate(t *testing.T) {
 	fake := &fakePeerController{}
@@ -268,7 +268,7 @@ func TestPairingRoute_RedundantChangesDontRotate(t *testing.T) {
 	assert.Equal(t, int64(1), fake.startCalls.Load())
 }
 
-// A pairings-only run doesn't show as Share My Connection, which is off.
+// TestPairingRoute_StatusShowsSharingOff checks that a pairings-only run doesn't show as Share My Connection, which is off.
 func TestPairingRoute_StatusShowsSharingOff(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
@@ -278,7 +278,7 @@ func TestPairingRoute_StatusShowsSharingOff(t *testing.T) {
 	assert.False(t, r.PeerStatus().Active)
 }
 
-// With "help others too" off, a sharing run already serves only pairings, so
+// TestPairingRoute_HandOffWithoutPoolKeepsSessions checks that with "help others too" off, a sharing run already serves only pairings, so
 // handing it to or from pairings-only rotates nothing and keeps the friends'
 // sessions; the sharing UI still hears of each hand-off.
 func TestPairingRoute_HandOffWithoutPoolKeepsSessions(t *testing.T) {
@@ -302,7 +302,7 @@ func TestPairingRoute_HandOffWithoutPoolKeepsSessions(t *testing.T) {
 		"each hand-off tells the sharing UI")
 }
 
-// A pairings-only run's relay isn't Share My Connection's, and an idle one
+// TestPairingRoute_RelaySnapshotShowsSharingOff checks that a pairings-only run's relay isn't Share My Connection's, and an idle one
 // isn't time spent sharing, though its bytes still count for helper activity.
 func TestPairingRoute_RelaySnapshotShowsSharingOff(t *testing.T) {
 	fake := &fakePeerController{}
@@ -319,7 +319,7 @@ func TestPairingRoute_RelaySnapshotShowsSharingOff(t *testing.T) {
 	assert.NotEmpty(t, r.PeerRelaySnapshot().Peers, "sharing's relay shows")
 }
 
-// A hand-off is judged by the registration, not the setting: with "help others
+// TestPairingRoute_HandOffJudgesTheRegistration checks that a hand-off is judged by the registration, not the setting: with "help others
 // too" just turned off but the route still registered for the pool (its
 // re-register pending or failed), turning sharing off still re-registers, and
 // fails closed if that fails.
@@ -340,7 +340,7 @@ func TestPairingRoute_HandOffJudgesTheRegistration(t *testing.T) {
 	assert.False(t, fake.MayServePool())
 }
 
-// A pairings-only run that soon stops itself backs off like a failed start; one
+// TestPairingRoute_BackoffResetsOnlyAfterAStableRun checks that a pairings-only run that soon stops itself backs off like a failed start; one
 // that stayed up restarts the backoff.
 func TestPairingRoute_BackoffResetsOnlyAfterAStableRun(t *testing.T) {
 	first, maxWait, stable := pairingRouteRetryFirst, pairingRouteRetryMax, pairingRunStableAfter
@@ -375,7 +375,7 @@ func TestPairingRoute_BackoffResetsOnlyAfterAStableRun(t *testing.T) {
 	assert.Equal(t, 2*time.Hour, nextWait(), "a stable run restarts the backoff from its first step")
 }
 
-// Turning sharing on over a pairings-only run with "help others too" off in
+// TestPairingRoute_ShareOnWithPoolOffInOnePatch checks that turning sharing on over a pairings-only run with "help others too" off in
 // the same patch rotates nothing: the registration already matches.
 func TestPairingRoute_ShareOnWithPoolOffInOnePatch(t *testing.T) {
 	fake := &fakePeerController{}
@@ -394,7 +394,7 @@ func TestPairingRoute_ShareOnWithPoolOffInOnePatch(t *testing.T) {
 	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
 }
 
-// Entering sharing from pairings-only re-registers exactly when "help others
+// TestPairingRoute_EnteringSharingFollowsTheSetting checks that entering sharing from pairings-only re-registers exactly when "help others
 // too" is on, whatever a rotation in flight leaves the registration looking
 // like: it's the only case in which serve_pool changes.
 func TestPairingRoute_EnteringSharingFollowsTheSetting(t *testing.T) {
@@ -423,7 +423,7 @@ func TestPairingRoute_EnteringSharingFollowsTheSetting(t *testing.T) {
 	}
 }
 
-// A failed pairings-only start leaves its error on the client; that isn't a
+// TestPairingRoute_FailedStartDoesntShowAsSharingError checks that a failed pairings-only start leaves its error on the client; that isn't a
 // Share My Connection failure, so it stays hidden through the retry backoff
 // until sharing takes over.
 func TestPairingRoute_FailedStartDoesntShowAsSharingError(t *testing.T) {
@@ -440,7 +440,7 @@ func TestPairingRoute_FailedStartDoesntShowAsSharingError(t *testing.T) {
 	assert.True(t, r.PeerStatus().Active, "a sharing run's status shows again")
 }
 
-// A burst of network events reserves one attempt: the cooldown holds even when
+// TestPairingRoute_NetworkBurstQueuesOneAttempt checks that a burst of network events reserves one attempt: the cooldown holds even when
 // they arrive while a start is still waiting for the toggle lock.
 func TestPairingRoute_NetworkBurstQueuesOneAttempt(t *testing.T) {
 	first := pairingRouteRetryFirst
@@ -461,4 +461,27 @@ func TestPairingRoute_NetworkBurstQueuesOneAttempt(t *testing.T) {
 	r.peerToggleMu.Unlock()
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(2), fake.startCalls.Load(), "one attempt for the burst")
+}
+
+// TestPairingRoute_LastPairingEndingResetsTheBackoff checks that when the last
+// pairing ends while no route runs, a backoff grown by failed starts doesn't
+// carry over to the next pairing.
+func TestPairingRoute_LastPairingEndingResetsTheBackoff(t *testing.T) {
+	first := pairingRouteRetryFirst
+	pairingRouteRetryFirst = time.Hour
+	t.Cleanup(func() { pairingRouteRetryFirst = first })
+	fake := &fakePeerController{startErr: errors.New("no upnp")}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	r.pairingRetryMu.Lock()
+	require.NotZero(t, r.pairingRetryWait)
+	r.pairingRetryMu.Unlock()
+
+	r.helperPairingKeys.Set(nil)
+	waitPeerWork(t, r)
+	r.pairingRetryMu.Lock()
+	defer r.pairingRetryMu.Unlock()
+	assert.Zero(t, r.pairingRetryWait)
+	assert.Nil(t, r.pairingRetryTimer)
 }
