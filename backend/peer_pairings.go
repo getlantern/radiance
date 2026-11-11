@@ -49,16 +49,26 @@ func (r *LocalBackend) peerShareActive() bool {
 // syncPairingRoute reconciles the pairings-only route in the background:
 // mapping a port and registering take seconds.
 func (r *LocalBackend) syncPairingRoute() {
-	if r.peerClient == nil || peerShareUnsupported() || !r.addPeerWork() {
+	if r.peerClient == nil || peerShareUnsupported() {
+		return
+	}
+	// At most one worker waits for the lock; it reads the state when it runs,
+	// so the timer, network changes and pairing changes coalesce into it.
+	if !r.pairingSyncQueued.CompareAndSwap(false, true) {
+		return
+	}
+	if !r.addPeerWork() {
+		r.pairingSyncQueued.Store(false)
 		return
 	}
 	go func() {
 		defer r.peerWG.Done()
+		r.peerToggleMu.Lock()
+		defer r.peerToggleMu.Unlock()
+		r.pairingSyncQueued.Store(false)
 		if r.ctx.Err() != nil {
 			return
 		}
-		r.peerToggleMu.Lock()
-		defer r.peerToggleMu.Unlock()
 		r.reconcilePairingRouteLocked()
 	}()
 }
@@ -87,6 +97,13 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 		return
 	}
 	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
+	if !active {
+		// A self-stop clears active before its teardown deregisters and
+		// closes the box; Stop waits that out, so pool sessions have ended
+		// before sharing-off returns. It returns at once when nothing is
+		// tearing down.
+		r.drainPeerTeardownLocked()
+	}
 	if active && want && !r.peerForPairings.Load() {
 		r.peerForPairings.Store(true)
 		r.peerClient.RetagStatus()
@@ -153,6 +170,16 @@ func (r *LocalBackend) startPairingRouteLocked() {
 	// The backoff is kept until the run proves stable: see onPeerSelfStop.
 	r.notePairingRunStart()
 	slog.Info("pairing route started")
+}
+
+// drainPeerTeardownLocked waits for an inactive client's in-flight teardown,
+// if any. The caller holds peerToggleMu.
+func (r *LocalBackend) drainPeerTeardownLocked() {
+	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
+	defer cancel()
+	if err := r.peerClient.Stop(ctx); err != nil {
+		slog.Warn("waiting for peer teardown returned error", "error", err)
+	}
 }
 
 // stopPeerLocked stops the peer client. The caller holds peerToggleMu.

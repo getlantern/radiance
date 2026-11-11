@@ -518,6 +518,9 @@ type fakePeerController struct {
 	// status models the real client's CurrentStatus: the last Start's error
 	// phase, kept until the next Start, or serving while active.
 	status atomic.Pointer[peer.Status]
+	// teardown, if set, is a self-stop's teardown in flight: Stop waits for
+	// it to close.
+	teardown atomic.Pointer[chan struct{}]
 }
 
 // registrationPool is the serve_pool a registration now would send, as the
@@ -553,8 +556,14 @@ func (f *fakePeerController) Start(_ context.Context) error {
 }
 
 func (f *fakePeerController) Stop(_ context.Context) error {
-	f.stopCalls.Add(1)
+	// As the real client: Stop waits for a teardown in flight.
+	if ch := f.teardown.Load(); ch != nil {
+		<-*ch
+	}
+	// Only a Stop that stops a session counts: on an idle client the real
+	// one does nothing.
 	if f.active.Swap(false) {
+		f.stopCalls.Add(1)
 		f.poolMaybe.Store(false)
 		f.setStatus(peer.Status{Phase: peer.PhaseIdle})
 	}

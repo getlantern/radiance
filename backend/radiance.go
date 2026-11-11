@@ -102,6 +102,9 @@ type LocalBackend struct {
 	// Connection off, only to serve this device's volunteer pairings. See
 	// peer_pairings.go.
 	peerForPairings atomic.Bool
+	// pairingSyncQueued is set while a syncPairingRoute worker waits for
+	// peerToggleMu, so queued reconciles coalesce.
+	pairingSyncQueued atomic.Bool
 	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
 	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
 	// network change forces. Guarded by pairingRetryMu.

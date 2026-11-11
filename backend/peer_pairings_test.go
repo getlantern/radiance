@@ -485,3 +485,56 @@ func TestPairingRoute_LastPairingEndingResetsTheBackoff(t *testing.T) {
 	assert.Zero(t, r.pairingRetryWait)
 	assert.Nil(t, r.pairingRetryTimer)
 }
+
+// TestPairingRoute_ShareOffWaitsForATeardownInFlight checks that turning
+// sharing off while a self-stop is still tearing down (the client already
+// inactive) waits for it, so pool sessions have ended when the toggle returns,
+// with or without volunteer pairings.
+func TestPairingRoute_ShareOffWaitsForATeardownInFlight(t *testing.T) {
+	for _, pairings := range []bool{false, true} {
+		fake := &fakePeerController{}
+		r := newPairingRouteTestBackend(t, fake)
+		if pairings {
+			r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+			waitPeerWork(t, r)
+		}
+		require.NoError(t, settings.Set(settings.PeerShareEnabledKey, true))
+		teardown := make(chan struct{})
+		fake.teardown.Store(&teardown)
+		fake.active.Store(false)
+
+		done := make(chan error, 1)
+		go func() { done <- r.applyPeerShare(false) }()
+		select {
+		case <-done:
+			t.Fatalf("pairings=%v: sharing-off returned before the teardown ended", pairings)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(teardown)
+		require.NoError(t, <-done)
+		fake.teardown.Store(nil)
+		waitPeerWork(t, r)
+	}
+}
+
+// TestPairingRoute_QueuedSyncsCoalesce checks that reconciles queued while the
+// toggle lock is held (a retry timer, a network change, a pairing change)
+// coalesce into one worker, so a failed start isn't retried at once.
+func TestPairingRoute_QueuedSyncsCoalesce(t *testing.T) {
+	first := pairingRouteRetryFirst
+	pairingRouteRetryFirst = time.Hour
+	t.Cleanup(func() { pairingRouteRetryFirst = first })
+	fake := &fakePeerController{startErr: errors.New("no upnp")}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.Equal(t, int64(1), fake.startCalls.Load())
+
+	r.peerToggleMu.Lock()
+	r.syncPairingRoute()
+	r.syncPairingRoute()
+	r.syncPairingRoute()
+	r.peerToggleMu.Unlock()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(2), fake.startCalls.Load(), "one attempt for the queued reconciles")
+}
