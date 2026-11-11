@@ -24,6 +24,8 @@ type peerController interface {
 	CurrentStatus() peer.Status
 	RelaySnapshot() peer.Snapshot
 	Reregister(ctx context.Context) error
+	MayServePool() bool
+	RetagStatus()
 }
 
 // peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
@@ -48,12 +50,13 @@ var peerShareUnsupported = common.IsIOS
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
-func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Client, error) {
+func newPeerClient(platformDeviceID string, onSelfStop func(error), pairingsOnly func() bool) (*peer.Client, error) {
 	api := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
 	client, err := peer.NewClient(peer.Config{
 		API:            api,
 		RejectionsPath: filepath.Join(settings.GetString(settings.DataPathKey), "peer-rejections.json"),
 		OnSelfStop:     onSelfStop,
+		PairingsOnly:   pairingsOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer client: %w", err)
@@ -68,15 +71,15 @@ func newPeerClient(platformDeviceID string, onSelfStop func(error)) (*peer.Clien
 // is rolled back if Start fails. Stop errors are logged because a partial
 // teardown shouldn't keep the toggle on.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
-	_, err := r.applyPeerShareStarted(enabled)
+	_, err := r.applyPeerShareRegistered(enabled)
 	return err
 }
 
-// applyPeerShareStarted is applyPeerShare, also reporting whether it called
-// Start, decided under peerToggleMu. A Start registers with the settings as
-// they are, so a caller that persisted a registration setting first knows
-// that registration already carries it.
-func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err error) {
+// applyPeerShareRegistered is applyPeerShare, also reporting whether the
+// registration follows the settings as they are, or a re-register for them is
+// under way, so a caller that persisted a registration setting first has
+// nothing left to re-register. Decided under peerToggleMu.
+func (r *LocalBackend) applyPeerShareRegistered(enabled bool) (registered bool, err error) {
 	if peerShareUnsupported() {
 		// A persisted "on" would otherwise survive every restart with nothing
 		// behind it.
@@ -108,10 +111,9 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	defer cancel()
 	if !enabled {
 		persistErr := persistPeerShare(false)
-		if err := r.peerClient.Stop(toggleCtx); err != nil {
-			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
-		}
-		r.restartYieldedReverse()
+		// Stops the client, or, for a volunteer, keeps serving its pairings
+		// on the same port mapping.
+		r.reconcileSharingOffLocked(false)
 		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
@@ -120,8 +122,24 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	// A second "on" that queued behind an in-flight Start must not fail on
 	// "already active" and roll the toggle back under a running peer.
 	if r.peerClient.IsActive() {
+		// A pairings-only run becomes the shared one.
+		if r.peerForPairings.Swap(false) {
+			r.peerClient.RetagStatus()
+			r.resetPairingRouteRetry()
+			r.clearPairingRunStart()
+			// Only "help others too" changes its serve_pool=false registration.
+			if settings.PeerServesPool() {
+				r.reregisterPeer()
+			}
+			r.emitSharingStatus()
+			// The registration now follows this patch's settings, so the
+			// caller re-registers nothing more for them.
+			return true, nil
+		}
 		return false, nil
 	}
+	r.peerForPairings.Store(false)
+	r.resetPairingRouteRetry()
 	// The reverse client may hold the manual port peer sharing binds. Once
 	// resumed it picks its port from the setting persisted above.
 	resume := r.pauseReverse(toggleCtx)
@@ -138,6 +156,8 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 			slog.Error("peer share rollback failed after Start error",
 				"start_error", err, "rollback_error", rbErr)
 		}
+		// Sharing is off again; a volunteer still serves its pairings.
+		r.reconcileSharingOffLocked(false)
 		return true, fmt.Errorf("start peer share: %w", err)
 	}
 	slog.Info("peer share start succeeded")
@@ -266,11 +286,25 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	if r.peerClient == nil || r.peerClient.IsActive() {
 		return
 	}
+	if r.peerForPairings.Swap(false) {
+		// A pairings-only run never set the toggle; try again later.
+		// Fixed text: the reason can quote an API body or URL.
+		slog.Warn("pairing route stopped itself; retrying later")
+		r.restartYieldedReverse()
+		if r.pairingRunWasStable() {
+			r.resetPairingRouteRetry()
+		}
+		r.clearPairingRunStart()
+		r.schedulePairingRouteRetry()
+		return
+	}
 	slog.Warn("peer share stopped itself; turning the toggle off", "reason", reason)
 	if err := persistPeerShare(false); err != nil {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
 	}
 	r.restartYieldedReverse()
+	// A volunteer still serves its pairings.
+	r.reconcileSharingOffLocked(false)
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the
@@ -324,8 +358,10 @@ func (r *LocalBackend) closePeerClient() {
 	r.peerWGMu.Lock()
 	r.peerClosing = true
 	r.peerWGMu.Unlock()
-	// A re-register retry may be waiting out its backoff.
+	// A re-register retry may be waiting out its backoff, and a pairings-only
+	// start its retry.
 	r.cancelPeerRereg()
+	r.resetPairingRouteRetry()
 	r.peerWG.Wait()
 	if !r.peerClient.IsActive() {
 		return
@@ -345,14 +381,21 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 	if r.peerClient == nil {
 		return peer.Status{}
 	}
-	return r.peerClient.CurrentStatus()
+	// A pairings-only run, current or last, is not Share My Connection.
+	if st := r.peerClient.CurrentStatus(); !st.PairingsOnly {
+		return st
+	}
+	return peer.Status{}
 }
 
 // PeerRelaySnapshot returns the bytes the current or most recent direct-sharing
-// session has relayed, for the IPC /peer/snapshot endpoint. A nil peerClient
-// reports an empty snapshot, as PeerStatus does.
+// session has relayed, for the IPC /peer/snapshot endpoint. It is empty while
+// the client's last run was pairings-only; a hand-off between the modes keeps
+// one session, whose totals then carry across. A nil peerClient reports an
+// empty snapshot, as PeerStatus does.
 func (r *LocalBackend) PeerRelaySnapshot() peer.Snapshot {
-	if r.peerClient == nil {
+	// A pairings-only run, current or last, is not Share My Connection.
+	if r.peerClient == nil || r.peerClient.CurrentStatus().PairingsOnly {
 		return peer.Snapshot{Peers: []string{}, PeerBytes: []peer.PeerBytes{}}
 	}
 	return r.peerClient.RelaySnapshot()

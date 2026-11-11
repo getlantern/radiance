@@ -58,6 +58,9 @@ var deniedFields = map[reflect.Type][]string{
 	reflect.TypeFor[option.WireGuardEndpointOptions]():     {"listen_port"},
 	reflect.TypeFor[lbO.ReflexOutboundOptions]():           {"cert_path", "key_path"},
 	reflect.TypeFor[lbO.TwiddleOutboundOptions]():          {"hello_pool_path", "hello_pool_device_path"},
+	// Routes the callback through the host's HTTPS_PROXY, which can carry
+	// credentials; a server must not make a client use them.
+	reflect.TypeFor[lbO.BanditProbeOutboundOptions](): {"use_proxy_environment"},
 }
 
 // TypeAllowed reports whether options of the given outbound or endpoint type

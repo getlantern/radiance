@@ -559,6 +559,13 @@ func (c *VPNClient) SetReversePortal(cfg *samizdatreverse.PortalConfig, masquera
 		kept.PrivateKey = bytes.Clone(cfg.PrivateKey)
 		kept.CertPEM = bytes.Clone(cfg.CertPEM)
 		kept.KeyPEM = bytes.Clone(cfg.KeyPEM)
+		if cfg.Previous != nil {
+			prev := *cfg.Previous
+			prev.PrivateKey = bytes.Clone(prev.PrivateKey)
+			prev.CertPEM = bytes.Clone(prev.CertPEM)
+			prev.KeyPEM = bytes.Clone(prev.KeyPEM)
+			kept.Previous = &prev
+		}
 		c.reversePortal, c.reverseMasquerade = &kept, masqueradeDomain
 	}
 	if c.tunnel == nil {

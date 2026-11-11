@@ -540,7 +540,8 @@ func TestReverseRotationKeepsPortAndCoverDomain(t *testing.T) {
 	e.clock.Advance(defaultReverseRotateInterval)
 	e.log.take()
 	e.cycle(t)
-	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	// The last portal cuts how long the replaced identity is kept.
+	assert.Equal(t, []string{"portal", "register:1", "portal"}, e.log.take())
 	second := e.box.lastPortal()
 	r2 := openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
 
@@ -938,7 +939,7 @@ func TestReverseFailedRotationKeepsAdvertisingTheRunningPortal(t *testing.T) {
 	e.box.setErrs(nil, nil)
 	e.clock.Advance(defaultReverseRegisterInterval)
 	e.cycle(t)
-	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	assert.Equal(t, []string{"portal", "register:1", "portal"}, e.log.take())
 	r = openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
 	assert.Equal(t, x25519Public(t, e.box.lastPortal().PrivateKey), r.PublicKey)
 	assert.NotEqual(t, x25519Public(t, running.PrivateKey), r.PublicKey)
@@ -1371,4 +1372,339 @@ func (b portalErrAfter) SetReversePortal(cfg *samizdatreverse.PortalConfig, masq
 		b.revBox.setErrs(b.err, nil)
 	}
 	return b.revBox.SetReversePortal(cfg, masqueradeDomain)
+}
+
+// prevKey returns the previous identity's private key the portal was
+// configured with, or nil.
+func prevKey(cfg *samizdatreverse.PortalConfig) []byte {
+	if cfg == nil || cfg.Previous == nil {
+		return nil
+	}
+	return cfg.Previous.PrivateKey
+}
+
+// A rotation keeps the registered identity as the portal's previous one, for
+// at most a rotate interval while the new route is not registered, and for one
+// more helper poll once it is.
+func TestReverseRotationKeepsThePublishedIdentity(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+	published := e.box.lastPortal()
+	require.Nil(t, published.Previous)
+
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.clock.Advance(defaultReverseRotateInterval)
+	rotated := e.clock.Now()
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	portal := e.box.lastPortal()
+	assert.NotEqual(t, published.PrivateKey, portal.PrivateKey)
+	require.NotNil(t, portal.Previous)
+	assert.Equal(t, published.PrivateKey, portal.Previous.PrivateKey)
+	assert.Equal(t, published.CertPEM, portal.Previous.CertPEM)
+	assert.Equal(t, published.KeyPEM, portal.Previous.KeyPEM)
+	assert.Equal(t, rotated.Add(defaultReverseRotateInterval), portal.Previous.Until)
+
+	// Registers still failing leave it alone. The address is forgotten by
+	// now, so the client asks for it again first.
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0"}, e.log.take())
+
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
+	e.clock.Advance(defaultReverseRegisterInterval)
+	registered := e.clock.Now()
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "register:1", "portal"}, e.log.take())
+	portal = e.box.lastPortal()
+	require.NotNil(t, portal.Previous)
+	assert.Equal(t, published.PrivateKey, portal.Previous.PrivateKey)
+	assert.Equal(t, registered.Add(defaultReverseRegisterInterval+reversePrevGrace), portal.Previous.Until)
+
+	// Later registers do not extend it.
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:1"}, e.log.take())
+
+	// Once it has passed, the portal drops it.
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+	assert.Nil(t, e.box.lastPortal().Previous)
+	assert.Equal(t, portal.PrivateKey, e.box.lastPortal().PrivateKey)
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.cycle(t)
+	assert.Equal(t, []string{"register:1"}, e.log.take())
+}
+
+// The cut never outlasts the rotate interval after the rotation.
+func TestReversePreviousNeverOutlastsTheRotateInterval(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.clock.Advance(defaultReverseRotateInterval)
+	rotated := e.clock.Now()
+	e.cycle(t)
+
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
+	e.clock.Advance(defaultReverseRotateInterval - time.Minute)
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "register:1"}, e.log.take(), "the cap is the Until the portal holds")
+	portal := e.box.lastPortal()
+	require.NotNil(t, portal.Previous)
+	assert.Equal(t, rotated.Add(defaultReverseRotateInterval), portal.Previous.Until)
+}
+
+func TestReverseRotationRegisteredAtOnceCutsThePrevious(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+	published := e.box.lastPortal()
+
+	e.clock.Advance(defaultReverseRotateInterval)
+	now := e.clock.Now()
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"portal", "register:1", "portal"}, e.log.take())
+	n := len(e.box.portals)
+	long, short := e.box.portals[n-2], e.box.portals[n-1]
+	require.NotNil(t, long.Previous)
+	require.NotNil(t, short.Previous)
+	assert.Equal(t, published.PrivateKey, long.Previous.PrivateKey)
+	assert.Equal(t, now.Add(defaultReverseRotateInterval), long.Previous.Until)
+	assert.Equal(t, published.PrivateKey, short.Previous.PrivateKey)
+	assert.Equal(t, now.Add(defaultReverseRegisterInterval+reversePrevGrace), short.Previous.Until)
+	assert.Equal(t, long.PrivateKey, short.PrivateKey)
+}
+
+func TestReverseNoPreviousForAnUnregisteredIdentity(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.srv.queue(revResponse{observedIP: "198.51.100.7"})
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.cycle(t)
+	first := e.box.lastPortal()
+	require.NotNil(t, first)
+
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.cycle(t)
+	assert.NotEqual(t, first.PrivateKey, e.box.lastPortal().PrivateKey)
+	for _, p := range e.box.portals {
+		if p != nil {
+			assert.Nil(t, p.Previous)
+		}
+	}
+}
+
+func TestReversePreviousDroppedOnClear(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.cycle(t)
+	rotated := e.box.lastPortal()
+	require.NotNil(t, rotated.Previous)
+
+	e.keys.remove("p1")
+	e.c.PairingsChanged()
+	e.clock.Advance(time.Second)
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"clear-portal", "deregister", "unmap"}, e.log.take())
+	assert.Nil(t, e.c.st.prev)
+	assert.Nil(t, e.c.st.published, "a cleared identity could come back as Previous")
+
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
+	e.keys.set("p1")
+	e.clock.Advance(time.Second)
+	e.cycle(t)
+	portal := e.box.lastPortal()
+	require.NotNil(t, portal)
+	assert.Equal(t, rotated.PrivateKey, portal.PrivateKey)
+	assert.Nil(t, portal.Previous)
+}
+
+// A portal moved to another port drops the previous identity: helpers holding
+// it dial the old port.
+func TestReversePreviousDroppedOnAPortChange(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.cycle(t)
+
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.cycle(t)
+	rotated := e.box.lastPortal()
+	require.NotNil(t, rotated.Previous)
+
+	e.srv.setFallback(revResponse{observedIP: "198.51.100.7"})
+	e.c.unmap(context.Background())
+	e.c.st.lastPort = rotated.ListenPort + 1
+	e.clock.Advance(defaultReverseRegisterInterval)
+	e.log.take()
+	e.cycle(t)
+	assert.Equal(t, []string{"register:0", "map", "portal", "register:1"}, e.log.take())
+	portal := e.box.lastPortal()
+	require.NotEqual(t, rotated.ListenPort, portal.ListenPort)
+	assert.Nil(t, portal.Previous)
+	assert.Nil(t, e.c.st.prev)
+}
+
+func TestReverseDoubleRotationKeepsTheLastPublished(t *testing.T) {
+	t.Run("second identity registered", func(t *testing.T) {
+		e := newRevEnv(t)
+		e.keys.set("p1")
+		e.cycle(t)
+		first := e.box.lastPortal()
+
+		e.clock.Advance(defaultReverseRotateInterval)
+		e.cycle(t)
+		second := e.box.lastPortal()
+
+		e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+		e.clock.Advance(defaultReverseRotateInterval)
+		e.cycle(t)
+		third := e.box.lastPortal()
+		require.NotNil(t, third.Previous)
+		assert.Equal(t, second.PrivateKey, third.Previous.PrivateKey)
+		assert.NotEqual(t, first.PrivateKey, third.Previous.PrivateKey)
+		assert.Equal(t, e.clock.Now().Add(defaultReverseRotateInterval), third.Previous.Until)
+	})
+	// The published identity keeps its first deadline, and once that has
+	// passed it is never brought back.
+	t.Run("second identity never registered", func(t *testing.T) {
+		e := newRevEnv(t)
+		e.keys.set("p1")
+		e.cycle(t)
+		first := e.box.lastPortal()
+
+		e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+		e.clock.Advance(defaultReverseRotateInterval)
+		rotated := e.clock.Now()
+		e.cycle(t)
+		second := e.box.lastPortal()
+		require.NotNil(t, second.Previous)
+		assert.Equal(t, first.PrivateKey, second.Previous.PrivateKey)
+
+		// The address is forgotten by now: the empty register answers, the
+		// route register fails.
+		e.srv.queue(revResponse{observedIP: "198.51.100.7"}, revResponse{status: http.StatusInternalServerError})
+		e.clock.Advance(defaultReverseRotateInterval / 2)
+		e.cycle(t)
+		require.NotNil(t, e.box.lastPortal().Previous)
+		assert.Equal(t, rotated.Add(defaultReverseRotateInterval), e.box.lastPortal().Previous.Until)
+
+		// The address is still remembered, so the one register is the
+		// route register, which fails.
+		e.clock.Advance(defaultReverseRotateInterval / 2)
+		e.log.take()
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+		third := e.box.lastPortal()
+		assert.NotEqual(t, second.PrivateKey, third.PrivateKey)
+		assert.Nil(t, third.Previous, "an expired identity came back as Previous")
+		assert.Nil(t, e.c.st.published)
+
+		e.srv.queue(revResponse{observedIP: "198.51.100.7"}, revResponse{status: http.StatusInternalServerError})
+		e.clock.Advance(defaultReverseRotateInterval)
+		e.cycle(t)
+		assert.Nil(t, e.box.lastPortal().Previous, "an expired identity came back as Previous")
+	})
+}
+
+// A failed configure leaves the client holding what the box serves, and the
+// next cycle tries again.
+func TestReverseFailedPreviousConfigureKeepsStateConsistent(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		e := newRevEnv(t)
+		key := e.keys.set("p1")
+		e.cycle(t)
+		published := e.box.lastPortal()
+		creds := e.c.st.portalCreds
+
+		e.box.setErrs(errors.New("bind failed"), nil)
+		e.clock.Advance(defaultReverseRotateInterval)
+		rotated := e.clock.Now()
+		e.log.take()
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+		assert.Same(t, published, e.c.st.portal)
+		assert.Same(t, creds, e.c.st.portalCreds)
+		assert.Nil(t, e.c.st.portalPrev)
+		r := openBlob(t, key, e.srv.lastRegister()[0], e.clock.Now())
+		assert.Equal(t, x25519Public(t, published.PrivateKey), r.PublicKey)
+
+		e.box.setErrs(nil, nil)
+		e.clock.Advance(defaultReverseRegisterInterval)
+		registered := e.clock.Now()
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1", "portal"}, e.log.take())
+		n := len(e.box.portals)
+		assert.Equal(t, published.PrivateKey, prevKey(e.box.portals[n-2]))
+		assert.Equal(t, rotated.Add(defaultReverseRotateInterval), e.box.portals[n-2].Previous.Until)
+		assert.Equal(t, published.PrivateKey, prevKey(e.box.portals[n-1]))
+		assert.Equal(t, registered.Add(defaultReverseRegisterInterval+reversePrevGrace), e.box.portals[n-1].Previous.Until)
+	})
+	t.Run("cut", func(t *testing.T) {
+		e := newRevEnv(t)
+		e.keys.set("p1")
+		e.cycle(t)
+		published := e.box.lastPortal()
+		var configures int
+		e.c.cfg.Box = portalErrAfter{revBox: e.box, err: errors.New("configure failed"), n: len(e.box.portals) + 1, count: &configures}
+
+		e.clock.Advance(defaultReverseRotateInterval)
+		rotated := e.clock.Now()
+		e.log.take()
+		configures = len(e.box.portals)
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1", "portal"}, e.log.take())
+		serving := e.box.portals[len(e.box.portals)-2]
+		assert.Same(t, serving, e.c.st.portal, "the client holds the configuration the box serves")
+		assert.Equal(t, rotated.Add(defaultReverseRotateInterval), e.c.st.portal.Previous.Until)
+		assert.Equal(t, published.PrivateKey, prevKey(e.c.st.portal))
+		assert.Same(t, e.c.st.prev, e.c.st.portalPrev)
+
+		e.c.cfg.Box = e.box
+		e.box.setErrs(nil, nil)
+		e.clock.Advance(defaultReverseRegisterInterval)
+		e.cycle(t)
+		assert.Equal(t, []string{"portal", "register:1"}, e.log.take())
+		portal := e.box.lastPortal()
+		assert.Equal(t, published.PrivateKey, prevKey(portal))
+		assert.Equal(t, rotated.Add(defaultReverseRegisterInterval+reversePrevGrace), portal.Previous.Until)
+	})
+}
+
+// Revoking a pairing edits the pairings and keeps the previous identity.
+func TestReverseRevocationKeepsThePrevious(t *testing.T) {
+	e := newRevEnv(t)
+	e.keys.set("p1")
+	e.keys.set("p2")
+	e.cycle(t)
+	published := e.box.lastPortal()
+
+	e.srv.setFallback(revResponse{status: http.StatusInternalServerError})
+	e.clock.Advance(defaultReverseRotateInterval)
+	e.cycle(t)
+	rotated := e.box.lastPortal()
+	require.NotNil(t, rotated.Previous)
+
+	e.keys.remove("p1")
+	e.log.take()
+	e.c.dropRevoked(e.keys.IDs(string(helperticket.RoleInviter)))
+	assert.Equal(t, []string{"portal", "outbounds:1"}, e.log.take())
+	portal := e.box.lastPortal()
+	assert.Less(t, len(portal.Pairings), len(rotated.Pairings))
+	assert.Equal(t, rotated.PrivateKey, portal.PrivateKey)
+	assert.Equal(t, published.PrivateKey, prevKey(portal))
+	assert.Equal(t, rotated.Previous.Until, portal.Previous.Until)
 }

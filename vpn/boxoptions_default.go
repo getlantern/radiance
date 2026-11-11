@@ -24,6 +24,8 @@ const (
 	minAndroidSystemStackKernel = "5.10"
 
 	inboundTag = "tun-in"
+
+	tunnelProxyInboundTag = "tunnel-in"
 )
 
 var (
@@ -84,6 +86,16 @@ func baseInbounds() []O.Inbound {
 				ListenOptions: O.ListenOptions{
 					Listen:     &loopbackAddr,
 					ListenPort: bypass.ProxyPort,
+				},
+			},
+		},
+		{
+			Type: C.TypeMixed,
+			Tag:  tunnelProxyInboundTag,
+			Options: &O.HTTPMixedInboundOptions{
+				ListenOptions: O.ListenOptions{
+					Listen:     &loopbackAddr,
+					ListenPort: netip.MustParseAddrPort(common.TunnelProxyAddr).Port(),
 				},
 			},
 		},

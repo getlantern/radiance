@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,6 +40,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -95,6 +98,24 @@ type LocalBackend struct {
 	peerReregCancel        context.CancelFunc
 	peerReregAttemptCtx    context.Context
 	peerReregAttemptCancel context.CancelFunc
+	// peerForPairings is set while the peer client runs, with Share My
+	// Connection off, only to serve this device's volunteer pairings. See
+	// peer_pairings.go.
+	peerForPairings atomic.Bool
+	// pairingSyncQueued is set while a syncPairingRoute worker waits for
+	// peerToggleMu, so queued reconciles coalesce.
+	pairingSyncQueued atomic.Bool
+	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
+	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
+	// network change forces. Guarded by pairingRetryMu.
+	pairingRetryMu     sync.Mutex
+	pairingRetryTimer  *time.Timer
+	pairingRetryWait   time.Duration
+	pairingLastAttempt time.Time
+	pairingStartedAt   time.Time
+	// pairingNotBefore is when the scheduled retry is due; a start reached
+	// earlier, by a stale timer say, leaves the attempt to it.
+	pairingNotBefore time.Time
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -247,6 +268,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		if backend != nil {
 			backend.onPeerSelfStop(reason)
 		}
+	}, func() bool {
+		return backend != nil && backend.peerForPairings.Load()
 	})
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
@@ -263,7 +286,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	r := &LocalBackend{
 		ctx:               ctx,
 		cancel:            cancel,
-		issueReporter:     issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter")),
+		issueReporter:     newIssueReporter(),
 		selectionReporter: newSelectionReporter(kindling.HTTPClient()),
 		accountClient:     accountClient,
 		confHandler:       config.NewConfigHandler(ctx, cOpts),
@@ -409,6 +432,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	r.syncPairingRoute()
 	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
@@ -699,13 +723,13 @@ func (r *LocalBackend) buildIssueReportMetadata() issueReportMetadata {
 	}
 
 	if r == nil {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 		return meta
 	}
 	if r.issueReporter != nil {
 		meta.reporter = r.issueReporter
 	} else {
-		meta.reporter = issue.NewIssueReporter(kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
+		meta.reporter = newIssueReporter()
 	}
 	if r.deviceID != "" {
 		meta.deviceID = r.deviceID
@@ -767,6 +791,18 @@ func (r *LocalBackend) ReportIssue(
 	}
 	slog.Info("Issue reported successfully")
 	return nil
+}
+
+func newIssueReporter() *issue.IssueReporter {
+	tunnel := &http.Client{
+		// Leaves time for the kindling fallback when the tunnel is up but stalls.
+		Timeout: 2 * time.Minute,
+		Transport: traces.NewRoundTripper(&http.Transport{
+			Proxy:           http.ProxyURL(&url.URL{Scheme: "socks5", Host: common.TunnelProxyAddr}),
+			IdleConnTimeout: 30 * time.Second,
+		}),
+	}
+	return issue.NewIssueReporter(tunnel, kindling.HTTPClient(), slog.Default().With("service", "issue_reporter"))
 }
 
 // baseIssueAttachments returns a list of file paths to include as attachments in every issue report
@@ -837,7 +873,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn, peerStarted bool
+	var peerOn, peerRegistered bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -855,11 +891,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		started, err := r.applyPeerShareStarted(peerOn)
+		registered, err := r.applyPeerShareRegistered(peerOn)
 		if err != nil {
 			errs = errors.Join(errs, err)
 		}
-		peerStarted = started
+		peerRegistered = registered
 	}
 	if len(diff) == 0 {
 		return errs
@@ -917,12 +953,14 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		}
 	}
 	// "Help others too" is sent when the peer registers, so a running peer
-	// re-registers now. Not when this patch started the peer, whose Start
-	// registered with the new value already, or turned sharing off. A patch
-	// that turned sharing on for a peer already running started nothing, so
-	// it re-registers.
+	// re-registers now. Not when this patch's toggle already brought the
+	// registration in line (a Start, or a hand-off from pairings-only), or
+	// turned sharing off. A patch that turned sharing on for a sharing run
+	// already going changed nothing, so it re-registers.
 	turnedOff := peerRequested && !peerOn
-	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
+	// A pairings-only run registers serve_pool=false whatever the setting
+	// says, so a change to it has nothing to re-register.
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerRegistered && !turnedOff && !r.peerForPairings.Load() {
 		r.reregisterPeer()
 	}
 	return errs
@@ -1171,8 +1209,27 @@ func (r *LocalBackend) AddServersByURL(urls []string, skipCertVerification bool)
 	return list.Tags(), nil
 }
 
+// AddPrivateServer registers a private server and adds it to a running tunnel.
 func (r *LocalBackend) AddPrivateServer(tag, ip string, port int, accessToken string, loc C.ServerLocation, joined bool) error {
-	return r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined)
+	if err := r.srvManager.AddPrivateServer(tag, ip, port, accessToken, loc, joined); err != nil {
+		return err
+	}
+	// Held from the lookup through the tunnel update, so a concurrent
+	// RemoveServers can't drop the server in between and have it added back.
+	r.selectionMu.Lock()
+	defer r.selectionMu.Unlock()
+	server, found := r.srvManager.GetServerByTag(tag)
+	if !found {
+		return fmt.Errorf("private server %q disappeared after registration", tag)
+	}
+	list := servers.ServerList{Servers: []*servers.Server{server}}
+	if cfg, _ := r.confHandler.GetConfig(); cfg != nil {
+		list.URLOverrides = cfg.BanditURLOverrides
+	}
+	if err := r.vpnClient.AddOutbounds(list); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return fmt.Errorf("failed to add private server to VPN client: %w", err)
+	}
+	return nil
 }
 
 func (r *LocalBackend) InviteToPrivateServer(ip string, port int, accessToken string, inviteName string) (string, error) {
@@ -1196,6 +1253,7 @@ type liveTunnel interface {
 	RemoveOutbounds(tags []string) error
 	ReconcileHelpers(helpers servers.ServerList) error
 	Restart(boxOptions vpn.BoxOptions) error
+	Status() vpn.VPNStatus
 }
 
 func (r *LocalBackend) liveTunnel() liveTunnel {
@@ -1696,8 +1754,12 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	defer r.connectMu.Unlock()
 
-	if tag == "" {
+	if tag == "" || tag == vpn.AutoSelectTag {
 		tag = vpn.AutoSelectTag
+		// A platform restart reconnects through here on auto; keep the saved selection.
+		if r.liveTunnel().Status() == vpn.Restarting {
+			tag = r.savedSelectionTag()
+		}
 	}
 	if err := r.awaitConnectable(ctx, tag); err != nil {
 		return err
@@ -2009,6 +2071,7 @@ func (r *LocalBackend) savedSelectionTag() string {
 func (r *LocalBackend) ResetNetwork() {
 	r.vpnClient.ResetNetwork()
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
@@ -2016,6 +2079,7 @@ func (r *LocalBackend) ResetNetwork() {
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	r.vpnClient.ResetNetworkForMonitor(listener)
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // Pause pauses the VPN for a device sleep.
@@ -2313,7 +2377,14 @@ func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) 
 // sharingCounters reads both sharing modes' snapshots for the activity
 // tracker.
 func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
-	ps := r.PeerRelaySnapshot()
+	// Bytes and epoch unfiltered, so paired traffic counts and a hand-off
+	// isn't a counter reset; running filtered, so an idle pairings-only route
+	// isn't time spent sharing.
+	ps := peer.Snapshot{}
+	if r.peerClient != nil {
+		ps = r.peerClient.RelaySnapshot()
+		ps.Running = ps.Running && !r.peerClient.CurrentStatus().PairingsOnly
+	}
 	us := unbounded.CurrentSnapshot()
 	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
 }

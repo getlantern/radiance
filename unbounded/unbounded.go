@@ -30,6 +30,7 @@ import (
 	"maps"
 	"math/rand"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -41,6 +42,7 @@ import (
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -121,6 +123,20 @@ var manager = &unboundedManager{}
 // clientcore.UI surface area.
 type widget interface {
 	Stop()
+}
+
+// egressHTTPClient makes the widget's WebSocket handshake to the egress. With
+// the VPN on, the widget runs in the VPN's own process, whose sockets bypass
+// the tunnel while the system resolver points into it, so a default dial
+// can't resolve the egress. The bypass proxy resolves and routes around the
+// tunnel, and bypass.DialContext dials directly when the VPN isn't running.
+var egressHTTPClient = newEgressHTTPClient(bypass.DialContext)
+
+func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dial
+	return &http.Client{Transport: transport}
 }
 
 // newWidget builds the live broflake widget. Package var so unit
@@ -386,7 +402,7 @@ var roomSyncInterval = 30 * time.Second
 // servePool is the "help others too" setting, shared with direct mode: unset
 // means on.
 func servePool() bool {
-	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
+	return settings.PeerServesPool()
 }
 
 // applyRooms points a new widget's options at the volunteer tickets and sets
@@ -930,6 +946,7 @@ func (m *unboundedManager) startLocked() {
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
+		egOpt.HTTPClient = egressHTTPClient
 		if ucfg != nil {
 			if ucfg.EgressAddr != "" {
 				egOpt.Addr = ucfg.EgressAddr

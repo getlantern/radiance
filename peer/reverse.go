@@ -37,6 +37,10 @@ const (
 	// cannot loop.
 	maxReverseReregisters  = 2
 	reversePortDescription = "Lantern personal proxy"
+	// reversePrevGrace is how long past one register interval the portal
+	// keeps the previous identity once the new one is registered, so helpers
+	// poll the new route once more before the old identity stops working.
+	reversePrevGrace = 30 * time.Second
 )
 
 // ReverseBox is the VPN box the reverse client serves through; vpn.VPNClient
@@ -139,9 +143,23 @@ type reverseState struct {
 	registered    bool
 	registeredIDs []string
 	// boxSet says the box may hold a portal this client configured.
-	boxSet         bool
-	portal         *samizdatreverse.PortalConfig
-	portalCreds    *reverseCreds
+	boxSet      bool
+	portal      *samizdatreverse.PortalConfig
+	portalCreds *reverseCreds
+	// portalPrev is the identity the portal was configured with as
+	// Previous, set exactly when portal.Previous is.
+	portalPrev *reverseCreds
+	// published is the identity sealed into the last route a register
+	// accepted, served on publishedPort: the one helpers may hold.
+	published     *reverseCreds
+	publishedPort uint16
+	// prev is the published identity a rotation replaced, which the portal
+	// keeps accepting new sessions under until prevUntil, if it still
+	// listens on prevPort. prevRotated is when the rotation happened.
+	prev           *reverseCreds
+	prevPort       uint16
+	prevRotated    time.Time
+	prevUntil      time.Time
 	outbounds      []string
 	outboundsKnown bool
 	apiNotBefore   time.Time
@@ -313,6 +331,7 @@ func (c *ReverseClient) teardown(released chan struct{}) {
 	s.v4, s.v6 = observedAddr{}, observedAddr{}
 	s.tags = nil
 	s.creds, s.credsAt = nil, time.Time{}
+	s.published, s.prev = nil, nil
 }
 
 // cycle does one round of work and returns how long to wait before the next.
@@ -388,6 +407,15 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 			c.cfg.Logger.Error("reverse: could not make listener credentials", "err", err)
 			return c.cfg.RegisterInterval
 		}
+		// A previous identity that is still the one published keeps the
+		// deadline it got when it was first rotated out.
+		if s.prev == nil || s.prev != s.published {
+			s.prev = nil
+			if s.creds != nil && s.published != nil {
+				s.prev, s.prevPort = s.published, s.publishedPort
+				s.prevRotated, s.prevUntil = now, now.Add(c.cfg.RotateInterval)
+			}
+		}
 		s.creds, s.credsAt = &creds, now
 	}
 	if slices.ContainsFunc(s.registeredIDs, func(id string) bool { return !slices.Contains(ids, id) }) {
@@ -416,7 +444,8 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 		for _, b := range blobs {
 			s.registeredIDs = append(s.registeredIDs, b.PairingID)
 		}
-		if c.updateTags(blobs, resp.Tags) {
+		shortened := c.markPublished(c.cfg.Now())
+		if c.updateTags(blobs, resp.Tags) || shortened {
 			c.applyBox(ids, now)
 		}
 		if !s.observe(resp.ObservedIP, now) {
@@ -424,6 +453,27 @@ func (c *ReverseClient) cycle(runCtx context.Context) time.Duration {
 		}
 	}
 	return c.cfg.RegisterInterval
+}
+
+// markPublished records that a register accepted routes for the portal's
+// identity at now. Once the identity a rotation replaced is no longer the one
+// published, it reports whether the previous identity's time was cut to one
+// more helper poll.
+func (c *ReverseClient) markPublished(now time.Time) bool {
+	s := &c.st
+	s.published, s.publishedPort = s.portalCreds, s.portal.ListenPort
+	if s.prev == nil || s.prev == s.portalCreds {
+		return false
+	}
+	until := now.Add(c.cfg.RegisterInterval + reversePrevGrace)
+	if capped := s.prevRotated.Add(c.cfg.RotateInterval); capped.Before(until) {
+		until = capped
+	}
+	if !until.Before(s.prevUntil) {
+		return false
+	}
+	s.prevUntil = until
+	return true
 }
 
 // dropRevoked takes the pairings not in ids, or whose key is gone, out of the
@@ -577,7 +627,9 @@ func (c *ReverseClient) clearBox() {
 		return
 	}
 	s.boxSet = false
-	s.portal, s.portalCreds = nil, nil
+	s.portal, s.portalCreds, s.portalPrev = nil, nil, nil
+	// A cleared portal's identity is never brought back as Previous.
+	s.published, s.prev = nil, nil
 	s.outbounds, s.outboundsKnown = nil, true
 }
 
@@ -596,6 +648,7 @@ func (c *ReverseClient) apiFailed(ctx context.Context, err error, now time.Time)
 		c.clearBox()
 		c.unmap(ctx)
 		s.creds, s.credsAt = nil, time.Time{}
+		s.published, s.prev = nil, nil
 		return reverseDisabledWait
 	case errors.As(err, &apiErr) &&
 		(apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable):
@@ -693,14 +746,33 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 	slices.Sort(tags)
 	tags = slices.Compact(tags)
 
+	// Helpers that hold the previous identity's route dial the port it was
+	// published on, and a portal moved to another port takes nothing there.
+	if s.prev != nil && (!now.Before(s.prevUntil) || s.prevPort != s.mapping.InternalPort || s.prev == s.creds) {
+		// Once dropped, it is never brought back as Previous.
+		if s.published == s.prev {
+			s.published = nil
+		}
+		s.prev = nil
+	}
+
 	if s.portal == nil || s.portalCreds != s.creds || s.portal.ListenPort != s.mapping.InternalPort ||
-		!maps.Equal(s.portal.Pairings, pairings) || c.portalDown() {
+		!maps.Equal(s.portal.Pairings, pairings) || c.portalDown() || s.portalPrev != s.prev ||
+		(s.prev != nil && !s.portal.Previous.Until.Equal(s.prevUntil)) {
 		cfg := &samizdatreverse.PortalConfig{
 			ListenPort: s.mapping.InternalPort,
 			PrivateKey: s.creds.PrivateKey[:],
 			CertPEM:    s.creds.CertPEM,
 			KeyPEM:     s.creds.KeyPEM,
 			Pairings:   pairings,
+		}
+		if s.prev != nil {
+			cfg.Previous = &samizdatreverse.PreviousIdentity{
+				PrivateKey: s.prev.PrivateKey[:],
+				CertPEM:    s.prev.CertPEM,
+				KeyPEM:     s.prev.KeyPEM,
+				Until:      s.prevUntil,
+			}
 		}
 		s.boxSet = true
 		if err := c.cfg.Box.SetReversePortal(cfg, c.coverDomain); err != nil {
@@ -709,7 +781,7 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 			if s.portal == nil || len(s.portal.Pairings) == 0 || c.portalDown() {
 				// Nothing serves: no route is published until a configure
 				// succeeds.
-				s.portal = nil
+				s.portal, s.portalPrev = nil, nil
 				// Another socket holds the port the client picked, so the
 				// next cycle maps a different one.
 				if !s.mapsManualPort() && portInUse(err) {
@@ -719,7 +791,7 @@ func (c *ReverseClient) applyBox(ids []string, now time.Time) {
 			}
 			return
 		}
-		s.portal, s.portalCreds = cfg, s.creds
+		s.portal, s.portalCreds, s.portalPrev = cfg, s.creds, s.prev
 	}
 	c.setOutbounds(tags)
 }
