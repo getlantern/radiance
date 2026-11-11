@@ -402,7 +402,7 @@ var roomSyncInterval = 30 * time.Second
 // servePool is the "help others too" setting, shared with direct mode: unset
 // means on.
 func servePool() bool {
-	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
+	return settings.PeerServesPool()
 }
 
 // applyRooms points a new widget's options at the volunteer tickets and sets

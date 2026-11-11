@@ -1620,6 +1620,118 @@ func TestClient_RegisterSendsServePool(t *testing.T) {
 	assert.False(t, *sp)
 }
 
+// TestClient_PairingsOnlyRegistersWithoutThePool checks that a run for pairings only registers serve_pool=false even when "help others
+// too" is on, and follows the setting again once it isn't pairings-only.
+func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, true))
+	var pairingsOnly atomic.Bool
+	pairingsOnly.Store(true)
+	srv := newStubServer(t)
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
+	require.NotNil(t, sp)
+	assert.False(t, *sp)
+	assert.False(t, c.MayServePool())
+	assert.True(t, c.CurrentStatus().PairingsOnly, "the status names the run it describes")
+
+	pairingsOnly.Store(false)
+	c.RetagStatus()
+	assert.False(t, c.CurrentStatus().PairingsOnly, "a hand-off re-tags it")
+	require.NoError(t, c.Reregister(ctx))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
+		"sharing takes over the same run and serves the pool again")
+	assert.True(t, c.MayServePool())
+}
+
+// TestClient_MayServePoolErrsTowardThePool checks that MayServePool errs toward true while a box serves: a registration in flight
+// reads true, a failed pool registration leaves it true and a pool-free one
+// can't add it. A committed pool-free registration clears it, as does no box
+// serving: a stop or a failed Start.
+func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var pairingsOnly atomic.Bool
+	srv := newStubServer(t)
+	// holdRegister, when set, holds the next register until it is closed;
+	// inRegister says a register is being held.
+	var holdRegister atomic.Pointer[chan struct{}]
+	inRegister := make(chan struct{}, 1)
+	srv.onRegister = func() {
+		if hold := holdRegister.Swap(nil); hold != nil {
+			inRegister <- struct{}{}
+			<-*hold
+		}
+	}
+	var c *Client
+	held := func(f func() error) {
+		release := make(chan struct{})
+		holdRegister.Store(&release)
+		// A late register mustn't park the stub's handler past the test.
+		var once sync.Once
+		releaseNow := func() { once.Do(func() { close(release) }) }
+		defer func() {
+			holdRegister.Store(nil)
+			releaseNow()
+		}()
+		done := make(chan error, 1)
+		go func() { done <- f() }()
+		select {
+		case <-inRegister:
+		case err := <-done:
+			t.Fatalf("returned before registering: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("never registered")
+		}
+		assert.True(t, c.MayServePool(), "a registration in flight on a route that may serve the pool")
+		releaseNow()
+		require.NoError(t, <-done)
+	}
+	c = newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+	assert.False(t, c.MayServePool(), "a new client has registered nothing")
+
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Start(ctx))
+	assert.False(t, c.MayServePool(), "a failed Start leaves no box serving")
+	srv.registerStatus = http.StatusOK
+
+	held(func() error { return c.Start(ctx) })
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	require.True(t, c.MayServePool())
+
+	pairingsOnly.Store(true)
+	held(func() error { return c.Reregister(ctx) })
+	require.False(t, c.MayServePool(), "a committed pool-free registration")
+
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Reregister(ctx))
+	assert.False(t, c.MayServePool(), "a failed pool-free registration can't add the pool")
+
+	pairingsOnly.Store(false)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "a failed pool registration may still have registered the pool")
+
+	pairingsOnly.Store(true)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "only a committed pool-free registration clears it")
+
+	srv.registerStatus = http.StatusOK
+	require.NoError(t, c.Stop(ctx))
+	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
+}
+
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
@@ -1857,4 +1969,50 @@ func TestAPIFollowsSameOriginRedirects(t *testing.T) {
 	_, err := NewAPI(srv.Client(), srv.URL+"/v1", "dev").Heartbeat(context.Background(), "route", 2, RelayUsage{})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 2.0}, got)
+}
+
+// TestErrorTypes_WalksJoinedErrors checks that errorTypes names every error in a wrap tree, through joins and multi-%w, so
+// an unclassified failure can be classified from its log without its text.
+func TestErrorTypes_WalksJoinedErrors(t *testing.T) {
+	leaf := &APIError{}
+	err := fmt.Errorf("start: %w", errors.Join(context.DeadlineExceeded, leaf))
+	got := errorTypes(err)
+	assert.Contains(t, got, "*errors.joinError")
+	assert.Contains(t, got, "*peer.APIError")
+	assert.Contains(t, got, "context.deadlineExceededError")
+}
+
+// TestClient_MayServePoolHoldsThroughTeardown checks that MayServePool stays
+// true until the box is closed: Stop clears active first, and a hand-off racing
+// the teardown must still see the pool and wait for it rather than return while
+// the old box may relay.
+func TestClient_MayServePoolHoldsThroughTeardown(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	srv := newStubServer(t)
+	inDeregister, release := make(chan struct{}), make(chan struct{})
+	srv.onDeregister = func() {
+		close(inDeregister)
+		<-release
+	}
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	require.True(t, c.MayServePool())
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(ctx) }()
+	select {
+	case <-inDeregister:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("never deregistered")
+	}
+	assert.False(t, c.IsActive(), "Stop has cleared active")
+	assert.True(t, c.MayServePool(), "the box hasn't closed yet")
+	close(release)
+	require.NoError(t, <-stopped)
+	assert.False(t, c.MayServePool())
 }

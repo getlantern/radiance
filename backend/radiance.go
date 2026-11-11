@@ -40,6 +40,7 @@ import (
 	"github.com/getlantern/radiance/issue"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/servers"
 	"github.com/getlantern/radiance/telemetry"
 	"github.com/getlantern/radiance/traces"
@@ -97,6 +98,24 @@ type LocalBackend struct {
 	peerReregCancel        context.CancelFunc
 	peerReregAttemptCtx    context.Context
 	peerReregAttemptCancel context.CancelFunc
+	// peerForPairings is set while the peer client runs, with Share My
+	// Connection off, only to serve this device's volunteer pairings. See
+	// peer_pairings.go.
+	peerForPairings atomic.Bool
+	// pairingSyncQueued is set while a syncPairingRoute worker waits for
+	// peerToggleMu, so queued reconciles coalesce.
+	pairingSyncQueued atomic.Bool
+	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
+	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
+	// network change forces. Guarded by pairingRetryMu.
+	pairingRetryMu     sync.Mutex
+	pairingRetryTimer  *time.Timer
+	pairingRetryWait   time.Duration
+	pairingLastAttempt time.Time
+	pairingStartedAt   time.Time
+	// pairingNotBefore is when the scheduled retry is due; a start reached
+	// earlier, by a stale timer say, leaves the attempt to it.
+	pairingNotBefore time.Time
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -249,6 +268,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		if backend != nil {
 			backend.onPeerSelfStop(reason)
 		}
+	}, func() bool {
+		return backend != nil && backend.peerForPairings.Load()
 	})
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
@@ -411,6 +432,7 @@ func (r *LocalBackend) Start() {
 	r.startSessionAutoSelectListener()
 
 	r.resumePeerShareIfEnabled()
+	r.syncPairingRoute()
 	go r.helperActivity.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
@@ -851,7 +873,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn, peerStarted bool
+	var peerOn, peerRegistered bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -869,11 +891,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		started, err := r.applyPeerShareStarted(peerOn)
+		registered, err := r.applyPeerShareRegistered(peerOn)
 		if err != nil {
 			errs = errors.Join(errs, err)
 		}
-		peerStarted = started
+		peerRegistered = registered
 	}
 	if len(diff) == 0 {
 		return errs
@@ -931,12 +953,14 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		}
 	}
 	// "Help others too" is sent when the peer registers, so a running peer
-	// re-registers now. Not when this patch started the peer, whose Start
-	// registered with the new value already, or turned sharing off. A patch
-	// that turned sharing on for a peer already running started nothing, so
-	// it re-registers.
+	// re-registers now. Not when this patch's toggle already brought the
+	// registration in line (a Start, or a hand-off from pairings-only), or
+	// turned sharing off. A patch that turned sharing on for a sharing run
+	// already going changed nothing, so it re-registers.
 	turnedOff := peerRequested && !peerOn
-	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
+	// A pairings-only run registers serve_pool=false whatever the setting
+	// says, so a change to it has nothing to re-register.
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerRegistered && !turnedOff && !r.peerForPairings.Load() {
 		r.reregisterPeer()
 	}
 	return errs
@@ -2047,6 +2071,7 @@ func (r *LocalBackend) savedSelectionTag() string {
 func (r *LocalBackend) ResetNetwork() {
 	r.vpnClient.ResetNetwork()
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
@@ -2054,6 +2079,7 @@ func (r *LocalBackend) ResetNetwork() {
 func (r *LocalBackend) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	r.vpnClient.ResetNetworkForMonitor(listener)
 	r.reverseNetworkChanged()
+	r.pairingRouteNetworkChanged()
 }
 
 // Pause pauses the VPN for a device sleep.
@@ -2351,7 +2377,14 @@ func (r *LocalBackend) HelperRelay(ctx context.Context, op string, body []byte) 
 // sharingCounters reads both sharing modes' snapshots for the activity
 // tracker.
 func (r *LocalBackend) sharingCounters() (bool, string, uint64) {
-	ps := r.PeerRelaySnapshot()
+	// Bytes and epoch unfiltered, so paired traffic counts and a hand-off
+	// isn't a counter reset; running filtered, so an idle pairings-only route
+	// isn't time spent sharing.
+	ps := peer.Snapshot{}
+	if r.peerClient != nil {
+		ps = r.peerClient.RelaySnapshot()
+		ps.Running = ps.Running && !r.peerClient.CurrentStatus().PairingsOnly
+	}
 	us := unbounded.CurrentSnapshot()
 	return ps.Running || us.Running, ps.Epoch + "/" + us.Epoch, ps.BytesDown + ps.BytesUp + us.BytesDown + us.BytesUp
 }
