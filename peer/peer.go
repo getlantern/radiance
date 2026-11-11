@@ -844,7 +844,6 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
-	c.poolMaybe.Store(false)
 	c.externalPort = 0
 	c.internalPort = 0
 	c.boxOptions = ""
@@ -891,6 +890,9 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 		}
 		slog.Warn("peer client sing-box close failed", "err", err)
 	}
+	// Only now does no box serve: a hand-off racing this teardown must still
+	// see the pool, and re-register or wait for it.
+	c.poolMaybe.Store(false)
 	if err := fwd.UnmapPort(ctx); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("unmap port: %w", err)

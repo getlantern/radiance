@@ -73,6 +73,8 @@ func (r *LocalBackend) useReverseClient(c reverseController) {
 }
 
 func (r *LocalBackend) pairingKeysChanged() {
+	// A pairing change is new information, so it tries at once.
+	r.clearPairingNotBefore()
 	r.syncPairingRoute()
 	if r.reverseClient != nil {
 		r.reverseClient.PairingsChanged()

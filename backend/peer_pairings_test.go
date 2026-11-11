@@ -529,6 +529,8 @@ func TestPairingRoute_QueuedSyncsCoalesce(t *testing.T) {
 	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
 	waitPeerWork(t, r)
 	require.Equal(t, int64(1), fake.startCalls.Load())
+	// The retry is due, so exactly one of the queued workers attempts it.
+	r.clearPairingNotBefore()
 
 	r.peerToggleMu.Lock()
 	r.syncPairingRoute()
@@ -537,4 +539,27 @@ func TestPairingRoute_QueuedSyncsCoalesce(t *testing.T) {
 	r.peerToggleMu.Unlock()
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(2), fake.startCalls.Load(), "one attempt for the queued reconciles")
+}
+
+// TestPairingRoute_StaleWorkerWaitsForTheBackoff checks that a worker reaching
+// a start before the scheduled retry is due (a stale timer's, say) leaves the
+// attempt to that retry, while a network change or a new pairing still tries at
+// once.
+func TestPairingRoute_StaleWorkerWaitsForTheBackoff(t *testing.T) {
+	first := pairingRouteRetryFirst
+	pairingRouteRetryFirst = time.Hour
+	t.Cleanup(func() { pairingRouteRetryFirst = first })
+	fake := &fakePeerController{startErr: errors.New("no upnp")}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.Equal(t, int64(1), fake.startCalls.Load())
+
+	r.syncPairingRoute()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.startCalls.Load(), "an early worker waits for the scheduled retry")
+
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer, helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(2), fake.startCalls.Load(), "a new pairing tries at once")
 }

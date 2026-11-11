@@ -113,6 +113,9 @@ type LocalBackend struct {
 	pairingRetryWait   time.Duration
 	pairingLastAttempt time.Time
 	pairingStartedAt   time.Time
+	// pairingNotBefore is when the scheduled retry is due; a start reached
+	// earlier, by a stale timer say, leaves the attempt to it.
+	pairingNotBefore time.Time
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once

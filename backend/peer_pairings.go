@@ -149,6 +149,14 @@ func (r *LocalBackend) handOverToPairingsLocked() bool {
 // startPairingRouteLocked starts a pairings-only run, retrying later if it
 // fails. The caller holds peerToggleMu.
 func (r *LocalBackend) startPairingRouteLocked() {
+	// A stale worker, a timer's from before this backoff say, leaves the
+	// attempt to the scheduled retry.
+	r.pairingRetryMu.Lock()
+	early := time.Now().Before(r.pairingNotBefore)
+	r.pairingRetryMu.Unlock()
+	if early {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
 	// The reverse client holds the manual port, when one is set, that the
@@ -253,7 +261,15 @@ func (r *LocalBackend) schedulePairingRouteRetry() {
 		wait = pairingRouteRetryFirst
 	}
 	r.pairingRetryWait = min(2*wait, pairingRouteRetryMax)
+	r.pairingNotBefore = time.Now().Add(wait)
 	r.pairingRetryTimer = time.AfterFunc(wait, r.syncPairingRoute)
+}
+
+// clearPairingNotBefore lets the next start run at once, keeping the backoff.
+func (r *LocalBackend) clearPairingNotBefore() {
+	r.pairingRetryMu.Lock()
+	r.pairingNotBefore = time.Time{}
+	r.pairingRetryMu.Unlock()
 }
 
 // resetPairingRouteRetry cancels a pending retry and restarts the backoff.
@@ -265,6 +281,7 @@ func (r *LocalBackend) resetPairingRouteRetry() {
 		r.pairingRetryTimer = nil
 	}
 	r.pairingRetryWait = 0
+	r.pairingNotBefore = time.Time{}
 }
 
 // notePairingRouteAttempt records when a pairings-only start was last tried.
@@ -297,6 +314,7 @@ func (r *LocalBackend) pairingRouteNetworkChanged() {
 	// armed in case this attempt turns out a no-op.
 	r.pairingRetryMu.Lock()
 	r.pairingRetryWait = 0
+	r.pairingNotBefore = time.Time{}
 	r.pairingRetryMu.Unlock()
 	r.syncPairingRoute()
 }

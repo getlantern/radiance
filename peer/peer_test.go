@@ -1981,3 +1981,38 @@ func TestErrorTypes_WalksJoinedErrors(t *testing.T) {
 	assert.Contains(t, got, "*peer.APIError")
 	assert.Contains(t, got, "context.deadlineExceededError")
 }
+
+// TestClient_MayServePoolHoldsThroughTeardown checks that MayServePool stays
+// true until the box is closed: Stop clears active first, and a hand-off racing
+// the teardown must still see the pool and wait for it rather than return while
+// the old box may relay.
+func TestClient_MayServePoolHoldsThroughTeardown(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	srv := newStubServer(t)
+	inDeregister, release := make(chan struct{}), make(chan struct{})
+	srv.onDeregister = func() {
+		close(inDeregister)
+		<-release
+	}
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	require.True(t, c.MayServePool())
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(ctx) }()
+	select {
+	case <-inDeregister:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("never deregistered")
+	}
+	assert.False(t, c.IsActive(), "Stop has cleared active")
+	assert.True(t, c.MayServePool(), "the box hasn't closed yet")
+	close(release)
+	require.NoError(t, <-stopped)
+	assert.False(t, c.MayServePool())
+}
