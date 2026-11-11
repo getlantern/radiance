@@ -631,6 +631,8 @@ func newPeerTestBackend(t *testing.T, fake *fakePeerController) *LocalBackend {
 	t.Helper()
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
+	// A country where the pairings-only route may run.
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "US"))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	return &LocalBackend{ctx: ctx, peerClient: fake}

@@ -466,7 +466,9 @@ func (r *LocalBackend) Start() {
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {
-		setCountryCodeFromConfig(evt.New)
+		if setCountryCodeFromConfig(evt.New) {
+			r.CountryCodeChanged()
+		}
 		r.applyConfig(evt.New, true)
 		go r.prewarmOfflineURLTests("config update")
 	})
@@ -483,7 +485,9 @@ func (r *LocalBackend) applyCurrentConfig() bool {
 	if err != nil {
 		return false
 	}
-	setCountryCodeFromConfig(cfg)
+	if setCountryCodeFromConfig(cfg) {
+		r.CountryCodeChanged()
+	}
 	r.applyConfig(cfg, false)
 	return true
 }
@@ -530,19 +534,27 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 }
 
 // setCountryCodeFromConfig records the API-assigned country for issue reports
-// and the tunnel's client info unless an explicit country override is active.
-// Callers apply it to every config, not once per session, because a later
-// fetch can correct the country, e.g. once the public IP is detected and the
-// API stops geolocating a relay.
-func setCountryCodeFromConfig(cfg *config.Config) {
+// and the tunnel's client info unless an explicit country override is active,
+// reporting whether it changed. Callers apply it to every config, not once per
+// session, because a later fetch can correct the country, e.g. once the public
+// IP is detected and the API stops geolocating a relay.
+func setCountryCodeFromConfig(cfg *config.Config) bool {
 	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" ||
 		cfg.Country == settings.GetString(settings.CountryCodeKey) {
-		return
+		return false
 	}
 	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
 		slog.Error("failed to set country code in settings", "error", err)
+		return false
 	}
 	slog.Info("Set country code from config", "country_code", cfg.Country)
+	return true
+}
+
+// CountryCodeChanged reconciles what depends on this device's country after
+// it changes: the pairings-only route runs only where it is allowed.
+func (r *LocalBackend) CountryCodeChanged() {
+	r.syncPairingRoute()
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed

@@ -590,3 +590,65 @@ func TestPairingRoute_ShareOffCancelsAQueuedReregister(t *testing.T) {
 	assert.Zero(t, fake.reregisterCalls.Load())
 	assert.True(t, r.peerForPairings.Load())
 }
+
+// TestPairingRoute_NotWhereTheCountryIsUnknownOrCensored checks that a volunteer pairing doesn't start the route, and so
+// maps no port, while this device's country is unknown or censored. The pairing keys are kept.
+func TestPairingRoute_NotWhereTheCountryIsUnknownOrCensored(t *testing.T) {
+	for _, country := range []string{"", "CN", "ir"} {
+		t.Run("country="+country, func(t *testing.T) {
+			fake := &fakePeerController{}
+			r := newPairingRouteTestBackend(t, fake)
+			require.NoError(t, settings.Set(settings.CountryCodeKey, country))
+
+			r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+			waitPeerWork(t, r)
+			r.pairingRouteNetworkChanged()
+			waitPeerWork(t, r)
+			assert.Zero(t, fake.startCalls.Load())
+			assert.False(t, r.peerForPairings.Load())
+			assert.True(t, r.hasVolunteerPairings(), "the pairing keys are kept")
+		})
+	}
+}
+
+// TestPairingRoute_FollowsCountryChanges checks that the route stops when the country becomes censored and starts again
+// once it is allowed.
+func TestPairingRoute_FollowsCountryChanges(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, fake.IsActive())
+
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "RU"))
+	r.CountryCodeChanged()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.stopCalls.Load())
+	assert.False(t, fake.IsActive())
+	assert.False(t, r.peerForPairings.Load())
+
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "DE"))
+	r.CountryCodeChanged()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(2), fake.startCalls.Load())
+	assert.True(t, fake.IsActive())
+	assert.True(t, r.peerForPairings.Load())
+}
+
+// TestPairingRoute_ShareOffInACensoredCountryStops checks that turning sharing off where the country is censored stops the
+// client instead of handing it to pairings-only, though it volunteers in a pairing.
+func TestPairingRoute_ShareOffInACensoredCountryStops(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "CN"))
+	require.NoError(t, r.applyPeerShare(true))
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+
+	require.NoError(t, r.applyPeerShare(false))
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.Equal(t, int64(1), fake.stopCalls.Load())
+	assert.False(t, fake.IsActive())
+	assert.False(t, r.peerForPairings.Load())
+}

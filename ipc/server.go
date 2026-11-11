@@ -1119,6 +1119,9 @@ func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+				if b := s.backend(r.Context()); b != nil {
+					b.CountryCodeChanged()
+				}
 			case env.FeatureOverrides.String():
 				if err := settings.Set(settings.FeatureOverridesKey, v); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
