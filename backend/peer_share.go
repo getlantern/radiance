@@ -112,10 +112,15 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		if r.peerClient.IsActive() && r.hasVolunteerPairings() {
 			// A volunteer keeps serving its pairings on the same port mapping:
 			// re-registering sends serve_pool=false and rotates the
-			// credentials, so strangers are cut off.
+			// credentials, so strangers are cut off. It runs now, under the
+			// toggle lock, and fails closed: if it fails, the client stops
+			// below and the pairings-only run starts afresh, never leaving a
+			// pool route up after sharing is off.
 			r.peerForPairings.Store(true)
-			r.reregisterPeer()
-			return false, persistErr
+			if err := r.peerClient.Reregister(toggleCtx); err == nil {
+				return false, persistErr
+			}
+			slog.Warn("pairing route re-register failed; restarting it")
 		}
 		if err := r.peerClient.Stop(toggleCtx); err != nil {
 			slog.Warn("peer share stop returned error (toggle still off)", "error", err)

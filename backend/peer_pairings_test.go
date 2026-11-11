@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -113,13 +114,32 @@ func TestPairingRoute_HandsOffWithShareToggle(t *testing.T) {
 	assert.False(t, r.peerForPairings.Load())
 
 	require.NoError(t, r.applyPeerShare(false))
-	require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, int64(2), fake.reregisterCalls.Load(), "turning sharing off re-registers before it returns")
 	waitPeerWork(t, r)
 	assert.Zero(t, fake.stopCalls.Load(), "the mapping is kept")
 	assert.Equal(t, int64(1), fake.startCalls.Load())
 	assert.True(t, fake.IsActive())
 	assert.True(t, r.peerForPairings.Load())
 	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// Turning sharing off fails closed: if the re-register that drops the pool
+// fails, the client stops rather than leaving a pool route up, and the
+// pairings-only run starts afresh, registering serve_pool=false from the start.
+func TestPairingRoute_ShareOffFailsClosed(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	require.NoError(t, r.applyPeerShare(true))
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	fake.setReregister(func(context.Context, int64) error { return errors.New("lantern-cloud unreachable") })
+
+	require.NoError(t, r.applyPeerShare(false))
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.stopCalls.Load(), "the pool route is taken down")
+	assert.Equal(t, int64(2), fake.startCalls.Load(), "a fresh pairings-only run starts")
+	assert.True(t, fake.IsActive())
+	assert.True(t, r.peerForPairings.Load())
 }
 
 // With no volunteer pairing, turning sharing off stops the client as before.
