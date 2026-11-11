@@ -946,10 +946,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		}
 	}
 	// "Help others too" is sent when the peer registers, so a running peer
-	// re-registers now. Not when this patch started the peer, whose Start
-	// registered with the new value already, or turned sharing off. A patch
-	// that turned sharing on for a peer already running started nothing, so
-	// it re-registers.
+	// re-registers now. Not when this patch's toggle already brought the
+	// registration in line (a Start, or a hand-off from pairings-only), or
+	// turned sharing off. A patch that turned sharing on for a sharing run
+	// already going changed nothing, so it re-registers.
 	turnedOff := peerRequested && !peerOn
 	// A pairings-only run registers serve_pool=false whatever the setting
 	// says, so a change to it has nothing to re-register.

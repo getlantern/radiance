@@ -74,10 +74,12 @@ func (r *LocalBackend) applyPeerShare(enabled bool) error {
 	return err
 }
 
-// applyPeerShareStarted is applyPeerShare, also reporting whether it called
-// Start, decided under peerToggleMu. A Start registers with the settings as
-// they are, so a caller that persisted a registration setting first knows
-// that registration already carries it.
+// applyPeerShareStarted is applyPeerShare, also reporting whether the
+// registration now carries the settings as they are, decided under
+// peerToggleMu: it called Start, which registers with them, or handed a
+// pairings-only run to sharing, which re-registers only if the registration
+// differs from them. A caller that persisted a registration setting first
+// then has nothing left to re-register.
 func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err error) {
 	if peerShareUnsupported() {
 		// A persisted "on" would otherwise survive every restart with nothing

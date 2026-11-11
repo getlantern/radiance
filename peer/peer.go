@@ -178,11 +178,15 @@ const defaultBoxCloseTimeout = 5 * time.Second
 type Client struct {
 	cfg Config
 
-	// registeredPool is whether the route lantern-cloud holds may serve the
-	// general pool. It errs toward true: set before a registration that serves
-	// the pool, and cleared only once one that doesn't has succeeded, so a
-	// failed or partial one never reads as pairings-only.
-	registeredPool atomic.Bool
+	// poolLive is whether the committed route, the one the running box
+	// serves, was registered to serve the general pool. It is set only where
+	// a registration commits (Start's success, a rotation's swap) and cleared
+	// when the client stops, so an uncommitted registration never changes it.
+	poolLive atomic.Bool
+	// poolPending counts registrations in flight, Start's or a rotation's,
+	// from before they read the setting until they commit or fail. While any
+	// is, RegisteredPool reports true: what it registers is not known yet.
+	poolPending atomic.Int32
 
 	mu sync.Mutex
 	// startingDone is created when Start sets starting=true and closed when
@@ -400,6 +404,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		return err
 	}
 	defer c.releaseLifecycle()
+	defer c.beginRegistration()()
 	c.mu.Lock()
 	if c.active || c.starting {
 		c.mu.Unlock()
@@ -420,6 +425,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		success   bool
 		fwd       portForwarder
 		regResp   *RegisterResponse
+		regPool   bool
 		box       boxService
 		runCtx    context.Context
 		cancelRun context.CancelFunc
@@ -535,19 +541,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	}
 
 	c.emitPhase(PhaseRegistering, "")
-	servePool := c.servePool()
-	if servePool == nil || *servePool {
-		c.registeredPool.Store(true)
-	}
-	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
+	regResp, regPool, err = c.register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
-		ServePool:    servePool,
 	})
-	if err == nil && servePool != nil && !*servePool {
-		c.registeredPool.Store(false)
-	}
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
@@ -701,6 +699,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 
 	c.mu.Lock()
 	c.active = true
+	c.poolLive.Store(regPool)
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
@@ -839,6 +838,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
+	c.poolLive.Store(false)
 	c.externalPort = 0
 	c.internalPort = 0
 	c.boxOptions = ""
@@ -912,12 +912,28 @@ func (c *Client) CurrentStatus() Status {
 	return c.status
 }
 
-// RegisteredPool reports whether the route lantern-cloud holds may serve the
-// general pool; see Client.registeredPool. A caller deciding whether a route
-// still needs re-registering to leave the pool reads this, not the setting,
-// which can be ahead of the registration.
+// RegisteredPool reports whether the route may serve the general pool: the
+// committed registration does, or one is in flight. A caller deciding whether a
+// route still needs re-registering to leave the pool reads this, not the
+// setting, which can be ahead of the registration; it errs toward true.
 func (c *Client) RegisteredPool() bool {
-	return c.registeredPool.Load()
+	return c.poolLive.Load() || c.poolPending.Load() > 0
+}
+
+// register registers the route with lantern-cloud, with serve_pool as this run
+// wants it, and reports whether that registration serves the pool. The caller
+// holds a beginRegistration for the whole registration, through its commit.
+func (c *Client) register(ctx context.Context, req RegisterRequest) (*RegisterResponse, bool, error) {
+	req.ServePool = c.servePool()
+	resp, err := c.cfg.API.Register(ctx, req)
+	return resp, req.ServePool == nil || *req.ServePool, err
+}
+
+// beginRegistration marks a registration in flight until the returned func is
+// called; see poolPending.
+func (c *Client) beginRegistration() (done func()) {
+	c.poolPending.Add(1)
+	return func() { c.poolPending.Add(-1) }
 }
 
 // pairingsOnly reports whether this run serves only the device's helper
@@ -1290,6 +1306,7 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 // samizdat inbound binds the listening port. Close releases the port at once
 // and ends the box's sessions; closeBox bounds the wait as a safety net.
 func (c *Client) rotateCreds(ctx context.Context) error {
+	defer c.beginRegistration()()
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return err
 	}
@@ -1322,19 +1339,11 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
-	servePool := c.servePool()
-	if servePool == nil || *servePool {
-		c.registeredPool.Store(true)
-	}
-	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
+	regResp, regPool, err := c.register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
-		ServePool:    servePool,
 	})
-	if err == nil && servePool != nil && !*servePool {
-		c.registeredPool.Store(false)
-	}
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
 	}
@@ -1471,6 +1480,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
+	c.poolLive.Store(regPool)
 	c.boxOptions = options
 	c.baseShortIDs = newBase
 	// Reconcile the new box with the current record, which a heartbeat may
@@ -1715,7 +1725,8 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 // setting or the environment, or 0 if there is none. Both clients resolve it
 // this way, so a caller deciding whether they would collide must too.
 func ManualPort() uint16 {
-	return reverseManualPort(slog.Default())
+	// Quietly: chooseManualForwarder logs its choice, which Start logs again.
+	return reverseManualPort(slog.New(slog.DiscardHandler))
 }
 
 // reverseManualPort is the configured manual port, or 0, found without the

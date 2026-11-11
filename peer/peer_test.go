@@ -1649,6 +1649,49 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	assert.True(t, c.RegisteredPool())
 }
 
+// RegisteredPool errs toward true: it reads true while any registration is in
+// flight, even a pairings-only one, and a pool-free registration that fails
+// leaves a pool route reading as one.
+func TestClient_RegisteredPoolErrsTowardThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var pairingsOnly atomic.Bool
+	pairingsOnly.Store(true)
+	srv := newStubServer(t)
+	inRegister, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv.onRegister = func() {
+		once.Do(func() {
+			close(inRegister)
+			<-release
+		})
+	}
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+	assert.False(t, c.RegisteredPool(), "a stopped client holds no route")
+
+	started := make(chan error, 1)
+	go func() { started <- c.Start(ctx) }()
+	<-inRegister
+	assert.True(t, c.RegisteredPool(), "what an in-flight registration registers isn't known yet")
+	close(release)
+	require.NoError(t, <-started)
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	assert.False(t, c.RegisteredPool(), "a committed pairings-only registration")
+
+	pairingsOnly.Store(false)
+	require.NoError(t, c.Reregister(ctx))
+	require.True(t, c.RegisteredPool())
+
+	pairingsOnly.Store(true)
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.RegisteredPool(), "a failed pool-free registration leaves the pool route as it was")
+}
+
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {

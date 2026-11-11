@@ -513,20 +513,20 @@ type fakePeerController struct {
 	onStart func()
 	// pairingsOnly, if set, is the client's Config.PairingsOnly.
 	pairingsOnly func() bool
-	// registeredPool is what RegisteredPool reports: set from the serve_pool
-	// each successful Start or Reregister would have sent.
+	// registeredPool is what RegisteredPool reports: the serve_pool of the
+	// last committed Start or Reregister.
 	registeredPool atomic.Bool
 }
 
-// noteRegistration records the serve_pool a successful registration sent, as
-// the real client does.
-func (f *fakePeerController) noteRegistration() {
-	pool := settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
-	if f.pairingsOnly != nil && f.pairingsOnly() {
-		pool = false
-	}
-	f.registeredPool.Store(pool)
+// registrationPool is the serve_pool a registration now would send, as the
+// real client decides it.
+func (f *fakePeerController) registrationPool() bool {
+	return settings.PeerServesPool() && (f.pairingsOnly == nil || !f.pairingsOnly())
 }
+
+// noteRegistration records a committed registration's serve_pool, as the real
+// client does.
+func (f *fakePeerController) noteRegistration(pool bool) { f.registeredPool.Store(pool) }
 
 func (f *fakePeerController) RegisteredPool() bool { return f.registeredPool.Load() }
 
@@ -540,7 +540,7 @@ func (f *fakePeerController) Start(_ context.Context) error {
 	if f.startErr != nil {
 		return f.startErr
 	}
-	f.noteRegistration()
+	f.noteRegistration(f.registrationPool())
 	f.active.Store(true)
 	return nil
 }
@@ -553,12 +553,15 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 
 func (f *fakePeerController) Reregister(ctx context.Context) error {
 	n := f.reregisterCalls.Add(1)
+	pool := f.registrationPool()
 	if fn := f.reregisterFn.Load(); fn != nil {
 		if err := (*fn)(ctx, n); err != nil {
+			// A failed registration commits nothing; the old route keeps
+			// what it had.
 			return err
 		}
 	}
-	f.noteRegistration()
+	f.noteRegistration(pool)
 	return nil
 }
 
