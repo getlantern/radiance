@@ -178,15 +178,11 @@ const defaultBoxCloseTimeout = 5 * time.Second
 type Client struct {
 	cfg Config
 
-	// poolLive is whether the committed route, the one the running box
-	// serves, was registered to serve the general pool. It is set only where
-	// a registration commits (Start's success, a rotation's swap) and cleared
-	// when the client stops, so an uncommitted registration never changes it.
-	poolLive atomic.Bool
-	// poolMaybe is set before any registration reads the setting, and cleared
-	// only when a pool-free one commits or the client stops: a registration in
-	// flight, or one whose outcome is unknown (a lost response), may have
-	// left lantern-cloud serving the pool.
+	// poolMaybe is whether lantern-cloud may hold this client's route as one
+	// serving the general pool. A pool registration sets it before it reads
+	// the setting and leaves it set even if it fails, since a lost response
+	// may still have registered the pool; only a committed pool-free
+	// registration, or the route going away, clears it.
 	poolMaybe atomic.Bool
 
 	mu sync.Mutex
@@ -466,6 +462,8 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if regResp != nil {
 			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
 		}
+		// No box serves the route, so it serves nobody, pool or not.
+		c.poolMaybe.Store(false)
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
 		}
@@ -838,7 +836,6 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.forwarder = nil
 	c.box = nil
 	c.routeID = ""
-	c.poolLive.Store(false)
 	c.poolMaybe.Store(false)
 	c.externalPort = 0
 	c.internalPort = 0
@@ -919,23 +916,29 @@ func (c *Client) CurrentStatus() Status {
 // the route out of the pool re-registers unless it is sure, rather than trust
 // the setting, which can be ahead of the registration.
 func (c *Client) MayServePool() bool {
-	return c.poolLive.Load() || c.poolMaybe.Load()
+	return c.poolMaybe.Load()
 }
 
 // register registers the route with lantern-cloud, with serve_pool as this run
 // wants it, and reports whether that registration serves the pool. The caller
 // commits the result with commitPool.
 func (c *Client) register(ctx context.Context, req RegisterRequest) (*RegisterResponse, bool, error) {
-	c.poolMaybe.Store(true)
+	// Set before the setting is read, so a caller racing this registration
+	// sees the pool it may register.
+	was := c.poolMaybe.Swap(true)
 	req.ServePool = c.servePool()
+	pool := req.ServePool == nil || *req.ServePool
+	if !pool {
+		// A pool-free registration can't add the pool, failed or not.
+		c.poolMaybe.Store(was)
+	}
 	resp, err := c.cfg.API.Register(ctx, req)
-	return resp, req.ServePool == nil || *req.ServePool, err
+	return resp, pool, err
 }
 
 // commitPool records the pool setting of the registration the running box now
-// serves. The caller holds c.mu.
+// serves.
 func (c *Client) commitPool(pool bool) {
-	c.poolLive.Store(pool)
 	if !pool {
 		c.poolMaybe.Store(false)
 	}

@@ -513,10 +513,8 @@ type fakePeerController struct {
 	onStart func()
 	// pairingsOnly, if set, is the client's Config.PairingsOnly.
 	pairingsOnly func() bool
-	// poolLive and poolMaybe model the real client's MayServePool: the
-	// committed registration's pool setting, and a registration in flight or
-	// of unknown outcome that may have served the pool.
-	poolLive, poolMaybe atomic.Bool
+	// poolMaybe models the real client's MayServePool.
+	poolMaybe atomic.Bool
 }
 
 // registrationPool is the serve_pool a registration now would send, as the
@@ -525,16 +523,7 @@ func (f *fakePeerController) registrationPool() bool {
 	return settings.PeerServesPool() && (f.pairingsOnly == nil || !f.pairingsOnly())
 }
 
-// commitPool records a committed registration's serve_pool, as the real
-// client does.
-func (f *fakePeerController) commitPool(pool bool) {
-	f.poolLive.Store(pool)
-	if !pool {
-		f.poolMaybe.Store(false)
-	}
-}
-
-func (f *fakePeerController) MayServePool() bool { return f.poolLive.Load() || f.poolMaybe.Load() }
+func (f *fakePeerController) MayServePool() bool { return f.poolMaybe.Load() }
 
 func (f *fakePeerController) Start(_ context.Context) error {
 	if f.onStart != nil {
@@ -543,36 +532,39 @@ func (f *fakePeerController) Start(_ context.Context) error {
 	if f.startCalls.Add(1) == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
-	f.poolMaybe.Store(true)
-	pool := f.registrationPool()
 	if f.startErr != nil {
+		// A failed Start leaves no route, pool or not.
 		return f.startErr
 	}
-	f.commitPool(pool)
+	f.poolMaybe.Store(f.registrationPool())
 	f.active.Store(true)
 	return nil
 }
 
 func (f *fakePeerController) Stop(_ context.Context) error {
 	f.stopCalls.Add(1)
-	f.active.Store(false)
-	f.poolLive.Store(false)
-	f.poolMaybe.Store(false)
+	if f.active.Swap(false) {
+		f.poolMaybe.Store(false)
+	}
 	return nil
 }
 
 func (f *fakePeerController) Reregister(ctx context.Context) error {
 	n := f.reregisterCalls.Add(1)
-	f.poolMaybe.Store(true)
+	// As the real client: a pool registration may register the pool even if
+	// it fails; a pool-free one can't add it.
 	pool := f.registrationPool()
+	if pool {
+		f.poolMaybe.Store(true)
+	}
 	if fn := f.reregisterFn.Load(); fn != nil {
 		if err := (*fn)(ctx, n); err != nil {
-			// A failed registration commits nothing, and may have left the
-			// pool registered.
 			return err
 		}
 	}
-	f.commitPool(pool)
+	if !pool {
+		f.poolMaybe.Store(false)
+	}
 	return nil
 }
 

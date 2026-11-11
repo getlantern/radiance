@@ -1649,15 +1649,14 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	assert.True(t, c.MayServePool())
 }
 
-// MayServePool errs toward true: it reads true while any registration is in
-// flight, even a pairings-only one, and a pool-free registration that fails
-// leaves a pool route reading as one. Only a committed pool-free registration,
-// or stopping, clears it.
+// MayServePool errs toward true. A pool registration reads true from before it
+// is sent, and stays true if it fails; a pool-free one can't add the pool,
+// failed or not. Only a committed pool-free registration, or stopping, clears
+// it.
 func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	var pairingsOnly atomic.Bool
-	pairingsOnly.Store(true)
 	srv := newStubServer(t)
 	inRegister, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -1677,19 +1676,27 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 	started := make(chan error, 1)
 	go func() { started <- c.Start(ctx) }()
 	<-inRegister
-	assert.True(t, c.MayServePool(), "what an in-flight registration registers isn't known yet")
+	assert.True(t, c.MayServePool(), "a pool registration in flight may have registered the pool")
 	close(release)
 	require.NoError(t, <-started)
-	assert.False(t, c.MayServePool(), "a committed pairings-only registration")
-
-	pairingsOnly.Store(false)
-	require.NoError(t, c.Reregister(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
 	require.True(t, c.MayServePool())
 
 	pairingsOnly.Store(true)
+	require.NoError(t, c.Reregister(ctx))
+	require.False(t, c.MayServePool(), "a committed pool-free registration")
+
 	srv.registerStatus = http.StatusInternalServerError
 	require.Error(t, c.Reregister(ctx))
-	assert.True(t, c.MayServePool(), "a failed pool-free registration leaves the pool route as it was")
+	assert.False(t, c.MayServePool(), "a failed pool-free registration can't add the pool")
+
+	pairingsOnly.Store(false)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "a failed pool registration may still have registered the pool")
+
+	pairingsOnly.Store(true)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "only a committed pool-free registration clears it")
 
 	srv.registerStatus = http.StatusOK
 	require.NoError(t, c.Stop(ctx))

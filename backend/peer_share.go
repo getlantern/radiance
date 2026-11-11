@@ -121,15 +121,11 @@ func (r *LocalBackend) applyPeerShareRegistered(enabled bool) (registered bool, 
 	// A second "on" that queued behind an in-flight Start must not fail on
 	// "already active" and roll the toggle back under a running peer.
 	if r.peerClient.IsActive() {
-		// A pairings-only run becomes the shared one: re-register so
-		// serve_pool follows "help others too" again.
+		// A pairings-only run becomes the shared one.
 		if r.peerForPairings.Swap(false) {
 			r.resetPairingRouteRetry()
 			r.clearPairingRunStart()
-			// The run registered serve_pool=false; sharing changes that only
-			// with "help others too" on. Off, the friends' sessions stay as
-			// they are. The re-register runs behind any rotation in flight
-			// and reads the mode when it does.
+			// Only "help others too" changes its serve_pool=false registration.
 			if settings.PeerServesPool() {
 				r.reregisterPeer()
 			}

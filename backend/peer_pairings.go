@@ -156,18 +156,17 @@ func (r *LocalBackend) startPairingRouteLocked() {
 func (r *LocalBackend) stopPeerLocked() {
 	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
-	stopErr := r.peerClient.Stop(ctx)
-	if stopErr != nil {
-		slog.Warn("peer stop returned error", "error", stopErr)
+	if err := r.peerClient.Stop(ctx); err != nil {
+		slog.Warn("peer stop returned error", "error", err)
 	}
 	r.clearPairingRunStart()
 	// Cleared before the reverse client restarts, so it sees the manual port
 	// free (peerShareActive).
 	wasPairings := r.peerForPairings.Swap(false)
 	r.restartYieldedReverse()
-	// A sharing run's Stop published its own status, unless it failed before
-	// stopping the client; a pairings-only run's was kept from the sharing UI.
-	if wasPairings || (stopErr != nil && r.peerClient.IsActive()) {
+	// A sharing run's Stop published its own status; a pairings-only run's was
+	// kept from the sharing UI.
+	if wasPairings {
 		r.emitSharingStatus()
 	}
 }
