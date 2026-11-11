@@ -535,9 +535,11 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 
 // setCountryCodeFromConfig records the API-assigned country for issue reports
 // and the tunnel's client info unless an explicit country override is active,
-// reporting whether it changed. Callers apply it to every config, not once per
-// session, because a later fetch can correct the country, e.g. once the public
-// IP is detected and the API stops geolocating a relay.
+// reporting whether the live value changed. A failed save can still change it,
+// so that is read back rather than inferred from the error. Callers apply it to
+// every config, not once per session, because a later fetch can correct the
+// country, e.g. once the public IP is detected and the API stops geolocating a
+// relay.
 func setCountryCodeFromConfig(cfg *config.Config) bool {
 	if env.GetString(env.Country) != "" || cfg == nil || cfg.Country == "" ||
 		cfg.Country == settings.GetString(settings.CountryCodeKey) {
@@ -545,10 +547,10 @@ func setCountryCodeFromConfig(cfg *config.Config) bool {
 	}
 	if err := settings.Set(settings.CountryCodeKey, cfg.Country); err != nil {
 		slog.Error("failed to set country code in settings", "error", err)
-		return false
+	} else {
+		slog.Info("Set country code from config", "country_code", cfg.Country)
 	}
-	slog.Info("Set country code from config", "country_code", cfg.Country)
-	return true
+	return settings.GetString(settings.CountryCodeKey) == cfg.Country
 }
 
 // CountryCodeChanged reconciles what depends on this device's country after
@@ -901,6 +903,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	var patchErr error
 	if len(diff) > 0 {
 		patchErr = settings.Patch(diff)
+	}
+	// A failed save still applies the live value, which the route follows.
+	if _, ok := diff[settings.CountryCodeKey]; ok {
+		r.CountryCodeChanged()
 	}
 	if peerRequested {
 		registered, err := r.applyPeerShareRegistered(peerOn)

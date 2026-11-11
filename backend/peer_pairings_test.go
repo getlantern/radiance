@@ -652,3 +652,18 @@ func TestPairingRoute_ShareOffInACensoredCountryStops(t *testing.T) {
 	assert.False(t, fake.IsActive())
 	assert.False(t, r.peerForPairings.Load())
 }
+
+// TestPairingRoute_PatchedCountryReconciles checks that patching the country through PatchSettings stops the route where
+// the new country is censored.
+func TestPairingRoute_PatchedCountryReconciles(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, fake.IsActive())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.CountryCodeKey: "CN"}))
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.stopCalls.Load())
+	assert.False(t, fake.IsActive())
+}
