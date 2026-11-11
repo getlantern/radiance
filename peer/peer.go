@@ -126,6 +126,10 @@ type Status struct {
 	ExternalIP   string    `json:"external_ip,omitempty"`
 	ExternalPort uint16    `json:"external_port,omitempty"`
 	RouteID      string    `json:"route_id,omitempty"`
+	// PairingsOnly is whether the run this status describes served only the
+	// device's helper pairings (Config.PairingsOnly), rather than Share My
+	// Connection.
+	PairingsOnly bool `json:"pairings_only,omitempty"`
 }
 
 // Config plumbs in dependencies. Zero-valued fields fall back to production
@@ -506,8 +510,9 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 				// log line of its own, since a reason we cannot classify is
 				// the signal that this list needs another entry.
 				if c.pairingsOnly() {
+					// The types, not the text, which can quote an API body.
 					slog.Warn("peer: pairings-only start failed with an unclassified error",
-						"phase", failedPhase)
+						"phase", failedPhase, "error_types", errorTypes(retErr))
 				} else {
 					slog.Error("peer: start failed with an unclassified error",
 						"phase", failedPhase, "err", retErr)
@@ -727,6 +732,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		ExternalPort: mapping.ExternalPort,
 		RouteID:      regResp.RouteID,
 	}
+	c.tagStatusLocked()
 	statusSnapshot := c.status
 	c.mu.Unlock()
 
@@ -851,6 +857,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.clearGroupsLocked()
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
+	c.tagStatusLocked()
 	stoppingSnapshot := c.status
 	c.mu.Unlock()
 	c.publishStatus(stoppingSnapshot)
@@ -894,6 +901,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	slog.Info("peer client stopped", "route_id", routeID)
 	c.mu.Lock()
 	c.status = Status{Phase: PhaseIdle}
+	c.tagStatusLocked()
 	idleSnapshot := c.status
 	c.mu.Unlock()
 	c.publishStatus(idleSnapshot)
@@ -949,11 +957,37 @@ func (c *Client) pairingsOnly() bool {
 	return c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
 }
 
-// publishStatus emits s for the sharing UI, unless this run serves only the
-// device's helper pairings: Share My Connection is off then, and a background
-// pairings-only run must not show as sharing, or as failing to.
+// errorTypes lists the dynamic types along err's wrap chain, outermost first:
+// enough to tell which error to classify without its text.
+func errorTypes(err error) string {
+	var types []string
+	for ; err != nil && len(types) < 8; err = errors.Unwrap(err) {
+		types = append(types, fmt.Sprintf("%T", err))
+	}
+	return strings.Join(types, " > ")
+}
+
+// tagStatusLocked records on c.status which kind of run it describes. The
+// caller holds c.mu.
+func (c *Client) tagStatusLocked() {
+	c.status.PairingsOnly = c.pairingsOnly()
+}
+
+// RetagStatus re-records which kind of run the current status describes,
+// after a hand-off between sharing and pairings-only changed it without a new
+// phase.
+func (c *Client) RetagStatus() {
+	c.mu.Lock()
+	c.tagStatusLocked()
+	c.mu.Unlock()
+}
+
+// publishStatus emits s for the sharing UI, unless it describes a run that
+// serves only the device's helper pairings: Share My Connection is off then,
+// and a background pairings-only run must not show as sharing, or as failing
+// to.
 func (c *Client) publishStatus(s Status) {
-	if c.pairingsOnly() {
+	if s.PairingsOnly {
 		return
 	}
 	events.Emit(StatusEvent{Status: s})
@@ -982,6 +1016,7 @@ func (c *Client) emitStatus(p Phase, errMsg string, reason Reason) {
 	// events.
 	c.status.Reason = reason
 	c.status.Active = (p == PhaseServing)
+	c.tagStatusLocked()
 	snapshot := c.status
 	c.mu.Unlock()
 	c.publishStatus(snapshot)

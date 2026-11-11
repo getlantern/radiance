@@ -49,6 +49,12 @@ func (r *LocalBackend) peerShareActive() bool {
 // syncPairingRoute reconciles the pairings-only route in the background:
 // mapping a port and registering take seconds.
 func (r *LocalBackend) syncPairingRoute() {
+	r.queuePairingRoute(r.reconcilePairingRouteLocked)
+}
+
+// queuePairingRoute runs reconcile(true) in the background under
+// peerToggleMu.
+func (r *LocalBackend) queuePairingRoute(reconcile func(startNow bool)) {
 	if r.peerClient == nil || peerShareUnsupported() || !r.addPeerWork() {
 		return
 	}
@@ -59,7 +65,7 @@ func (r *LocalBackend) syncPairingRoute() {
 		}
 		r.peerToggleMu.Lock()
 		defer r.peerToggleMu.Unlock()
-		r.reconcilePairingRouteLocked(true)
+		reconcile(true)
 	}()
 }
 
@@ -90,7 +96,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
 	if active && want && !r.peerForPairings.Load() {
 		r.peerForPairings.Store(true)
-		r.peerStatusPairings.Store(true)
+		r.peerClient.RetagStatus()
 		if r.handOverToPairingsLocked() {
 			r.notePairingRunStart()
 			r.emitSharingStatus()
@@ -107,7 +113,9 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	case want && !active && startNow:
 		r.startPairingRouteLocked()
 	case want && !active:
-		r.syncPairingRoute()
+		// Queued as sharing-off too: the persisted setting a failed write
+		// left on mustn't stop it.
+		r.queuePairingRoute(r.reconcileSharingOffLocked)
 	}
 }
 
@@ -141,7 +149,6 @@ func (r *LocalBackend) startPairingRouteLocked() {
 	}
 	r.notePairingRouteAttempt()
 	r.peerForPairings.Store(true)
-	r.peerStatusPairings.Store(true)
 	if err := r.peerClient.Start(ctx); err != nil {
 		r.peerForPairings.Store(false)
 		// Fixed text: the error can quote an API body or URL.

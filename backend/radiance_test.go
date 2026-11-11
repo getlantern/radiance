@@ -515,6 +515,9 @@ type fakePeerController struct {
 	pairingsOnly func() bool
 	// poolMaybe models the real client's MayServePool.
 	poolMaybe atomic.Bool
+	// status models the real client's CurrentStatus: the last Start's error
+	// phase, kept until the next Start, or serving while active.
+	status atomic.Pointer[peer.Status]
 }
 
 // registrationPool is the serve_pool a registration now would send, as the
@@ -540,10 +543,12 @@ func (f *fakePeerController) Start(_ context.Context) error {
 	if f.startErr != nil {
 		// As the real client's rollback: no box serves.
 		f.poolMaybe.Store(false)
+		f.setStatus(peer.Status{Phase: peer.PhaseError, Error: f.startErr.Error()})
 		return f.startErr
 	}
 	f.poolMaybe.Store(f.registrationPool())
 	f.active.Store(true)
+	f.setStatus(peer.Status{Phase: peer.PhaseServing, Active: true})
 	return nil
 }
 
@@ -551,6 +556,7 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 	f.stopCalls.Add(1)
 	if f.active.Swap(false) {
 		f.poolMaybe.Store(false)
+		f.setStatus(peer.Status{Phase: peer.PhaseIdle})
 	}
 	return nil
 }
@@ -581,13 +587,26 @@ func (f *fakePeerController) setReregister(fn func(context.Context, int64) error
 	f.reregisterFn.Store(&fn)
 }
 
-func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
+func (f *fakePeerController) IsActive() bool { return f.active.Load() }
 func (f *fakePeerController) CurrentStatus() peer.Status {
-	// As the real client: a failed Start leaves its error phase behind.
-	if !f.active.Load() && f.startErr != nil && f.startCalls.Load() > 0 {
-		return peer.Status{Phase: peer.PhaseError, Error: f.startErr.Error()}
+	if st := f.status.Load(); st != nil {
+		return *st
 	}
+	// No Start recorded one: a test that set active directly.
 	return peer.Status{Active: f.active.Load()}
+}
+
+// setStatus records the client's status as the real one would, tagged with
+// the run's mode.
+func (f *fakePeerController) setStatus(st peer.Status) {
+	st.PairingsOnly = f.pairingsOnly != nil && f.pairingsOnly()
+	f.status.Store(&st)
+}
+
+func (f *fakePeerController) RetagStatus() {
+	if st := f.status.Load(); st != nil {
+		f.setStatus(*st)
+	}
 }
 func (f *fakePeerController) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
 
@@ -911,6 +930,7 @@ func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{A
 func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
 func (f *slowStartFake) Reregister(context.Context) error { return nil }
 func (f *slowStartFake) MayServePool() bool               { return true }
+func (f *slowStartFake) RetagStatus()                     {}
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path

@@ -1641,8 +1641,11 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	require.NotNil(t, sp)
 	assert.False(t, *sp)
 	assert.False(t, c.MayServePool())
+	assert.True(t, c.CurrentStatus().PairingsOnly, "the status names the run it describes")
 
 	pairingsOnly.Store(false)
+	c.RetagStatus()
+	assert.False(t, c.CurrentStatus().PairingsOnly, "a hand-off re-tags it")
 	require.NoError(t, c.Reregister(ctx))
 	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
 		"sharing takes over the same run and serves the pool again")
