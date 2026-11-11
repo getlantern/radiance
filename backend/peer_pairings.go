@@ -8,6 +8,7 @@ import (
 
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/peer"
@@ -53,9 +54,14 @@ var censoredCountries = map[string]struct{}{
 }
 
 // pairingRouteCountryAllowed reports whether this device's country is known
-// and not censored.
+// and not censored. A country override wins over the saved country, which
+// config updates leave alone while one is set.
 func pairingRouteCountryAllowed() bool {
-	c := strings.ToUpper(strings.TrimSpace(settings.GetString(settings.CountryCodeKey)))
+	c := env.GetString(env.Country)
+	if c == "" {
+		c = settings.GetString(settings.CountryCodeKey)
+	}
+	c = strings.ToUpper(strings.TrimSpace(c))
 	if c == "" {
 		return false
 	}

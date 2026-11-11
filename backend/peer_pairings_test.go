@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
@@ -666,4 +667,28 @@ func TestPairingRoute_PatchedCountryReconciles(t *testing.T) {
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(1), fake.stopCalls.Load())
 	assert.False(t, fake.IsActive())
+}
+
+// TestPairingRoute_CountryOverrideWins checks that a country override decides over the saved country, both ways.
+func TestPairingRoute_CountryOverrideWins(t *testing.T) {
+	for _, tc := range []struct {
+		saved, override string
+		starts          bool
+	}{
+		{saved: "US", override: "CN", starts: false},
+		{saved: "", override: "US", starts: true},
+	} {
+		t.Run(tc.saved+"/"+tc.override, func(t *testing.T) {
+			prev := env.GetString(env.Country)
+			env.Set(env.Country.String(), tc.override)
+			t.Cleanup(func() { env.Set(env.Country.String(), prev) })
+			fake := &fakePeerController{}
+			r := newPairingRouteTestBackend(t, fake)
+			require.NoError(t, settings.Set(settings.CountryCodeKey, tc.saved))
+
+			r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+			waitPeerWork(t, r)
+			assert.Equal(t, tc.starts, fake.IsActive())
+		})
+	}
 }
