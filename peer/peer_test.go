@@ -1673,12 +1673,11 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 		release := make(chan struct{})
 		holdRegister.Store(&release)
 		// A late register mustn't park the stub's handler past the test.
-		released := false
+		var once sync.Once
+		releaseNow := func() { once.Do(func() { close(release) }) }
 		defer func() {
 			holdRegister.Store(nil)
-			if !released {
-				close(release)
-			}
+			releaseNow()
 		}()
 		done := make(chan error, 1)
 		go func() { done <- f() }()
@@ -1690,8 +1689,7 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 			t.Fatal("never registered")
 		}
 		assert.True(t, c.MayServePool(), "a registration in flight on a route that may serve the pool")
-		close(release)
-		released = true
+		releaseNow()
 		require.NoError(t, <-done)
 	}
 	c = newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {

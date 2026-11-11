@@ -114,9 +114,9 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 // mapping, reporting whether it did. The re-register sends serve_pool=false and
 // rotates the credentials, so strangers are cut off. A route already
 // registered without the pool ("help others too" was off) has nothing to
-// change and keeps its friends' sessions. That is judged from the registration
-// itself, never the setting, which a pending or failed re-register leaves
-// ahead of it. The caller holds peerToggleMu.
+// change and keeps its friends' sessions. That is judged from MayServePool,
+// never the setting, which a pending or failed re-register leaves ahead of the
+// registration. The caller holds peerToggleMu.
 func (r *LocalBackend) handOverToPairingsLocked() bool {
 	if !r.peerClient.MayServePool() {
 		return true

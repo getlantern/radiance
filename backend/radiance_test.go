@@ -526,13 +526,15 @@ func (f *fakePeerController) registrationPool() bool {
 func (f *fakePeerController) MayServePool() bool { return f.poolMaybe.Load() }
 
 func (f *fakePeerController) Start(_ context.Context) error {
-	if f.active.Load() {
-		return errors.New("peer client already active")
-	}
 	if f.onStart != nil {
 		f.onStart()
 	}
-	if f.startCalls.Add(1) == 1 {
+	// Counted even when refused, so a test can catch a redundant Start.
+	n := f.startCalls.Add(1)
+	if f.active.Load() {
+		return errors.New("peer client already active")
+	}
+	if n == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
 	if f.startErr != nil {

@@ -458,7 +458,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if regResp != nil {
 			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
 		}
-		// No box serves the route, so the client serves nobody.
 		c.poolMaybe.Store(false)
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
@@ -907,12 +906,7 @@ func (c *Client) CurrentStatus() Status {
 }
 
 // MayServePool reports whether this client's box may be serving the general
-// pool. It is set before any registration reads the setting; a pool-free
-// registration then restores the previous value, and a failed pool
-// registration leaves it set, since a lost response may still have registered
-// the pool. It clears when a pool-free registration commits or no box serves
-// (a stop, or a failed Start). False means the client is known not to be
-// serving the pool.
+// pool, erring toward true: false means it is known not to be.
 func (c *Client) MayServePool() bool {
 	return c.poolMaybe.Load()
 }
