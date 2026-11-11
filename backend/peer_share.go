@@ -389,8 +389,10 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 }
 
 // PeerRelaySnapshot returns the bytes the current or most recent direct-sharing
-// session has relayed, for the IPC /peer/snapshot endpoint. A nil peerClient
-// reports an empty snapshot, as PeerStatus does.
+// session has relayed, for the IPC /peer/snapshot endpoint. It is empty while
+// the client's last run was pairings-only; a hand-off between the modes keeps
+// one session, whose totals then carry across. A nil peerClient reports an
+// empty snapshot, as PeerStatus does.
 func (r *LocalBackend) PeerRelaySnapshot() peer.Snapshot {
 	// A pairings-only run, current or last, is not Share My Connection.
 	if r.peerClient == nil || r.peerClient.CurrentStatus().PairingsOnly {

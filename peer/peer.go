@@ -957,28 +957,27 @@ func (c *Client) pairingsOnly() bool {
 	return c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
 }
 
-// errorTypes lists the dynamic types in err's wrap tree, depth first,
+// errorTypes lists the dynamic types in err's wrap tree, breadth first and
 // following joined and multi-%w errors too: enough to tell which error to
 // classify without its text.
 func errorTypes(err error) string {
 	var types []string
-	var walk func(error)
-	walk = func(e error) {
-		if e == nil || len(types) >= 12 {
-			return
+	queue := []error{err}
+	for len(queue) > 0 && len(types) < 12 {
+		e := queue[0]
+		queue = queue[1:]
+		if e == nil {
+			continue
 		}
 		types = append(types, fmt.Sprintf("%T", e))
 		switch u := e.(type) {
 		case interface{ Unwrap() []error }:
-			for _, c := range u.Unwrap() {
-				walk(c)
-			}
+			queue = append(queue, u.Unwrap()...)
 		case interface{ Unwrap() error }:
-			walk(u.Unwrap())
+			queue = append(queue, u.Unwrap())
 		}
 	}
-	walk(err)
-	return strings.Join(types, " > ")
+	return strings.Join(types, ", ")
 }
 
 // tagStatusLocked records on c.status which kind of run it describes. The

@@ -302,13 +302,21 @@ func TestPairingRoute_HandOffWithoutPoolKeepsSessions(t *testing.T) {
 		"each hand-off tells the sharing UI")
 }
 
-// A pairings-only run's relayed bytes aren't Share My Connection's.
+// A pairings-only run's relay isn't Share My Connection's, and an idle one
+// isn't time spent sharing, though its bytes still count for helper activity.
 func TestPairingRoute_RelaySnapshotShowsSharingOff(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
 	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
 	waitPeerWork(t, r)
+	require.NotEmpty(t, fake.RelaySnapshot().Peers)
 	assert.Empty(t, r.PeerRelaySnapshot().Peers)
+	running, _, bytes := r.sharingCounters()
+	assert.False(t, running)
+	assert.Equal(t, uint64(1), bytes)
+
+	require.NoError(t, r.applyPeerShare(true))
+	assert.NotEmpty(t, r.PeerRelaySnapshot().Peers, "sharing's relay shows")
 }
 
 // A hand-off is judged by the registration, not the setting: with "help others

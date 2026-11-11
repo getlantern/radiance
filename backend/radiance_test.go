@@ -608,7 +608,12 @@ func (f *fakePeerController) RetagStatus() {
 		f.setStatus(*st)
 	}
 }
-func (f *fakePeerController) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
+func (f *fakePeerController) RelaySnapshot() peer.Snapshot {
+	if !f.active.Load() {
+		return peer.Snapshot{}
+	}
+	return peer.Snapshot{Running: true, Peers: []string{"friend"}, BytesUp: 1}
+}
 
 // newPeerTestBackend wires a minimal LocalBackend with only the fields
 // applyPeerShare touches. settings is initialized to a fresh tempdir per test

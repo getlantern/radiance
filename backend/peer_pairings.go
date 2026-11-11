@@ -59,30 +59,29 @@ func (r *LocalBackend) syncPairingRoute() {
 		}
 		r.peerToggleMu.Lock()
 		defer r.peerToggleMu.Unlock()
-		r.reconcilePairingRouteLocked(true)
+		r.reconcilePairingRouteLocked()
 	}()
 }
 
-// reconcilePairingRouteLocked is reconcileSharingOffLocked when Share My
-// Connection is off; with sharing on, its toggle governs the client and this
-// does nothing. The caller holds peerToggleMu.
-func (r *LocalBackend) reconcilePairingRouteLocked(startNow bool) {
+// reconcilePairingRouteLocked is reconcileSharingOffLocked, starting at once,
+// when Share My Connection is off; with sharing on, its toggle governs the
+// client and this does nothing. The caller holds peerToggleMu.
+func (r *LocalBackend) reconcilePairingRouteLocked() {
 	if settings.GetBool(settings.PeerShareEnabledKey) {
 		return
 	}
-	r.reconcileSharingOffLocked(startNow)
+	r.reconcileSharingOffLocked(true)
 }
 
 // reconcileSharingOffLocked brings the peer client to what sharing being off
 // and this device's volunteer pairings ask for: a pairings-only run while it
-// has any, nothing otherwise. Every path that turns sharing off ends here, and
-// calls it directly rather than trusting the persisted setting, which a failed
-// write can leave on. A pool run left over from sharing is handed to
+// has any, nothing otherwise. Every path that turns sharing off ends here. A
+// pool run left over from sharing is handed to
 // pairings-only on the same port mapping by re-registering, and fails closed:
 // if the re-register fails, the client stops rather than leave a pool route
 // up. A fresh start runs here only when startNow is set; otherwise it is left
-// to syncPairingRoute, so a toggle returns promptly. The caller holds
-// peerToggleMu.
+// to syncPairingRoute, which re-checks the setting, so a toggle returns
+// promptly. The caller holds peerToggleMu.
 func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	if r.peerClient == nil || peerShareUnsupported() {
 		return
@@ -264,6 +263,10 @@ func (r *LocalBackend) pairingRouteNetworkChanged() {
 	if recent {
 		return
 	}
-	// A pending backoff retry is left armed, in case this attempt is a no-op.
+	// The backoff starts over on the new network, but a pending retry is left
+	// armed in case this attempt turns out a no-op.
+	r.pairingRetryMu.Lock()
+	r.pairingRetryWait = 0
+	r.pairingRetryMu.Unlock()
 	r.syncPairingRoute()
 }
