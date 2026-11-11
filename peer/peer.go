@@ -178,11 +178,14 @@ const defaultBoxCloseTimeout = 5 * time.Second
 type Client struct {
 	cfg Config
 
-	// poolMaybe is whether lantern-cloud may hold this client's route as one
-	// serving the general pool. A pool registration sets it before it reads
-	// the setting and leaves it set even if it fails, since a lost response
-	// may still have registered the pool; only a committed pool-free
-	// registration, or the route going away, clears it.
+	// poolMaybe is whether this client may be serving the general pool: its
+	// box serves a route lantern-cloud may hold as a pool one. Every
+	// registration sets it before reading the setting, and a pool-free one
+	// then restores the previous value, so a caller racing a registration
+	// sees the pool it may register. A pool registration leaves it set even if
+	// it fails, since a lost response may still have registered the pool. Only
+	// a committed pool-free registration, or no box serving (a stop, or a
+	// failed Start's rollback), clears it.
 	poolMaybe atomic.Bool
 
 	mu sync.Mutex
@@ -462,7 +465,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if regResp != nil {
 			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
 		}
-		// No box serves the route, so it serves nobody, pool or not.
+		// No box serves the route, so nobody is served, pool or not.
 		c.poolMaybe.Store(false)
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
@@ -910,11 +913,10 @@ func (c *Client) CurrentStatus() Status {
 	return c.status
 }
 
-// MayServePool reports whether lantern-cloud may hold this client's route as
-// one serving the general pool: the committed registration does, or one in
-// flight or of unknown outcome might. It errs toward true, so a caller taking
-// the route out of the pool re-registers unless it is sure, rather than trust
-// the setting, which can be ahead of the registration.
+// MayServePool reports whether this client may be serving the general pool;
+// see poolMaybe. It errs toward true, so a caller taking the route out of the
+// pool re-registers unless it is sure, rather than trust the setting, which
+// can be ahead of the registration.
 func (c *Client) MayServePool() bool {
 	return c.poolMaybe.Load()
 }

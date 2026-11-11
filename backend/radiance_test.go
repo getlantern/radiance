@@ -533,7 +533,8 @@ func (f *fakePeerController) Start(_ context.Context) error {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
 	if f.startErr != nil {
-		// A failed Start leaves no route, pool or not.
+		// A failed Start leaves no box serving, pool or not.
+		f.poolMaybe.Store(false)
 		return f.startErr
 	}
 	f.poolMaybe.Store(f.registrationPool())
@@ -551,6 +552,9 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 
 func (f *fakePeerController) Reregister(ctx context.Context) error {
 	n := f.reregisterCalls.Add(1)
+	if !f.active.Load() {
+		return peer.ErrNotActive
+	}
 	// As the real client: a pool registration may register the pool even if
 	// it fails; a pool-free one can't add it.
 	pool := f.registrationPool()

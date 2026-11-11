@@ -1658,32 +1658,45 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 	t.Cleanup(settings.Reset)
 	var pairingsOnly atomic.Bool
 	srv := newStubServer(t)
-	inRegister, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	// holdRegister, when set, holds the next register until it is closed;
+	// inRegister says a register is being held.
+	var holdRegister atomic.Pointer[chan struct{}]
+	inRegister := make(chan struct{}, 1)
 	srv.onRegister = func() {
-		once.Do(func() {
-			close(inRegister)
-			<-release
-		})
+		if hold := holdRegister.Swap(nil); hold != nil {
+			inRegister <- struct{}{}
+			<-*hold
+		}
 	}
-	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+	var c *Client
+	held := func(f func() error) {
+		release := make(chan struct{})
+		holdRegister.Store(&release)
+		done := make(chan error, 1)
+		go func() { done <- f() }()
+		<-inRegister
+		assert.True(t, c.MayServePool(), "a registration in flight on a route that may serve the pool")
+		close(release)
+		require.NoError(t, <-done)
+	}
+	c = newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
 		cfg.HeartbeatInterval = time.Hour
 		cfg.PairingsOnly = pairingsOnly.Load
 	})
 	ctx := context.Background()
-	assert.False(t, c.MayServePool(), "a stopped client holds no route")
+	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
 
-	started := make(chan error, 1)
-	go func() { started <- c.Start(ctx) }()
-	<-inRegister
-	assert.True(t, c.MayServePool(), "a pool registration in flight may have registered the pool")
-	close(release)
-	require.NoError(t, <-started)
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Start(ctx))
+	assert.False(t, c.MayServePool(), "a failed Start leaves no box serving")
+	srv.registerStatus = http.StatusOK
+
+	held(func() error { return c.Start(ctx) })
 	t.Cleanup(func() { _ = c.Stop(ctx) })
 	require.True(t, c.MayServePool())
 
 	pairingsOnly.Store(true)
-	require.NoError(t, c.Reregister(ctx))
+	held(func() error { return c.Reregister(ctx) })
 	require.False(t, c.MayServePool(), "a committed pool-free registration")
 
 	srv.registerStatus = http.StatusInternalServerError
@@ -1700,7 +1713,7 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 
 	srv.registerStatus = http.StatusOK
 	require.NoError(t, c.Stop(ctx))
-	assert.False(t, c.MayServePool(), "a stopped client holds no route")
+	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
 }
 
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
