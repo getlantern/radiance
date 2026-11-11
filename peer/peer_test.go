@@ -1640,19 +1640,20 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
 	require.NotNil(t, sp)
 	assert.False(t, *sp)
-	assert.False(t, c.RegisteredPool())
+	assert.False(t, c.MayServePool())
 
 	pairingsOnly.Store(false)
 	require.NoError(t, c.Reregister(ctx))
 	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
 		"sharing takes over the same run and serves the pool again")
-	assert.True(t, c.RegisteredPool())
+	assert.True(t, c.MayServePool())
 }
 
-// RegisteredPool errs toward true: it reads true while any registration is in
+// MayServePool errs toward true: it reads true while any registration is in
 // flight, even a pairings-only one, and a pool-free registration that fails
-// leaves a pool route reading as one.
-func TestClient_RegisteredPoolErrsTowardThePool(t *testing.T) {
+// leaves a pool route reading as one. Only a committed pool-free registration,
+// or stopping, clears it.
+func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
 	var pairingsOnly atomic.Bool
@@ -1671,25 +1672,28 @@ func TestClient_RegisteredPoolErrsTowardThePool(t *testing.T) {
 		cfg.PairingsOnly = pairingsOnly.Load
 	})
 	ctx := context.Background()
-	assert.False(t, c.RegisteredPool(), "a stopped client holds no route")
+	assert.False(t, c.MayServePool(), "a stopped client holds no route")
 
 	started := make(chan error, 1)
 	go func() { started <- c.Start(ctx) }()
 	<-inRegister
-	assert.True(t, c.RegisteredPool(), "what an in-flight registration registers isn't known yet")
+	assert.True(t, c.MayServePool(), "what an in-flight registration registers isn't known yet")
 	close(release)
 	require.NoError(t, <-started)
-	t.Cleanup(func() { _ = c.Stop(ctx) })
-	assert.False(t, c.RegisteredPool(), "a committed pairings-only registration")
+	assert.False(t, c.MayServePool(), "a committed pairings-only registration")
 
 	pairingsOnly.Store(false)
 	require.NoError(t, c.Reregister(ctx))
-	require.True(t, c.RegisteredPool())
+	require.True(t, c.MayServePool())
 
 	pairingsOnly.Store(true)
 	srv.registerStatus = http.StatusInternalServerError
 	require.Error(t, c.Reregister(ctx))
-	assert.True(t, c.RegisteredPool(), "a failed pool-free registration leaves the pool route as it was")
+	assert.True(t, c.MayServePool(), "a failed pool-free registration leaves the pool route as it was")
+
+	srv.registerStatus = http.StatusOK
+	require.NoError(t, c.Stop(ctx))
+	assert.False(t, c.MayServePool(), "a stopped client holds no route")
 }
 
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {

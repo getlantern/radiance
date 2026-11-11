@@ -319,7 +319,7 @@ func TestPairingRoute_HandOffJudgesTheRegistration(t *testing.T) {
 	fake := &fakePeerController{}
 	r := newPairingRouteTestBackend(t, fake)
 	require.NoError(t, r.applyPeerShare(true))
-	require.True(t, fake.RegisteredPool())
+	require.True(t, fake.MayServePool())
 	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
 	waitPeerWork(t, r)
 	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
@@ -329,7 +329,7 @@ func TestPairingRoute_HandOffJudgesTheRegistration(t *testing.T) {
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(1), fake.reregisterCalls.Load(), "a pool registration is re-registered whatever the setting says")
 	assert.Equal(t, int64(1), fake.stopCalls.Load(), "and the pool route is taken down when that fails")
-	assert.False(t, fake.RegisteredPool())
+	assert.False(t, fake.MayServePool())
 }
 
 // A pairings-only run that soon stops itself backs off like a failed start; one
@@ -384,4 +384,33 @@ func TestPairingRoute_ShareOnWithPoolOffInOnePatch(t *testing.T) {
 	assert.Zero(t, fake.reregisterCalls.Load())
 	assert.False(t, r.peerForPairings.Load())
 	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
+}
+
+// Entering sharing from pairings-only re-registers exactly when "help others
+// too" is on, whatever a rotation in flight leaves the registration looking
+// like: it's the only case in which serve_pool changes.
+func TestPairingRoute_EnteringSharingFollowsTheSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		servesPool bool
+		want       int64
+	}{
+		{"help others too on", true, 1},
+		{"help others too off", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakePeerController{}
+			r := newPairingRouteTestBackend(t, fake)
+			require.NoError(t, settings.Set(settings.PeerServePoolKey, tc.servesPool))
+			r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+			waitPeerWork(t, r)
+			// An hourly rotation in flight: the registration may be anything.
+			fake.poolMaybe.Store(true)
+
+			require.NoError(t, r.applyPeerShare(true))
+			require.Eventually(t, func() bool { return fake.reregisterCalls.Load() == tc.want }, 2*time.Second, 5*time.Millisecond)
+			waitPeerWork(t, r)
+			assert.Equal(t, tc.want, fake.reregisterCalls.Load())
+		})
+	}
 }

@@ -24,7 +24,7 @@ type peerController interface {
 	CurrentStatus() peer.Status
 	RelaySnapshot() peer.Snapshot
 	Reregister(ctx context.Context) error
-	RegisteredPool() bool
+	MayServePool() bool
 }
 
 // peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
@@ -70,17 +70,15 @@ func newPeerClient(platformDeviceID string, onSelfStop func(error), pairingsOnly
 // is rolled back if Start fails. Stop errors are logged because a partial
 // teardown shouldn't keep the toggle on.
 func (r *LocalBackend) applyPeerShare(enabled bool) error {
-	_, err := r.applyPeerShareStarted(enabled)
+	_, err := r.applyPeerShareRegistered(enabled)
 	return err
 }
 
-// applyPeerShareStarted is applyPeerShare, also reporting whether the
-// registration now carries the settings as they are, decided under
-// peerToggleMu: it called Start, which registers with them, or handed a
-// pairings-only run to sharing, which re-registers only if the registration
-// differs from them. A caller that persisted a registration setting first
-// then has nothing left to re-register.
-func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err error) {
+// applyPeerShareRegistered is applyPeerShare, also reporting whether the
+// registration follows the settings as they are, or a re-register for them is
+// under way, so a caller that persisted a registration setting first has
+// nothing left to re-register. Decided under peerToggleMu.
+func (r *LocalBackend) applyPeerShareRegistered(enabled bool) (registered bool, err error) {
 	if peerShareUnsupported() {
 		// A persisted "on" would otherwise survive every restart with nothing
 		// behind it.
@@ -128,10 +126,11 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		if r.peerForPairings.Swap(false) {
 			r.resetPairingRouteRetry()
 			r.clearPairingRunStart()
-			// Re-register only if the registration differs from what
-			// sharing asks for: "help others too" off leaves serve_pool=false
-			// and the friends' sessions as they are.
-			if settings.PeerServesPool() != r.peerClient.RegisteredPool() {
+			// The run registered serve_pool=false; sharing changes that only
+			// with "help others too" on. Off, the friends' sessions stay as
+			// they are. The re-register runs behind any rotation in flight
+			// and reads the mode when it does.
+			if settings.PeerServesPool() {
 				r.reregisterPeer()
 			}
 			r.emitSharingStatus()

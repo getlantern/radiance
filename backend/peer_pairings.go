@@ -118,7 +118,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 // itself, never the setting, which a pending or failed re-register leaves
 // ahead of it. The caller holds peerToggleMu.
 func (r *LocalBackend) handOverToPairingsLocked() bool {
-	if !r.peerClient.RegisteredPool() {
+	if !r.peerClient.MayServePool() {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
@@ -165,9 +165,9 @@ func (r *LocalBackend) stopPeerLocked() {
 	// free (peerShareActive).
 	wasPairings := r.peerForPairings.Swap(false)
 	r.restartYieldedReverse()
-	// A sharing run's Stop published its own status unless it failed early; a
-	// pairings-only run's was kept from the sharing UI.
-	if wasPairings || stopErr != nil {
+	// A sharing run's Stop published its own status, unless it failed before
+	// stopping the client; a pairings-only run's was kept from the sharing UI.
+	if wasPairings || (stopErr != nil && r.peerClient.IsActive()) {
 		r.emitSharingStatus()
 	}
 }

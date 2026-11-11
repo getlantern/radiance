@@ -183,10 +183,11 @@ type Client struct {
 	// a registration commits (Start's success, a rotation's swap) and cleared
 	// when the client stops, so an uncommitted registration never changes it.
 	poolLive atomic.Bool
-	// poolPending counts registrations in flight, Start's or a rotation's,
-	// from before they read the setting until they commit or fail. While any
-	// is, RegisteredPool reports true: what it registers is not known yet.
-	poolPending atomic.Int32
+	// poolMaybe is set before any registration reads the setting, and cleared
+	// only when a pool-free one commits or the client stops: a registration in
+	// flight, or one whose outcome is unknown (a lost response), may have
+	// left lantern-cloud serving the pool.
+	poolMaybe atomic.Bool
 
 	mu sync.Mutex
 	// startingDone is created when Start sets starting=true and closed when
@@ -404,7 +405,6 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		return err
 	}
 	defer c.releaseLifecycle()
-	defer c.beginRegistration()()
 	c.mu.Lock()
 	if c.active || c.starting {
 		c.mu.Unlock()
@@ -699,7 +699,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 
 	c.mu.Lock()
 	c.active = true
-	c.poolLive.Store(regPool)
+	c.commitPool(regPool)
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
@@ -839,6 +839,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.box = nil
 	c.routeID = ""
 	c.poolLive.Store(false)
+	c.poolMaybe.Store(false)
 	c.externalPort = 0
 	c.internalPort = 0
 	c.boxOptions = ""
@@ -912,28 +913,32 @@ func (c *Client) CurrentStatus() Status {
 	return c.status
 }
 
-// RegisteredPool reports whether the route may serve the general pool: the
-// committed registration does, or one is in flight. A caller deciding whether a
-// route still needs re-registering to leave the pool reads this, not the
-// setting, which can be ahead of the registration; it errs toward true.
-func (c *Client) RegisteredPool() bool {
-	return c.poolLive.Load() || c.poolPending.Load() > 0
+// MayServePool reports whether lantern-cloud may hold this client's route as
+// one serving the general pool: the committed registration does, or one in
+// flight or of unknown outcome might. It errs toward true, so a caller taking
+// the route out of the pool re-registers unless it is sure, rather than trust
+// the setting, which can be ahead of the registration.
+func (c *Client) MayServePool() bool {
+	return c.poolLive.Load() || c.poolMaybe.Load()
 }
 
 // register registers the route with lantern-cloud, with serve_pool as this run
 // wants it, and reports whether that registration serves the pool. The caller
-// holds a beginRegistration for the whole registration, through its commit.
+// commits the result with commitPool.
 func (c *Client) register(ctx context.Context, req RegisterRequest) (*RegisterResponse, bool, error) {
+	c.poolMaybe.Store(true)
 	req.ServePool = c.servePool()
 	resp, err := c.cfg.API.Register(ctx, req)
 	return resp, req.ServePool == nil || *req.ServePool, err
 }
 
-// beginRegistration marks a registration in flight until the returned func is
-// called; see poolPending.
-func (c *Client) beginRegistration() (done func()) {
-	c.poolPending.Add(1)
-	return func() { c.poolPending.Add(-1) }
+// commitPool records the pool setting of the registration the running box now
+// serves. The caller holds c.mu.
+func (c *Client) commitPool(pool bool) {
+	c.poolLive.Store(pool)
+	if !pool {
+		c.poolMaybe.Store(false)
+	}
 }
 
 // pairingsOnly reports whether this run serves only the device's helper
@@ -1306,7 +1311,6 @@ func (c *Client) Reregister(ctx context.Context) (err error) {
 // samizdat inbound binds the listening port. Close releases the port at once
 // and ends the box's sessions; closeBox bounds the wait as a safety net.
 func (c *Client) rotateCreds(ctx context.Context) error {
-	defer c.beginRegistration()()
 	if err := c.acquireLifecycle(ctx); err != nil {
 		return err
 	}
@@ -1480,7 +1484,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
-	c.poolLive.Store(regPool)
+	c.commitPool(regPool)
 	c.boxOptions = options
 	c.baseShortIDs = newBase
 	// Reconcile the new box with the current record, which a heartbeat may
@@ -1726,8 +1730,10 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 // this way, so a caller deciding whether they would collide must too.
 func ManualPort() uint16 {
 	// Quietly: chooseManualForwarder logs its choice, which Start logs again.
-	return reverseManualPort(slog.New(slog.DiscardHandler))
+	return reverseManualPort(discardLog)
 }
+
+var discardLog = slog.New(slog.DiscardHandler)
 
 // reverseManualPort is the configured manual port, or 0, found without the
 // port in the log.

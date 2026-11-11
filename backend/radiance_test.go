@@ -513,9 +513,10 @@ type fakePeerController struct {
 	onStart func()
 	// pairingsOnly, if set, is the client's Config.PairingsOnly.
 	pairingsOnly func() bool
-	// registeredPool is what RegisteredPool reports: the serve_pool of the
-	// last committed Start or Reregister.
-	registeredPool atomic.Bool
+	// poolLive and poolMaybe model the real client's MayServePool: the
+	// committed registration's pool setting, and a registration in flight or
+	// of unknown outcome that may have served the pool.
+	poolLive, poolMaybe atomic.Bool
 }
 
 // registrationPool is the serve_pool a registration now would send, as the
@@ -524,11 +525,16 @@ func (f *fakePeerController) registrationPool() bool {
 	return settings.PeerServesPool() && (f.pairingsOnly == nil || !f.pairingsOnly())
 }
 
-// noteRegistration records a committed registration's serve_pool, as the real
+// commitPool records a committed registration's serve_pool, as the real
 // client does.
-func (f *fakePeerController) noteRegistration(pool bool) { f.registeredPool.Store(pool) }
+func (f *fakePeerController) commitPool(pool bool) {
+	f.poolLive.Store(pool)
+	if !pool {
+		f.poolMaybe.Store(false)
+	}
+}
 
-func (f *fakePeerController) RegisteredPool() bool { return f.registeredPool.Load() }
+func (f *fakePeerController) MayServePool() bool { return f.poolLive.Load() || f.poolMaybe.Load() }
 
 func (f *fakePeerController) Start(_ context.Context) error {
 	if f.onStart != nil {
@@ -537,10 +543,12 @@ func (f *fakePeerController) Start(_ context.Context) error {
 	if f.startCalls.Add(1) == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
+	f.poolMaybe.Store(true)
+	pool := f.registrationPool()
 	if f.startErr != nil {
 		return f.startErr
 	}
-	f.noteRegistration(f.registrationPool())
+	f.commitPool(pool)
 	f.active.Store(true)
 	return nil
 }
@@ -548,20 +556,23 @@ func (f *fakePeerController) Start(_ context.Context) error {
 func (f *fakePeerController) Stop(_ context.Context) error {
 	f.stopCalls.Add(1)
 	f.active.Store(false)
+	f.poolLive.Store(false)
+	f.poolMaybe.Store(false)
 	return nil
 }
 
 func (f *fakePeerController) Reregister(ctx context.Context) error {
 	n := f.reregisterCalls.Add(1)
+	f.poolMaybe.Store(true)
 	pool := f.registrationPool()
 	if fn := f.reregisterFn.Load(); fn != nil {
 		if err := (*fn)(ctx, n); err != nil {
-			// A failed registration commits nothing; the old route keeps
-			// what it had.
+			// A failed registration commits nothing, and may have left the
+			// pool registered.
 			return err
 		}
 	}
-	f.noteRegistration(pool)
+	f.commitPool(pool)
 	return nil
 }
 
@@ -892,7 +903,7 @@ func (f *slowStartFake) IsActive() bool                   { return f.active.Load
 func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{Active: f.active.Load()} }
 func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
 func (f *slowStartFake) Reregister(context.Context) error { return nil }
-func (f *slowStartFake) RegisteredPool() bool             { return true }
+func (f *slowStartFake) MayServePool() bool               { return true }
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path

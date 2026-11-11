@@ -866,7 +866,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// applyPeerShare, which persists it, is what orders toggles.
 	var errs error
 	peerValue, peerRequested := updates[settings.PeerShareEnabledKey]
-	var peerOn, peerStarted bool
+	var peerOn, peerRegistered bool
 	if peerRequested {
 		on, ok := peerValue.(bool)
 		if !ok {
@@ -884,11 +884,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	if peerRequested {
-		started, err := r.applyPeerShareStarted(peerOn)
+		registered, err := r.applyPeerShareRegistered(peerOn)
 		if err != nil {
 			errs = errors.Join(errs, err)
 		}
-		peerStarted = started
+		peerRegistered = registered
 	}
 	if len(diff) == 0 {
 		return errs
@@ -953,7 +953,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	turnedOff := peerRequested && !peerOn
 	// A pairings-only run registers serve_pool=false whatever the setting
 	// says, so a change to it has nothing to re-register.
-	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff && !r.peerForPairings.Load() {
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerRegistered && !turnedOff && !r.peerForPairings.Load() {
 		r.reregisterPeer()
 	}
 	return errs
