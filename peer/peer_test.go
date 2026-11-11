@@ -1640,11 +1640,13 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
 	require.NotNil(t, sp)
 	assert.False(t, *sp)
+	assert.False(t, c.RegisteredPool())
 
 	pairingsOnly.Store(false)
 	require.NoError(t, c.Reregister(ctx))
 	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
 		"sharing takes over the same run and serves the pool again")
+	assert.True(t, c.RegisteredPool())
 }
 
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {

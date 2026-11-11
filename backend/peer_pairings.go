@@ -29,6 +29,10 @@ var (
 	pairingRouteRetryMax   = 30 * time.Minute
 )
 
+// pairingRunStableAfter is how long a pairings-only run must stay up before
+// it stopping restarts the backoff. A var so tests can shorten it.
+var pairingRunStableAfter = 30 * time.Minute
+
 // hasVolunteerPairings reports whether this device is the volunteer in any
 // helper pairing.
 func (r *LocalBackend) hasVolunteerPairings() bool {
@@ -87,6 +91,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	if active && want && !r.peerForPairings.Load() {
 		r.peerForPairings.Store(true)
 		if r.handOverToPairingsLocked() {
+			r.notePairingRunStart()
 			r.emitSharingStatus()
 			return
 		}
@@ -107,22 +112,18 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 
 // handOverToPairingsLocked makes a pool run pairings-only on the same port
 // mapping, reporting whether it did. The re-register sends serve_pool=false and
-// rotates the credentials, so strangers are cut off; a run that already served
-// only pairings ("help others too" off) has nothing to change and keeps its
-// friends' sessions. The caller holds peerToggleMu.
+// rotates the credentials, so strangers are cut off. A route already
+// registered without the pool ("help others too" was off) has nothing to
+// change and keeps its friends' sessions. That is judged from the registration
+// itself, never the setting, which a pending or failed re-register leaves
+// ahead of it. The caller holds peerToggleMu.
 func (r *LocalBackend) handOverToPairingsLocked() bool {
-	if !servesPool() {
+	if !r.peerClient.RegisteredPool() {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
 	return r.peerClient.Reregister(ctx) == nil
-}
-
-// servesPool reports whether a sharing run serves the general pool, as "help
-// others too" says: unset means yes.
-func servesPool() bool {
-	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
 }
 
 // startPairingRouteLocked starts a pairings-only run, retrying later if it
@@ -133,7 +134,7 @@ func (r *LocalBackend) startPairingRouteLocked() {
 	// The reverse client holds the manual port, when one is set, that the
 	// peer client binds. Without one they don't collide, and pausing would
 	// drop the friend's reverse sessions on every retry.
-	if settings.GetInt(settings.PeerManualPortKey) != 0 {
+	if peer.ManualPort() != 0 {
 		resume := r.pauseReverse(ctx)
 		defer resume()
 	}
@@ -147,9 +148,7 @@ func (r *LocalBackend) startPairingRouteLocked() {
 		return
 	}
 	// The backoff is kept until the run proves stable: see onPeerSelfStop.
-	r.pairingRetryMu.Lock()
-	r.pairingStartedAt = time.Now()
-	r.pairingRetryMu.Unlock()
+	r.notePairingRunStart()
 	slog.Info("pairing route started")
 }
 
@@ -160,9 +159,29 @@ func (r *LocalBackend) stopPeerLocked() {
 	if err := r.peerClient.Stop(ctx); err != nil {
 		slog.Warn("peer stop returned error", "error", err)
 	}
-	r.peerForPairings.Store(false)
+	r.clearPairingRunStart()
 	r.restartYieldedReverse()
-	r.emitSharingStatus()
+	// A sharing run's Stop published its own status; a pairings-only run's
+	// was kept from the sharing UI, which still shows the hand-off before it.
+	if r.peerForPairings.Swap(false) {
+		r.emitSharingStatus()
+	}
+}
+
+// notePairingRunStart records when the current pairings-only run began, by a
+// start or a hand-off from sharing.
+func (r *LocalBackend) notePairingRunStart() {
+	r.pairingRetryMu.Lock()
+	r.pairingStartedAt = time.Now()
+	r.pairingRetryMu.Unlock()
+}
+
+// clearPairingRunStart forgets the pairings-only run's start: it ended, or
+// became a sharing run.
+func (r *LocalBackend) clearPairingRunStart() {
+	r.pairingRetryMu.Lock()
+	r.pairingStartedAt = time.Time{}
+	r.pairingRetryMu.Unlock()
 }
 
 // emitSharingStatus tells the sharing UI of a change the peer client didn't
@@ -173,12 +192,12 @@ func (r *LocalBackend) emitSharingStatus() {
 }
 
 // pairingRunWasStable reports whether the pairings-only run that just stopped
-// had stayed up long enough to restart the backoff, so a run that starts and
-// soon stops itself backs off like a failed start.
+// had stayed up pairingRunStableAfter, long enough to restart the backoff, so a
+// run that starts and soon stops itself backs off like a failed start.
 func (r *LocalBackend) pairingRunWasStable() bool {
 	r.pairingRetryMu.Lock()
 	defer r.pairingRetryMu.Unlock()
-	return !r.pairingStartedAt.IsZero() && time.Since(r.pairingStartedAt) >= pairingRouteRetryMax
+	return !r.pairingStartedAt.IsZero() && time.Since(r.pairingStartedAt) >= pairingRunStableAfter
 }
 
 // schedulePairingRouteRetry tries the pairings-only start again after a

@@ -23,6 +23,7 @@ import (
 func newPairingRouteTestBackend(t *testing.T, fake *fakePeerController) *LocalBackend {
 	t.Helper()
 	r := newPeerTestBackend(t, fake)
+	fake.pairingsOnly = r.peerForPairings.Load
 	r.helperPairingKeys = &helper.PairingKeys{}
 	r.helperPairingKeys.SetOnChange(r.pairingKeysChanged)
 	t.Cleanup(r.closePeerClient)
@@ -308,4 +309,79 @@ func TestPairingRoute_RelaySnapshotShowsSharingOff(t *testing.T) {
 	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
 	waitPeerWork(t, r)
 	assert.Empty(t, r.PeerRelaySnapshot().Peers)
+}
+
+// A hand-off is judged by the registration, not the setting: with "help others
+// too" just turned off but the route still registered for the pool (its
+// re-register pending or failed), turning sharing off still re-registers, and
+// fails closed if that fails.
+func TestPairingRoute_HandOffJudgesTheRegistration(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	require.NoError(t, r.applyPeerShare(true))
+	require.True(t, fake.RegisteredPool())
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	fake.setReregister(func(context.Context, int64) error { return errors.New("lantern-cloud unreachable") })
+
+	require.NoError(t, r.applyPeerShare(false))
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.reregisterCalls.Load(), "a pool registration is re-registered whatever the setting says")
+	assert.Equal(t, int64(1), fake.stopCalls.Load(), "and the pool route is taken down when that fails")
+	assert.False(t, fake.RegisteredPool())
+}
+
+// A pairings-only run that soon stops itself backs off like a failed start; one
+// that stayed up restarts the backoff.
+func TestPairingRoute_BackoffResetsOnlyAfterAStableRun(t *testing.T) {
+	first, maxWait, stable := pairingRouteRetryFirst, pairingRouteRetryMax, pairingRunStableAfter
+	// Retries far off, so none fires during the test.
+	pairingRouteRetryFirst, pairingRouteRetryMax, pairingRunStableAfter = time.Hour, 8*time.Hour, 50*time.Millisecond
+	t.Cleanup(func() { pairingRouteRetryFirst, pairingRouteRetryMax, pairingRunStableAfter = first, maxWait, stable })
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	nextWait := func() time.Duration {
+		r.pairingRetryMu.Lock()
+		defer r.pairingRetryMu.Unlock()
+		return r.pairingRetryWait
+	}
+	selfStop := func() {
+		fake.active.Store(false)
+		r.onPeerSelfStop(errors.New("route dropped"))
+	}
+	r.pairingRetryMu.Lock()
+	r.pairingRetryWait = 2 * time.Hour
+	r.pairingRetryMu.Unlock()
+
+	selfStop()
+	assert.Equal(t, 4*time.Hour, nextWait(), "a short-lived run keeps backing off")
+
+	r.peerForPairings.Store(true)
+	fake.active.Store(true)
+	r.notePairingRunStart()
+	time.Sleep(2 * pairingRunStableAfter)
+	selfStop()
+	assert.Equal(t, 2*time.Hour, nextWait(), "a stable run restarts the backoff from its first step")
+}
+
+// Turning sharing on over a pairings-only run with "help others too" off in
+// the same patch rotates nothing: the registration already matches.
+func TestPairingRoute_ShareOnWithPoolOffInOnePatch(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, r.peerForPairings.Load())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{
+		settings.PeerShareEnabledKey: true,
+		settings.PeerServePoolKey:    false,
+	}))
+	waitPeerWork(t, r)
+	assert.Zero(t, fake.reregisterCalls.Load())
+	assert.False(t, r.peerForPairings.Load())
+	assert.True(t, settings.GetBool(settings.PeerShareEnabledKey))
 }

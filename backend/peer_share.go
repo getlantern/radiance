@@ -24,6 +24,7 @@ type peerController interface {
 	CurrentStatus() peer.Status
 	RelaySnapshot() peer.Snapshot
 	Reregister(ctx context.Context) error
+	RegisteredPool() bool
 }
 
 // peerToggleTimeout caps blocking time on a slow router; UPnP M-SEARCH +
@@ -124,13 +125,17 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		// serve_pool follows "help others too" again.
 		if r.peerForPairings.Swap(false) {
 			r.resetPairingRouteRetry()
-			// Only a pool route has strangers to admit; "help others too"
-			// off leaves serve_pool=false and the friends' sessions as they
-			// are.
-			if servesPool() {
+			r.clearPairingRunStart()
+			// Re-register only if the registration differs from what
+			// sharing asks for: "help others too" off leaves serve_pool=false
+			// and the friends' sessions as they are.
+			if settings.PeerServesPool() != r.peerClient.RegisteredPool() {
 				r.reregisterPeer()
 			}
 			r.emitSharingStatus()
+			// The registration now follows this patch's settings, so the
+			// caller re-registers nothing more for them.
+			return true, nil
 		}
 		return false, nil
 	}
@@ -284,11 +289,13 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	}
 	if r.peerForPairings.Swap(false) {
 		// A pairings-only run never set the toggle; try again later.
-		slog.Warn("pairing route stopped itself; retrying later", "reason", reason)
+		// Fixed text: the reason can quote an API body or URL.
+		slog.Warn("pairing route stopped itself; retrying later")
 		r.restartYieldedReverse()
 		if r.pairingRunWasStable() {
 			r.resetPairingRouteRetry()
 		}
+		r.clearPairingRunStart()
 		r.schedulePairingRouteRetry()
 		return
 	}

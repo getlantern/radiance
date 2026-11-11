@@ -511,7 +511,24 @@ type fakePeerController struct {
 	reregisterFn atomic.Pointer[func(context.Context, int64) error]
 	// onStart, if set, runs at the top of each Start.
 	onStart func()
+	// pairingsOnly, if set, is the client's Config.PairingsOnly.
+	pairingsOnly func() bool
+	// registeredPool is what RegisteredPool reports: set from the serve_pool
+	// each successful Start or Reregister would have sent.
+	registeredPool atomic.Bool
 }
+
+// noteRegistration records the serve_pool a successful registration sent, as
+// the real client does.
+func (f *fakePeerController) noteRegistration() {
+	pool := settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
+	if f.pairingsOnly != nil && f.pairingsOnly() {
+		pool = false
+	}
+	f.registeredPool.Store(pool)
+}
+
+func (f *fakePeerController) RegisteredPool() bool { return f.registeredPool.Load() }
 
 func (f *fakePeerController) Start(_ context.Context) error {
 	if f.onStart != nil {
@@ -523,6 +540,7 @@ func (f *fakePeerController) Start(_ context.Context) error {
 	if f.startErr != nil {
 		return f.startErr
 	}
+	f.noteRegistration()
 	f.active.Store(true)
 	return nil
 }
@@ -536,8 +554,11 @@ func (f *fakePeerController) Stop(_ context.Context) error {
 func (f *fakePeerController) Reregister(ctx context.Context) error {
 	n := f.reregisterCalls.Add(1)
 	if fn := f.reregisterFn.Load(); fn != nil {
-		return (*fn)(ctx, n)
+		if err := (*fn)(ctx, n); err != nil {
+			return err
+		}
 	}
+	f.noteRegistration()
 	return nil
 }
 
@@ -868,6 +889,7 @@ func (f *slowStartFake) IsActive() bool                   { return f.active.Load
 func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{Active: f.active.Load()} }
 func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
 func (f *slowStartFake) Reregister(context.Context) error { return nil }
+func (f *slowStartFake) RegisteredPool() bool             { return true }
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path

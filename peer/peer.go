@@ -178,6 +178,12 @@ const defaultBoxCloseTimeout = 5 * time.Second
 type Client struct {
 	cfg Config
 
+	// registeredPool is whether the route lantern-cloud holds may serve the
+	// general pool. It errs toward true: set before a registration that serves
+	// the pool, and cleared only once one that doesn't has succeeded, so a
+	// failed or partial one never reads as pairings-only.
+	registeredPool atomic.Bool
+
 	mu sync.Mutex
 	// startingDone is created when Start sets starting=true and closed when
 	// the same Start clears it (success or fail). Stop callers that arrive
@@ -529,12 +535,19 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	}
 
 	c.emitPhase(PhaseRegistering, "")
+	servePool := c.servePool()
+	if servePool == nil || *servePool {
+		c.registeredPool.Store(true)
+	}
 	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
-		ServePool:    c.servePool(),
+		ServePool:    servePool,
 	})
+	if err == nil && servePool != nil && !*servePool {
+		c.registeredPool.Store(false)
+	}
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
 	}
@@ -897,6 +910,14 @@ func (c *Client) CurrentStatus() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status
+}
+
+// RegisteredPool reports whether the route lantern-cloud holds may serve the
+// general pool; see Client.registeredPool. A caller deciding whether a route
+// still needs re-registering to leave the pool reads this, not the setting,
+// which can be ahead of the registration.
+func (c *Client) RegisteredPool() bool {
+	return c.registeredPool.Load()
 }
 
 // pairingsOnly reports whether this run serves only the device's helper
@@ -1301,12 +1322,19 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
+	servePool := c.servePool()
+	if servePool == nil || *servePool {
+		c.registeredPool.Store(true)
+	}
 	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
-		ServePool:    c.servePool(),
+		ServePool:    servePool,
 	})
+	if err == nil && servePool != nil && !*servePool {
+		c.registeredPool.Store(false)
+	}
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
 	}
@@ -1683,6 +1711,13 @@ func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
 	return newForwarder(ctx, pickManualForwarder())
 }
 
+// ManualPort is the manual port the peer and reverse clients bind, from the
+// setting or the environment, or 0 if there is none. Both clients resolve it
+// this way, so a caller deciding whether they would collide must too.
+func ManualPort() uint16 {
+	return reverseManualPort(slog.Default())
+}
+
 // reverseManualPort is the configured manual port, or 0, found without the
 // port in the log.
 func reverseManualPort(log *slog.Logger) uint16 {
@@ -1737,7 +1772,7 @@ func internalPortSkipping(i int, avoid uint16) uint16 {
 // each registration, so a change takes effect at the next one: the next Start
 // or the hourly credential rotation.
 func (c *Client) servePool() *bool {
-	if !c.pairingsOnly() && (settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)) {
+	if !c.pairingsOnly() && settings.PeerServesPool() {
 		return nil
 	}
 	off := false
