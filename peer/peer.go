@@ -483,7 +483,13 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 					slog.Info("peer: start canceled before it finished",
 						"phase", failedPhase, "err", retErr)
 				} else {
-					slog.Error("peer: start failed", "phase", failedPhase,
+					// A pairings-only start is a background attempt that is
+					// retried, and routers without UPnP fail it routinely.
+					level := slog.LevelError
+					if c.pairingsOnly() {
+						level = slog.LevelWarn
+					}
+					slog.Log(context.Background(), level, "peer: start failed", "phase", failedPhase,
 						"reason", named.Reason, "err", retErr)
 				}
 				reason = named.Reason
@@ -728,7 +734,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		"heartbeat", heartbeat,
 	)
 	success = true
-	events.Emit(StatusEvent{Status: statusSnapshot})
+	c.publishStatus(statusSnapshot)
 	return nil
 }
 
@@ -834,7 +840,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.status = Status{Phase: PhaseStopping}
 	stoppingSnapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: stoppingSnapshot})
+	c.publishStatus(stoppingSnapshot)
 
 	// Suppress the connection listener BEFORE box.Close. peerconn.Notify
 	// reads its registered listener under an RLock and releases it before
@@ -877,7 +883,7 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.status = Status{Phase: PhaseIdle}
 	idleSnapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: idleSnapshot})
+	c.publishStatus(idleSnapshot)
 	return true, firstErr
 }
 
@@ -899,6 +905,22 @@ func (c *Client) CurrentStatus() Status {
 // only PhaseServing implies active=true; every other phase clears it so
 // subscribers using just the Active flag don't see e.g. "active=true with
 // Phase=verifying" mid-Start.
+// pairingsOnly reports whether this run serves only the device's helper
+// pairings (Config.PairingsOnly).
+func (c *Client) pairingsOnly() bool {
+	return c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
+}
+
+// publishStatus emits s for the sharing UI, unless this run serves only the
+// device's helper pairings: Share My Connection is off then, and a background
+// pairings-only run must not show as sharing, or as failing to.
+func (c *Client) publishStatus(s Status) {
+	if c.pairingsOnly() {
+		return
+	}
+	events.Emit(StatusEvent{Status: s})
+}
+
 func (c *Client) emitPhase(p Phase, errMsg string) {
 	c.emitStatus(p, errMsg, "")
 }
@@ -918,7 +940,7 @@ func (c *Client) emitStatus(p Phase, errMsg string, reason Reason) {
 	c.status.Active = (p == PhaseServing)
 	snapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: snapshot})
+	c.publishStatus(snapshot)
 }
 
 // currentPhase reports the phase Start had reached, which is the phase a
@@ -1715,8 +1737,7 @@ func internalPortSkipping(i int, avoid uint16) uint16 {
 // each registration, so a change takes effect at the next one: the next Start
 // or the hourly credential rotation.
 func (c *Client) servePool() *bool {
-	pairingsOnly := c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
-	if !pairingsOnly && (settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)) {
+	if !c.pairingsOnly() && (settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)) {
 		return nil
 	}
 	off := false

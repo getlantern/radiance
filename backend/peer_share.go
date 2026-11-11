@@ -109,26 +109,9 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 	defer cancel()
 	if !enabled {
 		persistErr := persistPeerShare(false)
-		if r.peerClient.IsActive() && r.hasVolunteerPairings() {
-			// A volunteer keeps serving its pairings on the same port mapping:
-			// re-registering sends serve_pool=false and rotates the
-			// credentials, so strangers are cut off. It runs now, under the
-			// toggle lock, and fails closed: if it fails, the client stops
-			// below and the pairings-only run starts afresh, never leaving a
-			// pool route up after sharing is off.
-			r.peerForPairings.Store(true)
-			if err := r.peerClient.Reregister(toggleCtx); err == nil {
-				return false, persistErr
-			}
-			slog.Warn("pairing route re-register failed; restarting it")
-		}
-		if err := r.peerClient.Stop(toggleCtx); err != nil {
-			slog.Warn("peer share stop returned error (toggle still off)", "error", err)
-		}
-		r.peerForPairings.Store(false)
-		r.restartYieldedReverse()
-		// A volunteer that wasn't running keeps trying to serve its pairings.
-		r.syncPairingRoute()
+		// Stops the client, or, for a volunteer, keeps serving its pairings
+		// on the same port mapping.
+		r.reconcilePairingRouteLocked(false)
 		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
@@ -163,6 +146,8 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 			slog.Error("peer share rollback failed after Start error",
 				"start_error", err, "rollback_error", rbErr)
 		}
+		// Sharing is off again; a volunteer still serves its pairings.
+		r.reconcilePairingRouteLocked(false)
 		return true, fmt.Errorf("start peer share: %w", err)
 	}
 	slog.Info("peer share start succeeded")
@@ -303,6 +288,8 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 		slog.Error("clearing peer share toggle after self-stop", "error", err)
 	}
 	r.restartYieldedReverse()
+	// A volunteer still serves its pairings.
+	r.reconcilePairingRouteLocked(false)
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the
@@ -376,7 +363,8 @@ func (r *LocalBackend) closePeerClient() {
 // than panicking: construction degrades to a nil client, and the IPC
 // handler serves this on every GET /peer/status.
 func (r *LocalBackend) PeerStatus() peer.Status {
-	if r.peerClient == nil {
+	// A pairings-only run is not Share My Connection, which is off.
+	if r.peerClient == nil || r.peerForPairings.Load() {
 		return peer.Status{}
 	}
 	return r.peerClient.CurrentStatus()

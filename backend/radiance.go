@@ -102,10 +102,12 @@ type LocalBackend struct {
 	// peer_pairings.go.
 	peerForPairings atomic.Bool
 	// pairingRetryTimer and pairingRetryWait drive the backoff between failed
-	// pairings-only starts. Guarded by pairingRetryMu.
-	pairingRetryMu    sync.Mutex
-	pairingRetryTimer *time.Timer
-	pairingRetryWait  time.Duration
+	// pairings-only starts, and pairingLastAttempt rate-limits the retries a
+	// network change forces. Guarded by pairingRetryMu.
+	pairingRetryMu     sync.Mutex
+	pairingRetryTimer  *time.Timer
+	pairingRetryWait   time.Duration
+	pairingLastAttempt time.Time
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
@@ -948,7 +950,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// that turned sharing on for a peer already running started nothing, so
 	// it re-registers.
 	turnedOff := peerRequested && !peerOn
-	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff {
+	// A pairings-only run registers serve_pool=false whatever the setting
+	// says, so a change to it has nothing to re-register.
+	if _, ok := diff[settings.PeerServePoolKey]; ok && !peerStarted && !turnedOff && !r.peerForPairings.Load() {
 		r.reregisterPeer()
 	}
 	return errs

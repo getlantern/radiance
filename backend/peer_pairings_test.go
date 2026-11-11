@@ -78,12 +78,18 @@ func TestPairingRoute_RetriesAFailedStart(t *testing.T) {
 	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
 	require.Eventually(t, func() bool { return fake.startCalls.Load() >= 2 }, 2*time.Second, 5*time.Millisecond,
 		"a failed start is retried")
+	// Closing stops the retries, so the state below is settled.
+	r.closePeerClient()
 	assert.False(t, r.peerForPairings.Load())
 	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
 }
 
-// A network change retries at once rather than waiting out the backoff.
+// A network change retries at once rather than waiting out the backoff, but
+// not again until pairingRouteRetryFirst has passed since the last attempt.
 func TestPairingRoute_NetworkChangeRetriesNow(t *testing.T) {
+	first := pairingRouteRetryFirst
+	pairingRouteRetryFirst = 200 * time.Millisecond
+	t.Cleanup(func() { pairingRouteRetryFirst = first })
 	fake := &fakePeerController{startErr: errors.New("no upnp")}
 	r := newPairingRouteTestBackend(t, fake)
 
@@ -91,7 +97,14 @@ func TestPairingRoute_NetworkChangeRetriesNow(t *testing.T) {
 	waitPeerWork(t, r)
 	require.Equal(t, int64(1), fake.startCalls.Load())
 
+	r.pairingRouteNetworkChanged()
+	waitPeerWork(t, r)
+	assert.Equal(t, int64(1), fake.startCalls.Load(), "a burst of network events doesn't hammer the router")
+
 	fake.startErr = nil
+	r.pairingRetryMu.Lock()
+	r.pairingLastAttempt = time.Now().Add(-time.Second)
+	r.pairingRetryMu.Unlock()
 	r.pairingRouteNetworkChanged()
 	waitPeerWork(t, r)
 	assert.Equal(t, int64(2), fake.startCalls.Load())
@@ -188,4 +201,75 @@ func TestPairingRoute_SelfStopRetries(t *testing.T) {
 	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
 	require.Eventually(t, func() bool { return fake.startCalls.Load() == 2 && fake.IsActive() }, 2*time.Second, 5*time.Millisecond)
 	assert.True(t, r.peerForPairings.Load())
+}
+
+// A share Start that fails and rolls the toggle back leaves sharing off, so a
+// volunteer goes back to serving its pairings.
+func TestPairingRoute_ShareStartFailureFallsBackToPairings(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	fake.onStart = func() {
+		if settings.GetBool(settings.PeerShareEnabledKey) {
+			fake.startErr = errors.New("register 4xx")
+		} else {
+			fake.startErr = nil
+		}
+	}
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.NoError(t, r.applyPeerShare(false))
+	waitPeerWork(t, r)
+	fake.active.Store(false)
+	r.peerForPairings.Store(false)
+
+	require.Error(t, r.applyPeerShare(true))
+	waitPeerWork(t, r)
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+	assert.True(t, fake.IsActive(), "the pairings-only run starts again")
+	assert.True(t, r.peerForPairings.Load())
+}
+
+// A sharing run that stops itself turns the toggle off, and a volunteer goes
+// back to serving its pairings.
+func TestPairingRoute_ShareSelfStopFallsBackToPairings(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	require.NoError(t, r.applyPeerShare(true))
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+
+	fake.active.Store(false)
+	r.onPeerSelfStop(errors.New("route dropped"))
+	waitPeerWork(t, r)
+	assert.False(t, settings.GetBool(settings.PeerShareEnabledKey))
+	assert.Equal(t, int64(2), fake.startCalls.Load())
+	assert.True(t, fake.IsActive())
+	assert.True(t, r.peerForPairings.Load())
+}
+
+// An "off" while the run is already pairings-only, or a "help others too"
+// change then, leaves the run alone: no credential rotation drops the friend.
+func TestPairingRoute_RedundantChangesDontRotate(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, r.peerForPairings.Load())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerShareEnabledKey: false}))
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.PeerServePoolKey: false}))
+	waitPeerWork(t, r)
+	assert.Zero(t, fake.reregisterCalls.Load())
+	assert.Zero(t, fake.stopCalls.Load())
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+}
+
+// A pairings-only run doesn't show as Share My Connection, which is off.
+func TestPairingRoute_StatusShowsSharingOff(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	require.True(t, fake.IsActive())
+	assert.False(t, r.PeerStatus().Active)
 }
