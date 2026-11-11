@@ -526,17 +526,17 @@ func (f *fakePeerController) registrationPool() bool {
 func (f *fakePeerController) MayServePool() bool { return f.poolMaybe.Load() }
 
 func (f *fakePeerController) Start(_ context.Context) error {
+	if f.active.Load() {
+		return errors.New("peer client already active")
+	}
 	if f.onStart != nil {
 		f.onStart()
 	}
 	if f.startCalls.Add(1) == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
-	if f.active.Load() {
-		return errors.New("peer client already active")
-	}
 	if f.startErr != nil {
-		// As the real client's rollback, given a confirmed deregister.
+		// As the real client's rollback: no box serves.
 		f.poolMaybe.Store(false)
 		return f.startErr
 	}

@@ -178,8 +178,7 @@ const defaultBoxCloseTimeout = 5 * time.Second
 type Client struct {
 	cfg Config
 
-	// poolMaybe backs MayServePool. Only register sets it, and only a committed
-	// pool-free registration or a confirmed deregister clears it.
+	// poolMaybe backs MayServePool.
 	poolMaybe atomic.Bool
 
 	mu sync.Mutex
@@ -456,9 +455,11 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if cancelRun != nil {
 			cancelRun()
 		}
-		if regResp != nil && c.cfg.API.Deregister(cleanupCtx, regResp.RouteID) == nil {
-			c.poolMaybe.Store(false)
+		if regResp != nil {
+			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
 		}
+		// No box serves the route, so the client serves nobody.
+		c.poolMaybe.Store(false)
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
 		}
@@ -905,13 +906,13 @@ func (c *Client) CurrentStatus() Status {
 	return c.status
 }
 
-// MayServePool reports whether lantern-cloud may hold this client's route as
-// one serving the general pool. It is true from before any registration reads
-// the setting until either a pool-free registration commits or the route is
-// deregistered, except that a pool-free registration leaves it as it was; a
-// failed pool registration leaves it true, since a lost response may still
-// have registered the pool. It errs toward true: false means the route is
-// known not to serve the pool.
+// MayServePool reports whether this client's box may be serving the general
+// pool. It is set before any registration reads the setting; a pool-free
+// registration then restores the previous value, and a failed pool
+// registration leaves it set, since a lost response may still have registered
+// the pool. It clears when a pool-free registration commits or no box serves
+// (a stop, or a failed Start). False means the client is known not to be
+// serving the pool.
 func (c *Client) MayServePool() bool {
 	return c.poolMaybe.Load()
 }
