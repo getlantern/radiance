@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
+	"github.com/getlantern/radiance/peer"
 )
 
 // newPairingRouteTestBackend is newPeerTestBackend with a pairing key store
@@ -272,4 +275,37 @@ func TestPairingRoute_StatusShowsSharingOff(t *testing.T) {
 	waitPeerWork(t, r)
 	require.True(t, fake.IsActive())
 	assert.False(t, r.PeerStatus().Active)
+}
+
+// With "help others too" off, a sharing run already serves only pairings, so
+// handing it to or from pairings-only rotates nothing and keeps the friends'
+// sessions; the sharing UI still hears of each hand-off.
+func TestPairingRoute_HandOffWithoutPoolKeepsSessions(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	var statuses atomic.Int64
+	sub := events.Subscribe(func(peer.StatusEvent) { statuses.Add(1) })
+	t.Cleanup(func() { events.Unsubscribe(sub) })
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+
+	require.NoError(t, r.applyPeerShare(true))
+	require.NoError(t, r.applyPeerShare(false))
+	waitPeerWork(t, r)
+	assert.Zero(t, fake.reregisterCalls.Load())
+	assert.Zero(t, fake.stopCalls.Load())
+	assert.Equal(t, int64(1), fake.startCalls.Load())
+	assert.True(t, r.peerForPairings.Load())
+	require.Eventually(t, func() bool { return statuses.Load() >= 2 }, 2*time.Second, 5*time.Millisecond,
+		"each hand-off tells the sharing UI")
+}
+
+// A pairings-only run's relayed bytes aren't Share My Connection's.
+func TestPairingRoute_RelaySnapshotShowsSharingOff(t *testing.T) {
+	fake := &fakePeerController{}
+	r := newPairingRouteTestBackend(t, fake)
+	r.helperPairingKeys.Set(pairingKeys(helperticket.RoleVolunteer))
+	waitPeerWork(t, r)
+	assert.Empty(t, r.PeerRelaySnapshot().Peers)
 }

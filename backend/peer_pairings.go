@@ -8,6 +8,8 @@ import (
 	"github.com/getlantern/broflake/common/helperticket"
 
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/peer"
 )
 
 // A volunteer serves its helper pairings over its direct TCP route even with
@@ -57,27 +59,35 @@ func (r *LocalBackend) syncPairingRoute() {
 	}()
 }
 
-// reconcilePairingRouteLocked brings the peer client to what sharing being off
-// and this device's volunteer pairings ask for: a pairings-only run while it
-// has any, nothing otherwise. Every path that leaves sharing off ends here; with
-// sharing on, its toggle governs the client and this does nothing. A pool run
-// left over from sharing is handed to pairings-only on the same port mapping by
-// re-registering, and fails closed: if the re-register fails, the client stops
-// rather than leave a pool route up. A fresh start runs here only when startNow
-// is set; otherwise it is left to syncPairingRoute, so a toggle returns
-// promptly. The caller holds peerToggleMu.
+// reconcilePairingRouteLocked is reconcileSharingOffLocked when Share My
+// Connection is off; with sharing on, its toggle governs the client and this
+// does nothing. The caller holds peerToggleMu.
 func (r *LocalBackend) reconcilePairingRouteLocked(startNow bool) {
-	if r.peerClient == nil || peerShareUnsupported() || settings.GetBool(settings.PeerShareEnabledKey) {
+	if settings.GetBool(settings.PeerShareEnabledKey) {
+		return
+	}
+	r.reconcileSharingOffLocked(startNow)
+}
+
+// reconcileSharingOffLocked brings the peer client to what sharing being off
+// and this device's volunteer pairings ask for: a pairings-only run while it
+// has any, nothing otherwise. Every path that turns sharing off ends here, and
+// calls it directly rather than trusting the persisted setting, which a failed
+// write can leave on. A pool run left over from sharing is handed to
+// pairings-only on the same port mapping by re-registering, and fails closed:
+// if the re-register fails, the client stops rather than leave a pool route
+// up. A fresh start runs here only when startNow is set; otherwise it is left
+// to syncPairingRoute, so a toggle returns promptly. The caller holds
+// peerToggleMu.
+func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
+	if r.peerClient == nil || peerShareUnsupported() {
 		return
 	}
 	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
 	if active && want && !r.peerForPairings.Load() {
 		r.peerForPairings.Store(true)
-		ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
-		err := r.peerClient.Reregister(ctx)
-		cancel()
-		if err == nil {
-			r.resetPairingRouteRetry()
+		if r.handOverToPairingsLocked() {
+			r.emitSharingStatus()
 			return
 		}
 		slog.Warn("pairing route re-register failed; restarting it")
@@ -95,23 +105,51 @@ func (r *LocalBackend) reconcilePairingRouteLocked(startNow bool) {
 	}
 }
 
+// handOverToPairingsLocked makes a pool run pairings-only on the same port
+// mapping, reporting whether it did. The re-register sends serve_pool=false and
+// rotates the credentials, so strangers are cut off; a run that already served
+// only pairings ("help others too" off) has nothing to change and keeps its
+// friends' sessions. The caller holds peerToggleMu.
+func (r *LocalBackend) handOverToPairingsLocked() bool {
+	if !servesPool() {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
+	defer cancel()
+	return r.peerClient.Reregister(ctx) == nil
+}
+
+// servesPool reports whether a sharing run serves the general pool, as "help
+// others too" says: unset means yes.
+func servesPool() bool {
+	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
+}
+
 // startPairingRouteLocked starts a pairings-only run, retrying later if it
 // fails. The caller holds peerToggleMu.
 func (r *LocalBackend) startPairingRouteLocked() {
 	ctx, cancel := context.WithTimeout(r.ctx, peerToggleTimeout)
 	defer cancel()
-	// The reverse client may hold the manual port the peer client binds.
-	resume := r.pauseReverse(ctx)
-	defer resume()
+	// The reverse client holds the manual port, when one is set, that the
+	// peer client binds. Without one they don't collide, and pausing would
+	// drop the friend's reverse sessions on every retry.
+	if settings.GetInt(settings.PeerManualPortKey) != 0 {
+		resume := r.pauseReverse(ctx)
+		defer resume()
+	}
 	r.notePairingRouteAttempt()
 	r.peerForPairings.Store(true)
 	if err := r.peerClient.Start(ctx); err != nil {
 		r.peerForPairings.Store(false)
-		slog.Warn("pairing route start failed; retrying later", "error", err)
+		// Fixed text: the error can quote an API body or URL.
+		slog.Warn("pairing route start failed; retrying later")
 		r.schedulePairingRouteRetry()
 		return
 	}
-	r.resetPairingRouteRetry()
+	// The backoff is kept until the run proves stable: see onPeerSelfStop.
+	r.pairingRetryMu.Lock()
+	r.pairingStartedAt = time.Now()
+	r.pairingRetryMu.Unlock()
 	slog.Info("pairing route started")
 }
 
@@ -124,6 +162,23 @@ func (r *LocalBackend) stopPeerLocked() {
 	}
 	r.peerForPairings.Store(false)
 	r.restartYieldedReverse()
+	r.emitSharingStatus()
+}
+
+// emitSharingStatus tells the sharing UI of a change the peer client didn't
+// publish itself: a hand-off between sharing and pairings-only changes what
+// PeerStatus reports without a new phase.
+func (r *LocalBackend) emitSharingStatus() {
+	events.Emit(peer.StatusEvent{Status: r.PeerStatus()})
+}
+
+// pairingRunWasStable reports whether the pairings-only run that just stopped
+// had stayed up long enough to restart the backoff, so a run that starts and
+// soon stops itself backs off like a failed start.
+func (r *LocalBackend) pairingRunWasStable() bool {
+	r.pairingRetryMu.Lock()
+	defer r.pairingRetryMu.Unlock()
+	return !r.pairingStartedAt.IsZero() && time.Since(r.pairingStartedAt) >= pairingRouteRetryMax
 }
 
 // schedulePairingRouteRetry tries the pairings-only start again after a

@@ -111,7 +111,7 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		persistErr := persistPeerShare(false)
 		// Stops the client, or, for a volunteer, keeps serving its pairings
 		// on the same port mapping.
-		r.reconcilePairingRouteLocked(false)
+		r.reconcileSharingOffLocked(false)
 		return false, persistErr
 	}
 	if err := persistPeerShare(true); err != nil {
@@ -124,7 +124,13 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 		// serve_pool follows "help others too" again.
 		if r.peerForPairings.Swap(false) {
 			r.resetPairingRouteRetry()
-			r.reregisterPeer()
+			// Only a pool route has strangers to admit; "help others too"
+			// off leaves serve_pool=false and the friends' sessions as they
+			// are.
+			if servesPool() {
+				r.reregisterPeer()
+			}
+			r.emitSharingStatus()
 		}
 		return false, nil
 	}
@@ -147,7 +153,7 @@ func (r *LocalBackend) applyPeerShareStarted(enabled bool) (started bool, err er
 				"start_error", err, "rollback_error", rbErr)
 		}
 		// Sharing is off again; a volunteer still serves its pairings.
-		r.reconcilePairingRouteLocked(false)
+		r.reconcileSharingOffLocked(false)
 		return true, fmt.Errorf("start peer share: %w", err)
 	}
 	slog.Info("peer share start succeeded")
@@ -280,6 +286,9 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 		// A pairings-only run never set the toggle; try again later.
 		slog.Warn("pairing route stopped itself; retrying later", "reason", reason)
 		r.restartYieldedReverse()
+		if r.pairingRunWasStable() {
+			r.resetPairingRouteRetry()
+		}
 		r.schedulePairingRouteRetry()
 		return
 	}
@@ -289,7 +298,7 @@ func (r *LocalBackend) onPeerSelfStop(reason error) {
 	}
 	r.restartYieldedReverse()
 	// A volunteer still serves its pairings.
-	r.reconcilePairingRouteLocked(false)
+	r.reconcileSharingOffLocked(false)
 }
 
 // resumePeerShareIfEnabled re-Starts the peer client if the user left the
@@ -374,7 +383,8 @@ func (r *LocalBackend) PeerStatus() peer.Status {
 // session has relayed, for the IPC /peer/snapshot endpoint. A nil peerClient
 // reports an empty snapshot, as PeerStatus does.
 func (r *LocalBackend) PeerRelaySnapshot() peer.Snapshot {
-	if r.peerClient == nil {
+	// A pairings-only run is not Share My Connection, which is off.
+	if r.peerClient == nil || r.peerForPairings.Load() {
 		return peer.Snapshot{Peers: []string{}, PeerBytes: []peer.PeerBytes{}}
 	}
 	return r.peerClient.RelaySnapshot()

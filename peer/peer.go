@@ -899,12 +899,6 @@ func (c *Client) CurrentStatus() Status {
 	return c.status
 }
 
-// emitPhase updates c.status.Phase under the lock and emits a snapshot.
-// Used at each lifecycle boundary in Start / Stop so the UI sees progress
-// instead of a binary active/inactive flip. Active is recomputed here:
-// only PhaseServing implies active=true; every other phase clears it so
-// subscribers using just the Active flag don't see e.g. "active=true with
-// Phase=verifying" mid-Start.
 // pairingsOnly reports whether this run serves only the device's helper
 // pairings (Config.PairingsOnly).
 func (c *Client) pairingsOnly() bool {
@@ -921,6 +915,12 @@ func (c *Client) publishStatus(s Status) {
 	events.Emit(StatusEvent{Status: s})
 }
 
+// emitPhase updates c.status.Phase under the lock and emits a snapshot.
+// Used at each lifecycle boundary in Start / Stop so the UI sees progress
+// instead of a binary active/inactive flip. Active is recomputed here:
+// only PhaseServing implies active=true; every other phase clears it so
+// subscribers using just the Active flag don't see e.g. "active=true with
+// Phase=verifying" mid-Start.
 func (c *Client) emitPhase(p Phase, errMsg string) {
 	c.emitStatus(p, errMsg, "")
 }

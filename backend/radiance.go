@@ -108,6 +108,7 @@ type LocalBackend struct {
 	pairingRetryTimer  *time.Timer
 	pairingRetryWait   time.Duration
 	pairingLastAttempt time.Time
+	pairingStartedAt   time.Time
 
 	shutdownFuncs []func() error
 	closeOnce     sync.Once
