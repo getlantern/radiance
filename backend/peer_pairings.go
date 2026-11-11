@@ -3,10 +3,12 @@ package backend
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/peer"
@@ -19,7 +21,9 @@ import (
 // the pairings-only route are one client on one port mapping. It is
 // best-effort: a router that won't map a port, or a route lantern-cloud can't
 // verify, leaves the friend on Unbounded rooms, and the attempt is retried with
-// backoff and after a network change.
+// backoff and after a network change. It never runs where this device's
+// country is unknown or censored: lantern-cloud refuses such a volunteer, but
+// only after the port is mapped, and its geolocation can fail open.
 
 // pairingRouteRetryFirst and pairingRouteRetryMax bound the backoff between
 // failed pairings-only starts. pairingRouteRetryFirst is also the least time
@@ -37,6 +41,40 @@ var pairingRunStableAfter = 30 * time.Minute
 // helper pairing.
 func (r *LocalBackend) hasVolunteerPairings() bool {
 	return len(r.helperPairingKeys.IDs(string(helperticket.RoleVolunteer))) > 0
+}
+
+// censoredCountries are the countries where the pairings-only route never
+// starts on its own. It mirrors censoredCountries in lantern-cloud
+// regions/regions.go, as the app's helperCensoredCountries does; keep the
+// three in step.
+var censoredCountries = map[string]struct{}{
+	"AE": {}, "AF": {}, "AZ": {}, "BY": {}, "CN": {}, "CU": {}, "EG": {},
+	"ET": {}, "IR": {}, "KP": {}, "MM": {}, "PK": {}, "RU": {}, "SA": {},
+	"SY": {}, "TJ": {}, "TM": {}, "UZ": {}, "VN": {}, "YE": {},
+}
+
+// pairingRouteCountryAllowed reports whether this device's country is known
+// and not censored. A country override wins over the saved country, which
+// config updates leave alone while one is set.
+func pairingRouteCountryAllowed() bool {
+	c := env.GetString(env.Country)
+	if c == "" {
+		c = settings.GetString(settings.CountryCodeKey)
+	}
+	c = strings.ToUpper(strings.TrimSpace(c))
+	if c == "" {
+		return false
+	}
+	_, censored := censoredCountries[c]
+	return !censored
+}
+
+// wantPairingRoute reports whether this device should run the pairings-only
+// route: it volunteers in a pairing, from a country where that is allowed.
+// The pairing keys are kept either way, so a pairing can still be authorized,
+// revoked, or served once the user turns Share My Connection on.
+func (r *LocalBackend) wantPairingRoute() bool {
+	return r.hasVolunteerPairings() && pairingRouteCountryAllowed()
 }
 
 // peerShareActive reports whether the peer client runs or is meant to, for
@@ -100,7 +138,7 @@ func (r *LocalBackend) reconcileSharingOffLocked(startNow bool) {
 	// an "off" cancelling it and this, would rotate a run sharing no longer
 	// owns.
 	r.cancelPeerRereg()
-	want, active := r.hasVolunteerPairings(), r.peerClient.IsActive()
+	want, active := r.wantPairingRoute(), r.peerClient.IsActive()
 	if !active {
 		// A self-stop clears active before its teardown deregisters and
 		// closes the box; Stop waits that out, so pool sessions have ended
@@ -299,7 +337,7 @@ func (r *LocalBackend) notePairingRouteAttempt() {
 // the new network's router may map a port the last one wouldn't, but no more
 // often than pairingRouteRetryFirst: network events can come in bursts.
 func (r *LocalBackend) pairingRouteNetworkChanged() {
-	if r.peerClient == nil || r.peerClient.IsActive() || !r.hasVolunteerPairings() ||
+	if r.peerClient == nil || r.peerClient.IsActive() || !r.wantPairingRoute() ||
 		settings.GetBool(settings.PeerShareEnabledKey) {
 		return
 	}
