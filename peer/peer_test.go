@@ -1649,10 +1649,9 @@ func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
 	assert.True(t, c.MayServePool())
 }
 
-// MayServePool errs toward true. A pool registration reads true from before it
-// is sent, and stays true if it fails; a pool-free one can't add the pool,
-// failed or not. Only a committed pool-free registration, or stopping, clears
-// it.
+// MayServePool errs toward true: a registration in flight reads true, a failed
+// pool registration leaves it true and a pool-free one can't add it; only a
+// committed pool-free registration or a confirmed deregister clears it.
 func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
@@ -1674,7 +1673,14 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 		holdRegister.Store(&release)
 		done := make(chan error, 1)
 		go func() { done <- f() }()
-		<-inRegister
+		select {
+		case <-inRegister:
+		case err := <-done:
+			holdRegister.Store(nil)
+			t.Fatalf("returned before registering: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("never registered")
+		}
 		assert.True(t, c.MayServePool(), "a registration in flight on a route that may serve the pool")
 		close(release)
 		require.NoError(t, <-done)
@@ -1684,11 +1690,11 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 		cfg.PairingsOnly = pairingsOnly.Load
 	})
 	ctx := context.Background()
-	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
+	assert.False(t, c.MayServePool(), "a new client has registered nothing")
 
 	srv.registerStatus = http.StatusInternalServerError
 	require.Error(t, c.Start(ctx))
-	assert.False(t, c.MayServePool(), "a failed Start leaves no box serving")
+	assert.True(t, c.MayServePool(), "a failed pool registration may still have registered the pool")
 	srv.registerStatus = http.StatusOK
 
 	held(func() error { return c.Start(ctx) })
@@ -1713,7 +1719,7 @@ func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
 
 	srv.registerStatus = http.StatusOK
 	require.NoError(t, c.Stop(ctx))
-	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
+	assert.False(t, c.MayServePool(), "a deregistered route serves nobody")
 }
 
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
