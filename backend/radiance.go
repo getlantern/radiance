@@ -270,7 +270,7 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 		}
 	}, func() bool {
 		return backend != nil && backend.peerForPairings.Load()
-	})
+	}, vpnClient.PhysicalInterfaceControl)
 	if err != nil {
 		slog.Error("Loading peer client", "error", err)
 	}

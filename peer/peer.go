@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 
@@ -137,8 +139,13 @@ type Status struct {
 // defaults; HeartbeatInterval, HeartbeatTimeout, and CredRotationInterval
 // exist so tests can drive the loops without sleeping a full minute / hour.
 type Config struct {
-	API                  *API
-	NewForwarder         func(ctx context.Context) (portForwarder, error)
+	API          *API
+	NewForwarder func(ctx context.Context) (portForwarder, error)
+	// PhysicalControl, if set, returns the socket control that keeps port
+	// mapping off the VPN tunnel, from discovering the gateway to every
+	// request to it and the LAN address mapped to, or nil with no tunnel. It
+	// applies to the default NewForwarder.
+	PhysicalControl      func() control.Func
 	BuildBoxService      boxFactory
 	HeartbeatInterval    time.Duration
 	HeartbeatTimeout     time.Duration
@@ -361,7 +368,10 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, errors.New("peer: Config.API is required")
 	}
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = newDefaultForwarder
+		physical := cfg.PhysicalControl
+		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			return newDefaultForwarder(ctx, boundTo(physical)...)
+		}
 	}
 	if cfg.BuildBoxService == nil {
 		cfg.BuildBoxService = defaultBuildBoxService
@@ -1774,8 +1784,36 @@ func chooseManualForwarder(log *slog.Logger, logPort bool) portForwarder {
 	return nil
 }
 
-func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
-	return newForwarder(ctx, pickManualForwarder())
+func newDefaultForwarder(ctx context.Context, opts ...portforward.Option) (portForwarder, error) {
+	return newForwarder(ctx, pickManualForwarder(), opts...)
+}
+
+// boundTo is the option that keeps a forwarder's sockets off the VPN tunnel,
+// or none without a way to find the physical interface.
+func boundTo(physical func() control.Func) []portforward.Option {
+	if fn := currentPhysical(physical); fn != nil {
+		return []portforward.Option{portforward.BoundTo(fn)}
+	}
+	return nil
+}
+
+// currentPhysical is a control that binds each socket through the control
+// physical returns when the socket is made, or nil with no physical. A
+// forwarder outlives the VPN state it was made under, renewing its mappings
+// through a connect, restart or disconnect: one made with the VPN off must
+// bind once it connects, and a control kept from an earlier tunnel reads
+// that tunnel's closed interface monitor. With no tunnel running, a socket
+// needs no binding.
+func currentPhysical(physical func() control.Func) control.Func {
+	if physical == nil {
+		return nil
+	}
+	return func(network, address string, conn syscall.RawConn) error {
+		if fn := physical(); fn != nil {
+			return fn(network, address, conn)
+		}
+		return nil
+	}
 }
 
 // ManualPort is the manual port the peer and reverse clients bind, from the

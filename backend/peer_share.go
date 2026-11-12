@@ -12,6 +12,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/kindling"
 	"github.com/getlantern/radiance/peer"
+	"github.com/sagernet/sing/common/control"
 )
 
 // peerController is the subset of *peer.Client that LocalBackend needs.
@@ -50,13 +51,15 @@ var peerShareUnsupported = common.IsIOS
 // newPeerClient constructs the production peer.Client wired against the
 // shared kindling HTTP client and the platform device ID. Pulled out of
 // NewLocalBackend so the construction site is a one-liner.
-func newPeerClient(platformDeviceID string, onSelfStop func(error), pairingsOnly func() bool) (*peer.Client, error) {
+func newPeerClient(platformDeviceID string, onSelfStop func(error), pairingsOnly func() bool, physical func() control.Func) (*peer.Client, error) {
 	api := peer.NewAPI(kindling.HTTPClient(), common.GetBaseURL(), platformDeviceID)
 	client, err := peer.NewClient(peer.Config{
 		API:            api,
 		RejectionsPath: filepath.Join(settings.GetString(settings.DataPathKey), "peer-rejections.json"),
 		OnSelfStop:     onSelfStop,
 		PairingsOnly:   pairingsOnly,
+		// Mapping a port with the VPN up needs the physical interface.
+		PhysicalControl: physical,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer client: %w", err)

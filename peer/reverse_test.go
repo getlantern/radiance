@@ -777,11 +777,19 @@ func TestReverseMapsThroughTheTunnelBypass(t *testing.T) {
 	e.cycle(t)
 	assert.Contains(t, e.log.take(), "register:1")
 
+	// With no tunnel, the control binds nothing, and binds again once one
+	// runs: the forwarder can outlive either.
 	tunnelUp = false
+	bound.Store(false)
 	fwd.control = nil
 	e.c.NetworkChanged()
 	e.cycle(t)
-	assert.Nil(t, fwd.control, "no control is set with no tunnel")
+	require.NotNil(t, fwd.control)
+	require.NoError(t, fwd.control("udp", "", nil))
+	assert.False(t, bound.Load(), "no binding with no tunnel")
+	tunnelUp = true
+	require.NoError(t, fwd.control("udp", "", nil))
+	assert.True(t, bound.Load(), "bound once a tunnel runs")
 }
 
 type quietForwarder struct {
@@ -818,6 +826,61 @@ func TestOnlyTheReverseClientDiscoversQuietly(t *testing.T) {
 	_, err = newDefaultForwarder(context.Background())
 	require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
 	assert.Equal(t, []int{1, 0}, opts)
+}
+
+// Both clients' forwarders are bound whenever there is a physical control to
+// ask, whether or not a tunnel runs when they are made, since one may start
+// while they renew; with none, discovery is as before.
+func TestForwardersAreBoundToThePhysicalInterface(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var opts []int
+	prev := discoverForwarder
+	discoverForwarder = func(_ context.Context, o ...portforward.Option) (*portforward.Forwarder, error) {
+		opts = append(opts, len(o))
+		return nil, portforward.ErrNoPortForwarding
+	}
+	t.Cleanup(func() { discoverForwarder = prev })
+	var tunnel control.Func
+	physical := func() control.Func { return tunnel }
+
+	for _, physical := range []func() control.Func{nil, physical} {
+		peerClient, err := NewClient(Config{API: &API{}, PhysicalControl: physical})
+		require.NoError(t, err)
+		_, err = peerClient.cfg.NewForwarder(context.Background())
+		require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+		_, err = NewReverseClient(ReverseConfig{LocalIPControl: physical}).cfg.NewForwarder(context.Background())
+		require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+	}
+	assert.Equal(t, []int{0, 1, 1, 2}, opts, "BoundTo is added when there is a physical control, even with no tunnel yet")
+}
+
+// The control a forwarder binds through follows the tunnel running at each
+// socket, not the one it was made under: a forwarder renews its mappings
+// across a VPN connect, restart or disconnect.
+func TestCurrentPhysicalFollowsTheTunnel(t *testing.T) {
+	assert.Nil(t, currentPhysical(nil))
+	var tunnel control.Func
+	physical := func() control.Func { return tunnel }
+	// Made with the VPN off, as a forwarder can be.
+	fn := currentPhysical(physical)
+	require.NotNil(t, fn)
+
+	var calls []string
+	tunnelNamed := func(name string) control.Func {
+		return func(string, string, syscall.RawConn) error {
+			calls = append(calls, name)
+			return nil
+		}
+	}
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	tunnel = tunnelNamed("first")
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	tunnel = tunnelNamed("second")
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	tunnel = nil
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	assert.Equal(t, []string{"first", "second"}, calls)
 }
 
 func TestReverseBoxErrorsRetryNextTick(t *testing.T) {
