@@ -70,7 +70,7 @@ type Sampler interface {
 // AdmissionGate decides when to refuse new connections depending on
 // memory pressure. It calls setReject when triggered, it does not itself
 // reject connections. RecordDial runs on the dial path; Observe runs on the
-// monitor tick. setReject must be fast and must not re-enter the gate.
+// monitor tick. setReject must not re-enter the gate.
 type AdmissionGate struct {
 	cfg       AdmissionConfig
 	sampler   Sampler

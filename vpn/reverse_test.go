@@ -154,7 +154,7 @@ func TestReverseOutboundsSwapWithoutEmptyingThePersonalProxiesGroup(t *testing.T
 	require.NoError(t, c.SetReverseOutbounds(nil))
 	assert.Nil(t, tun.personalProxiesGroup())
 	requireTornDown(t, tun, revB)
-	assert.Equal(t, AutoSelectTag, tun.clashServer.Mode())
+	assert.Equal(t, AutoSelectTag, tun.clashModeManager.clashMode.Mode())
 }
 
 func TestSetReverseOutboundsRefusesOtherTags(t *testing.T) {
@@ -272,9 +272,9 @@ func TestBuildOptionsAfterTheLastReverseOutboundGoes(t *testing.T) {
 	c.mu.Lock()
 	boxOptions := c.withReverse(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: initial})
 	c.mu.Unlock()
-	opts, err := buildOptions(boxOptions)
+	opts, mode, err := buildOptions(boxOptions)
 	require.NoError(t, err)
-	assert.Equal(t, AutoSelectTag, opts.Experimental.ClashAPI.DefaultMode)
+	assert.Equal(t, AutoSelectTag, mode)
 	assert.Nil(t, findOutbound(opts.Outbounds, PersonalProxiesTag))
 }
 
@@ -325,7 +325,7 @@ func TestBuildOptionsStartsReverseOnlySelections(t *testing.T) {
 			BasePath: t.TempDir(), Options: options, InitialServer: initial,
 		}))
 		c.mu.Unlock()
-		opts, err := buildOptions(boxOptions)
+		opts, _, err := buildOptions(boxOptions)
 		require.NoError(t, err)
 		return opts, findOutbound(opts.Outbounds, ManualSelectTag).Options.(*lbO.MutableSelectorOutboundOptions)
 	}

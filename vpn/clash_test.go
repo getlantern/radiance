@@ -13,74 +13,78 @@ import (
 	lbgroup "github.com/getlantern/lantern-box/protocol/group"
 	A "github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/clashmode"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/observable"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestClashServerHistoryStorage(t *testing.T) {
-	for _, registration := range []string{"none", "interface", "pointer"} {
-		for _, started := range []bool{false, true} {
-			name := registration + "/unstarted"
-			if started {
-				name = registration + "/started"
-			}
-			t.Run(name, func(t *testing.T) {
-				ctx := t.Context()
-				supplied := urltest.NewHistoryStorage()
-				t.Cleanup(func() { assert.NoError(t, supplied.Close()) })
-				switch registration {
-				case "interface":
-					ctx = service.ContextWith[A.URLTestHistoryStorage](ctx, supplied)
-				case "pointer":
-					ctx = service.ContextWithPtr(ctx, supplied)
-				}
+func TestClashModeManagerSetModeWhileRejecting(t *testing.T) {
+	modes := newTestClashModeManager(t)
+	modes.setRejectMode(true)
 
-				srv, err := newClashServer(ctx, nil, O.ClashAPIOptions{ModeList: []string{"rule"}})
-				require.NoError(t, err)
-				t.Cleanup(func() { assert.NoError(t, srv.Close()) })
-				if started {
-					require.NoError(t, srv.Start(A.StartStateStart))
-				}
+	prev, err := modes.SetMode("MANUAL")
+	require.NoError(t, err)
+	assert.Equal(t, AutoSelectTag, prev)
+	assert.Equal(t, rejectMode, modes.clashMode.Mode(), "selecting a mode must not lift reject mode")
+	assert.Equal(t, ManualSelectTag, modes.selectedMode())
 
-				history := srv.HistoryStorage()
-				require.NotNil(t, history)
-				require.Same(t, history, srv.HistoryStorage())
-				if registration != "none" {
-					require.Same(t, supplied, history)
-				}
-				entry := &A.URLTestHistory{Time: time.Now(), Delay: 10}
-				history.StoreURLTestHistory("probe", entry)
-				assert.Equal(t, entry, history.LoadURLTestHistory("probe"))
-				history.DeleteURLTestHistory("probe")
-				assert.Nil(t, history.LoadURLTestHistory("probe"))
+	modes.setRejectMode(false)
+	assert.Equal(t, ManualSelectTag, modes.clashMode.Mode(), "lifting reject mode applies the mode selected meanwhile")
 
-				hook := observable.NewSubscriber[struct{}](1)
-				t.Cleanup(func() { assert.NoError(t, hook.Close()) })
-				updates, _ := hook.Subscription()
-				history.SetHook(hook)
-				history.StoreURLTestHistory("probe", entry)
-				require.Len(t, updates, 1)
-				<-updates
+	_, err = modes.SetMode(rejectMode)
+	assert.Error(t, err, "reject mode is not selectable")
+}
 
-				require.NoError(t, srv.Close())
-				history.StoreURLTestHistory("probe", entry)
-				if registration == "none" {
-					assert.Empty(t, updates, "closing owned storage must detach its hook")
-				} else {
-					assert.Len(t, updates, 1, "closing the server must leave borrowed storage open")
-				}
-			})
-		}
+// TestTunnelModeRules checks that the box's mode and reject rules follow the
+// tunnel's clash mode manager.
+func TestTunnelModeRules(t *testing.T) {
+	options := O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Outbounds: []O.Outbound{
+			{Type: C.TypeDirect, Tag: AutoSelectTag, Options: &O.DirectOutboundOptions{}},
+			{Type: C.TypeDirect, Tag: ManualSelectTag, Options: &O.DirectOutboundOptions{}},
+		},
+		Route: &O.RouteOptions{Rules: []O.Rule{
+			highMemoryRejectRule(),
+			selectModeRule(AutoSelectTag),
+			selectModeRule(ManualSelectTag),
+		}},
+		Experimental: &O.ExperimentalOptions{
+			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
+		},
 	}
+	tun := &tunnel{dataPath: t.TempDir(), initialMode: AutoSelectTag}
+	t.Cleanup(func() { assert.NoError(t, tun.close()) })
+	require.NoError(t, tun.init(t.Context(), options, nil))
+	require.NoError(t, tun.boxInstance.Start())
+	require.Same(t, tun.clashModeManager.clashMode, service.PtrFromContext[clashmode.Manager](tun.ctx))
+
+	matchedRule := func() int {
+		var metadata A.InboundContext
+		for i, rule := range tun.boxInstance.Router().Rules() {
+			if rule.Match(&metadata) {
+				return i
+			}
+		}
+		return -1
+	}
+	assert.Equal(t, 1, matchedRule(), "the initial mode")
+	_, err := tun.clashModeManager.SetMode(ManualSelectTag)
+	require.NoError(t, err)
+	assert.Equal(t, 2, matchedRule(), "the selected mode")
+	tun.clashModeManager.setRejectMode(true)
+	assert.Equal(t, 0, matchedRule(), "reject mode")
+	tun.clashModeManager.setRejectMode(false)
+	assert.Equal(t, 2, matchedRule(), "lifting reject mode")
 }
 
 func TestTunnelSmartRoutingHistory(t *testing.T) {
-	tun := &tunnel{dataPath: t.TempDir()}
-	var previous A.URLTestHistoryStorage
+	tun := &tunnel{dataPath: t.TempDir(), initialMode: ManualSelectTag}
+	var previous *urltest.HistoryStorage
 	for _, cycle := range []string{"connect", "reconnect"} {
 		t.Run(cycle, func(t *testing.T) {
 			probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -89,11 +93,12 @@ func TestTunnelSmartRoutingHistory(t *testing.T) {
 			t.Cleanup(probe.Close)
 			options, err := json.UnmarshalExtendedContext[O.Options](box.Context(t.Context()), []byte(`{
 				"outbounds": [{"type": "direct", "tag": "probe"}],
-				"route": {"rules": [{"clash_mode": "rule", "outbound": "sr-ai-domains"}]},
-				"experimental": {"clash_api": {"default_mode": "rule"}}
+				"route": {"rules": [{"clash_mode": "manual", "outbound": "sr-ai-domains"}]}
 			}`))
 			require.NoError(t, err)
-			options.Experimental.CacheFile = &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")}
+			options.Experimental = &O.ExperimentalOptions{
+				CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
+			}
 			smartRouting := lcommon.SmartRoutingRules{{Category: "ai-domains", Outbounds: []string{"probe"}}}
 			outbounds, _, _ := smartRouting.ToOptions(urlTestInterval, urlTestIdleTimeout)
 			outbounds[0].Options.(*O.URLTestOutboundOptions).URL = probe.URL
@@ -101,9 +106,7 @@ func TestTunnelSmartRoutingHistory(t *testing.T) {
 
 			t.Cleanup(func() { assert.NoError(t, tun.close()) })
 			require.NoError(t, tun.init(t.Context(), options, nil))
-			srv := service.FromContext[A.ClashServer](tun.ctx)
-			require.IsType(t, &clashServer{}, srv)
-			history := srv.HistoryStorage()
+			history := service.PtrFromContext[urltest.HistoryStorage](tun.ctx)
 			require.NotNil(t, history)
 			if previous != nil {
 				require.NotSame(t, previous, history)

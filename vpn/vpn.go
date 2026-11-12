@@ -36,6 +36,7 @@ import (
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/internal/redact"
 	"github.com/getlantern/radiance/log"
 	"github.com/getlantern/radiance/servers"
@@ -120,12 +121,13 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 }
 
 // newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
-func (c *VPNClient) newTunnel(boxOptions BoxOptions) *tunnel {
+func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel {
 	t := &tunnel{
 		dataPath:             boxOptions.BasePath,
 		selectionHistorySeed: boxOptions.SelectionHistorySeed,
 		initialLanternTags:   boxOptions.LanternServerTags,
 		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		initialMode:          initialMode,
 		portalMasquerade:     boxOptions.reverseMasquerade,
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
@@ -233,11 +235,11 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 
 	c.logger.Info("Connecting VPN")
 	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
-	options, err := buildOptions(boxOptions)
+	options, initialMode, err := buildOptions(boxOptions)
 	if err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
-	if err := traces.RecordError(ctx, c.start(ctx, boxOptions, options, false)); err != nil {
+	if err := traces.RecordError(ctx, c.start(ctx, boxOptions, options, initialMode, false)); err != nil {
 		c.logger.Error("Failed to connect VPN", "error", err)
 		return err
 	}
@@ -263,12 +265,12 @@ func (c *VPNClient) Disconnect() error {
 	return nil
 }
 
-func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options option.Options, isRestart bool) error {
+func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options option.Options, initialMode string, isRestart bool) error {
 	configureBufPool()
 	c.logger.Debug("Starting tunnel")
 	c.setStatus(Connecting, nil)
 	for attempt := 1; ; attempt++ {
-		t := c.newTunnel(boxOptions)
+		t := c.newTunnel(boxOptions, initialMode)
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
 			c.tunnel = t
@@ -349,12 +351,12 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 		return traces.RecordError(ctx, fmt.Errorf("closing tunnel: %w", err))
 	}
 	boxOptions = c.withReverse(c.withPersonalProxyRooms(boxOptions))
-	options, err := buildOptions(boxOptions)
+	options, initialMode, err := buildOptions(boxOptions)
 	if err != nil {
 		c.setStatus(ErrorStatus, err)
 		return traces.RecordError(ctx, fmt.Errorf("failed to build options: %w", err))
 	}
-	if err := c.start(ctx, boxOptions, options, true); err != nil {
+	if err := c.start(ctx, boxOptions, options, initialMode, true); err != nil {
 		c.logger.Error("starting tunnel", "error", err)
 		// c.start already set ErrorStatus; the guard lets Restarting→ErrorStatus through.
 		return traces.RecordError(ctx, fmt.Errorf("starting tunnel: %w", err))
@@ -386,7 +388,7 @@ func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListen
 	if !ok || current != listener {
 		return
 	}
-	network.ResetNetwork()
+	network.ResetNetwork(c.tunnel.ctx)
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
@@ -684,7 +686,7 @@ func (c *VPNClient) Connections() ([]Connection, error) {
 	if c.tunnel == nil {
 		return nil, fmt.Errorf("failed to get connections: %w", ErrTunnelNotConnected)
 	}
-	return c.tunnel.clashServer.connTracker.activeConnections(), nil
+	return c.tunnel.connTracker.activeConnections(), nil
 }
 
 // ActiveConnectionCount returns the number of active connections, or 0 if the tunnel is not
@@ -695,7 +697,7 @@ func (c *VPNClient) ActiveConnectionCount() int64 {
 	if c.tunnel == nil {
 		return 0
 	}
-	return c.tunnel.clashServer.connTracker.activeConnectionCount()
+	return c.tunnel.connTracker.activeConnectionCount()
 }
 
 // ClearTunnelCache removes the tunnel cache file at dataPath. If the tunnel is active it records
@@ -727,7 +729,7 @@ func (c *VPNClient) Bytes() (up, down int64, ok bool) {
 	if c.tunnel == nil {
 		return 0, 0, false
 	}
-	up, down = c.tunnel.clashServer.connTracker.Total()
+	up, down = c.tunnel.connTracker.Total()
 	return up, down, true
 }
 
@@ -739,8 +741,8 @@ func (c *VPNClient) Throughput() (ThroughputSnapshot, error) {
 	if c.tunnel == nil {
 		return ThroughputSnapshot{}, ErrTunnelNotConnected
 	}
-	tt := c.tunnel.clashServer.ThroughputTracker()
-	active, perOut := c.tunnel.clashServer.connTracker.activeStats()
+	tt := c.tunnel.connTracker.tp
+	active, perOut := c.tunnel.connTracker.activeStats()
 	return ThroughputSnapshot{
 		Global:            tt.Global(),
 		PerOutbound:       tt.PerOutbound(),
@@ -756,8 +758,8 @@ func (c *VPNClient) SetConnObserver(observer ConnObserver) {
 	c.connObserver = observer
 
 	var tracker *connTracker
-	if c.tunnel != nil && c.tunnel.clashServer != nil {
-		tracker = c.tunnel.clashServer.connTracker
+	if c.tunnel != nil {
+		tracker = c.tunnel.connTracker
 	}
 
 	c.mu.Unlock()
@@ -831,7 +833,7 @@ func (c *VPNClient) CurrentSelectedServer() (string, error) {
 	if c.tunnel == nil {
 		return "", ErrTunnelNotConnected
 	}
-	mode := c.tunnel.clashServer.selectedMode()
+	mode := c.tunnel.clashModeManager.selectedMode()
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(mode)
 	if !loaded {
 		return "", fmt.Errorf("%s group not found", mode)
@@ -847,7 +849,7 @@ func (c *VPNClient) ManualSelection() (string, bool) {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.tunnel == nil || c.tunnel.clashServer.selectedMode() != ManualSelectTag {
+	if c.tunnel == nil || c.tunnel.clashModeManager.selectedMode() != ManualSelectTag {
 		return "", false
 	}
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(ManualSelectTag)
@@ -960,7 +962,7 @@ func (c *VPNClient) RunOfflineURLTests(ctx context.Context, basePath string, out
 		return nil, errors.New("offline tests already running")
 	}
 
-	ctx, cancel := context.WithCancel(box.Context(ctx))
+	ctx, cancel := context.WithCancel(hostaccess.Context(ctx))
 	defer cancel()
 	c.offlineTestCancel = cancel
 	done := make(chan struct{})

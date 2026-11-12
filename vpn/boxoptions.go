@@ -235,11 +235,6 @@ func baseOpts(basePath string) O.Options {
 			},
 		},
 		Experimental: &O.ExperimentalOptions{
-			ClashAPI: &O.ClashAPIOptions{
-				DefaultMode:        AutoSelectTag,
-				ModeList:           []string{ManualSelectTag, AutoSelectTag},
-				ExternalController: "", // intentionally left empty
-			},
 			CacheFile: &O.CacheFileOptions{
 				Enabled:     true,
 				Path:        cacheFile,
@@ -413,20 +408,22 @@ func tunHasIPv6(opts O.Options) bool {
 	return false
 }
 
-// buildOptions builds the box options using the config options and user servers.
-// Denied outbounds and endpoints are dropped; denied DNS or route options fail
-// the build with an error wrapping [hostaccess.ErrDenied].
-func buildOptions(bOptions BoxOptions) (O.Options, error) {
+// buildOptions builds the box options using the config options and user servers,
+// and returns the clash mode the tunnel must start in.
+// Denied outbounds, endpoints and services are dropped; denied DNS or route
+// options fail the build with an error wrapping [hostaccess.ErrDenied].
+func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	_, span := otel.Tracer(tracerName).Start(context.Background(), "buildOptions")
 	defer span.End()
 
 	bOptions.Options.Outbounds = allowedOutbounds(bOptions.Options.Outbounds)
 	bOptions.Options.Endpoints = allowedEndpoints(bOptions.Options.Endpoints)
+	bOptions.Options.Services = allowedServices(bOptions.Options.Services)
 	if err := hostaccess.CheckOptions(bOptions.Options); err != nil {
-		return O.Options{}, err
+		return O.Options{}, "", err
 	}
 	if len(bOptions.Options.Outbounds) == 0 && len(bOptions.Options.Endpoints) == 0 {
-		return O.Options{}, errors.New("no outbounds or endpoints found in config or user servers")
+		return O.Options{}, "", errors.New("no outbounds or endpoints found in config or user servers")
 	}
 
 	slog.Log(nil, log.LevelTrace, "Starting buildOptions", "path", bOptions.BasePath)
@@ -488,16 +485,14 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 	if initial == PersonalProxiesTag && len(helpers) == 0 {
 		initial = AutoSelectTag
 	}
-	if initial == "" || initial == AutoSelectTag {
-		opts.Experimental.ClashAPI.DefaultMode = AutoSelectTag
-	} else {
+	mode := modeForServer(initial)
+	if mode == ManualSelectTag {
 		// The manual selector defaults to its first tag, so place initial at index 0.
 		i := slices.Index(selectable, initial)
 		if i == -1 {
-			return O.Options{}, fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
+			return O.Options{}, "", fmt.Errorf("initial server tag %q not found in outbounds or endpoints", initial)
 		}
 		selectable[0], selectable[i] = selectable[i], selectable[0]
-		opts.Experimental.ClashAPI.DefaultMode = ManualSelectTag
 	}
 
 	if tunHasIPv6(opts) {
@@ -522,10 +517,10 @@ func buildOptions(bOptions BoxOptions) (O.Options, error) {
 
 	opts, err := jsonRoundTrip(bOptions.BasePath, opts)
 	if err != nil {
-		return opts, fmt.Errorf("validating options: %w", err)
+		return opts, "", fmt.Errorf("validating options: %w", err)
 	}
 
-	return opts, nil
+	return opts, mode, nil
 }
 
 // jsonRoundTrip marshals and unmarshals the options to let sing-box set defaults and validate it.
@@ -556,6 +551,7 @@ func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
 func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
+	dst.Services = append(dst.Services, src.Services...)
 
 	if src.Route != nil {
 		dst.Route.Rules = append(dst.Route.Rules, src.Route.Rules...)
@@ -676,6 +672,13 @@ func selectorOutbound(tag string, outbounds []string) O.Outbound {
 	}
 }
 
+func modeForServer(server string) string {
+	if server == "" || server == AutoSelectTag {
+		return AutoSelectTag
+	}
+	return ManualSelectTag
+}
+
 // helperTags returns the tags in tags that are helper outbounds, reverse
 // ones included.
 func helperTags(tags []string) []string {
@@ -764,8 +767,10 @@ func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOpt
 	if domainResolver != "" {
 		remoteOpts.RawLocalDNSServerOptions = O.RawLocalDNSServerOptions{
 			DialerOptions: O.DialerOptions{
-				DomainResolver: &O.DomainResolveOptions{
-					Server: domainResolver,
+				AbstractDialerOptions: O.AbstractDialerOptions{
+					DomainResolver: &O.DomainResolveOptions{
+						Server: domainResolver,
+					},
 				},
 			},
 		}

@@ -36,6 +36,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,9 +52,10 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
 
-	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
+
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 // infra/non-proxy outbound types to skip.
@@ -154,10 +156,27 @@ func main() {
 	}
 
 	wrapped, _ := json.Marshal(map[string]any{"outbounds": keep})
-	ctx := box.BaseContext()
+	// Configs come from users' issue reports, so the box refuses options that
+	// grant host access.
+	ctx := hostaccess.Context(context.Background())
 	opts, err := singjson.UnmarshalExtendedContext[O.Options](ctx, wrapped)
 	if err != nil {
 		fatal("build sing-box options: %v", err)
+	}
+	var skippedHostAccess []string
+	denied := make(map[string]bool)
+	opts.Outbounds = slices.DeleteFunc(opts.Outbounds, func(o O.Outbound) bool {
+		err := hostaccess.CheckOutbound(o)
+		if err == nil {
+			return false
+		}
+		skippedHostAccess = append(skippedHostAccess, err.Error())
+		denied[o.Tag] = true
+		return true
+	})
+	tags = slices.DeleteFunc(tags, func(tag string) bool { return denied[tag] })
+	if len(tags) == 0 {
+		fatal("no testable proxy outbounds left once those granting host access are skipped")
 	}
 	opts.Log = &O.LogOptions{Disabled: true}
 	if *debug {
@@ -170,7 +189,6 @@ func main() {
 	ctx = service.ContextWith[filemanager.Manager](ctx, nil)
 	hist := urltest.NewHistoryStorage()
 	ctx = service.ContextWithPtr(ctx, hist)
-	service.MustRegister[adapter.URLTestHistoryStorage](ctx, hist)
 	// The instance ctx must outlive the whole run: a deadline here would kill
 	// outbounds mid-loop during sequential throughput downloads and report
 	// them as STALLED. --timeout scopes only the URLTest call below;
@@ -229,6 +247,9 @@ func main() {
 	}
 	if len(skippedUDP) > 0 {
 		fmt.Printf("  (skipped UDP-only, can't test via HTTP detour: %v)\n", skippedUDP)
+	}
+	if len(skippedHostAccess) > 0 {
+		fmt.Printf("  (skipped, options grant host access: %s)\n", strings.Join(skippedHostAccess, "; "))
 	}
 
 	// Throughput phase. A url-test only proves the handshake + first byte work —

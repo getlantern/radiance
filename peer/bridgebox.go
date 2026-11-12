@@ -16,6 +16,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	"github.com/sagernet/sing/common/json"
 	N "github.com/sagernet/sing/common/network"
@@ -25,6 +26,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 
 	"github.com/getlantern/radiance/helper"
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 // bridgeLogName names every bridge's logger. It leaves out the tag, a
@@ -75,6 +77,10 @@ func bridgeBoxOptions(ctx context.Context, bridgeConfig string) (option.Options,
 	// Bridges are the box's only inbounds, and nothing else may listen:
 	// services and endpoints can bind listeners too.
 	opts.Inbounds, opts.Endpoints, opts.Services, opts.Experimental = nil, nil, nil, nil
+	// The registry checks don't see route rule actions.
+	if err := hostaccess.CheckOptions(opts); err != nil {
+		return option.Options{}, fmt.Errorf("bridge config: %w", err)
+	}
 	// A bridge's traffic must leave from the helper's own connection, not
 	// through the VPN tunnel.
 	opts.Route.AutoDetectInterface = true
@@ -144,6 +150,11 @@ func (t bridgeTracker) RoutedConnection(_ context.Context, conn net.Conn, metada
 func (t bridgeTracker) RoutedPacketConnection(_ context.Context, conn N.PacketConn, metadata adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
 	counter := t.counter(metadata.Inbound)
 	return bufio.NewCounterPacketConn(conn, counter, counter)
+}
+
+// RoutedFlow returns nil: a bridge box has no TUN inbound, so it routes no flows.
+func (t bridgeTracker) RoutedFlow(context.Context, adapter.InboundContext, adapter.Rule, adapter.Outbound) tun.FlowTracker {
+	return nil
 }
 
 func (t bridgeTracker) counter(tag string) []N.CountFunc {
