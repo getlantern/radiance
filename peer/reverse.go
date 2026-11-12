@@ -557,7 +557,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 		q.SetQuietLogs(true)
 	}
 	if lf, ok := fwd.(localIPControlSetter); ok && c.cfg.LocalIPControl != nil {
-		if fn := c.cfg.LocalIPControl(); fn != nil {
+		if fn := currentPhysical(c.cfg.LocalIPControl); fn != nil {
 			lf.SetLocalIPControl(fn)
 		}
 	}

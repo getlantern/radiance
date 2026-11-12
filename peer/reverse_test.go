@@ -851,6 +851,33 @@ func TestForwardersAreBoundWhileATunnelRuns(t *testing.T) {
 	assert.Equal(t, []int{0, 1, 1, 2}, opts, "BoundTo is added only while a tunnel runs")
 }
 
+// The control a forwarder binds through follows the tunnel running at each
+// socket, not the one it was made under: a forwarder renews its mappings
+// across a VPN restart or disconnect.
+func TestCurrentPhysicalFollowsTheTunnel(t *testing.T) {
+	assert.Nil(t, currentPhysical(nil))
+	var tunnel control.Func
+	physical := func() control.Func { return tunnel }
+	assert.Nil(t, currentPhysical(physical), "no tunnel, no binding")
+
+	var calls []string
+	tunnelNamed := func(name string) control.Func {
+		return func(string, string, syscall.RawConn) error {
+			calls = append(calls, name)
+			return nil
+		}
+	}
+	tunnel = tunnelNamed("first")
+	fn := currentPhysical(physical)
+	require.NotNil(t, fn)
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	tunnel = tunnelNamed("second")
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	tunnel = nil
+	require.NoError(t, fn("udp4", "192.168.1.1:5351", nil))
+	assert.Equal(t, []string{"first", "second"}, calls)
+}
+
 func TestReverseBoxErrorsRetryNextTick(t *testing.T) {
 	e := newRevEnv(t)
 	e.keys.set("p1")

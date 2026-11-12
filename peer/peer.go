@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
@@ -1788,15 +1789,30 @@ func newDefaultForwarder(ctx context.Context, opts ...portforward.Option) (portF
 }
 
 // boundTo is the option that keeps a forwarder's sockets off the VPN tunnel,
-// through the control physical returns, or none while there is no tunnel.
+// or none while there is no tunnel.
 func boundTo(physical func() control.Func) []portforward.Option {
-	if physical == nil {
-		return nil
-	}
-	if fn := physical(); fn != nil {
+	if fn := currentPhysical(physical); fn != nil {
 		return []portforward.Option{portforward.BoundTo(fn)}
 	}
 	return nil
+}
+
+// currentPhysical is a control that binds each socket through the control
+// physical returns when the socket is made, or nil while there is no tunnel.
+// A forwarder outlives the tunnel it was made under, renewing its mappings
+// through a VPN restart or disconnect, and a control kept from an earlier
+// tunnel reads that tunnel's closed interface monitor; with none running, a
+// socket needs no binding.
+func currentPhysical(physical func() control.Func) control.Func {
+	if physical == nil || physical() == nil {
+		return nil
+	}
+	return func(network, address string, conn syscall.RawConn) error {
+		if fn := physical(); fn != nil {
+			return fn(network, address, conn)
+		}
+		return nil
+	}
 }
 
 // ManualPort is the manual port the peer and reverse clients bind, from the
