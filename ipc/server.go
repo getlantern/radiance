@@ -1115,7 +1115,12 @@ func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
 			env.Set(k, v)
 			switch k {
 			case env.Country.String():
-				if err := settings.Set(settings.CountryCodeKey, v); err != nil {
+				err := settings.Set(settings.CountryCodeKey, v)
+				// A failed save still applies the live value.
+				if b := s.backend(r.Context()); b != nil {
+					b.CountryCodeChanged()
+				}
+				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
