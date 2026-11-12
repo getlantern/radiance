@@ -820,6 +820,37 @@ func TestOnlyTheReverseClientDiscoversQuietly(t *testing.T) {
 	assert.Equal(t, []int{1, 0}, opts)
 }
 
+// With a tunnel up, both clients' discovery is bound to the physical
+// interface; with none, it is as before.
+func TestForwardersAreBoundWhileATunnelRuns(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var opts []int
+	prev := discoverForwarder
+	discoverForwarder = func(_ context.Context, o ...portforward.Option) (*portforward.Forwarder, error) {
+		opts = append(opts, len(o))
+		return nil, portforward.ErrNoPortForwarding
+	}
+	t.Cleanup(func() { discoverForwarder = prev })
+	var tunnel control.Func
+	physical := func() control.Func { return tunnel }
+	peerClient, err := NewClient(Config{API: &API{}, PhysicalControl: physical})
+	require.NoError(t, err)
+	reverse := NewReverseClient(ReverseConfig{LocalIPControl: physical})
+
+	for _, up := range []bool{false, true} {
+		tunnel = nil
+		if up {
+			tunnel = func(string, string, syscall.RawConn) error { return nil }
+		}
+		_, err = peerClient.cfg.NewForwarder(context.Background())
+		require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+		_, err = reverse.cfg.NewForwarder(context.Background())
+		require.ErrorIs(t, err, portforward.ErrNoPortForwarding)
+	}
+	assert.Equal(t, []int{0, 1, 1, 2}, opts, "BoundTo is added only while a tunnel runs")
+}
+
 func TestReverseBoxErrorsRetryNextTick(t *testing.T) {
 	e := newRevEnv(t)
 	e.keys.set("p1")
