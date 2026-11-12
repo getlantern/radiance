@@ -1789,7 +1789,7 @@ func newDefaultForwarder(ctx context.Context, opts ...portforward.Option) (portF
 }
 
 // boundTo is the option that keeps a forwarder's sockets off the VPN tunnel,
-// or none while there is no tunnel.
+// or none without a way to find the physical interface.
 func boundTo(physical func() control.Func) []portforward.Option {
 	if fn := currentPhysical(physical); fn != nil {
 		return []portforward.Option{portforward.BoundTo(fn)}
@@ -1798,13 +1798,14 @@ func boundTo(physical func() control.Func) []portforward.Option {
 }
 
 // currentPhysical is a control that binds each socket through the control
-// physical returns when the socket is made, or nil while there is no tunnel.
-// A forwarder outlives the tunnel it was made under, renewing its mappings
-// through a VPN restart or disconnect, and a control kept from an earlier
-// tunnel reads that tunnel's closed interface monitor; with none running, a
-// socket needs no binding.
+// physical returns when the socket is made, or nil with no physical. A
+// forwarder outlives the VPN state it was made under, renewing its mappings
+// through a connect, restart or disconnect: one made with the VPN off must
+// bind once it connects, and a control kept from an earlier tunnel reads
+// that tunnel's closed interface monitor. With no tunnel running, a socket
+// needs no binding.
 func currentPhysical(physical func() control.Func) control.Func {
-	if physical == nil || physical() == nil {
+	if physical == nil {
 		return nil
 	}
 	return func(network, address string, conn syscall.RawConn) error {
