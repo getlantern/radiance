@@ -2,9 +2,13 @@ package unbounded
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -924,4 +928,83 @@ func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tuning change did not restart donor")
 	}
+}
+
+func TestRunHookFollowsTheWorker(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		heard []bool
+	)
+	hook := func(running bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		heard = append(heard, running)
+	}
+	heardSoFar := func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(heard)
+	}
+
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return &fakeWidget{}, nil
+	})
+	SetRunHook(hook)
+	primeManager(t, nil)
+	manager.start()
+	waitForRunning(t, manager, true, time.Second)
+	manager.start()
+	manager.stop()
+	waitForRunning(t, manager, false, time.Second)
+	manager.stop()
+	assert.Equal(t, []bool{true, false}, heardSoFar())
+
+	// A widget that fails to build stops the hook too.
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return nil, errors.New("no widget")
+	})
+	SetRunHook(hook)
+	primeManager(t, nil)
+	mu.Lock()
+	heard = nil
+	mu.Unlock()
+	manager.start()
+	require.Eventually(t, func() bool { return len(heardSoFar()) == 2 }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, []bool{true, false}, heardSoFar())
+}
+
+func TestWidgetDialsTheEgressAroundTheTunnel(t *testing.T) {
+	received := make(chan *http.Client, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
+		received <- eg.HTTPClient
+		return &fakeWidget{}, nil
+	})
+	defer manager.stop()
+	primeManager(t, testCfg())
+	manager.start()
+	select {
+	case client := <-received:
+		require.Same(t, egressHTTPClient, client)
+	case <-time.After(time.Second):
+		t.Fatal("donor startup blocked")
+	}
+}
+
+func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The name doesn't resolve, so only a dial through the client's dialer,
+	// which sends every connection to the test server, reaches it.
+	var dialer net.Dialer
+	client := newEgressHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, srv.Listener.Addr().String())
+	})
+	require.Zero(t, client.Timeout, "websocket.Dial bounds the dial with its own context")
+	resp, err := client.Get("http://egress.invalid/ws")
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusTeapot, resp.StatusCode)
 }

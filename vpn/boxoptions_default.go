@@ -27,6 +27,8 @@ const (
 
 	inboundTag = "tun-in"
 
+	tunnelProxyInboundTag = "tunnel-in"
+
 	systemDNSTag = "dns_system"
 
 	// systemDNSEvaluateTimeout is shorter than sing-box's 10s DNS default
@@ -93,6 +95,16 @@ func baseInbounds() []O.Inbound {
 				ListenOptions: O.ListenOptions{
 					Listen:     &loopbackAddr,
 					ListenPort: bypass.ProxyPort,
+				},
+			},
+		},
+		{
+			Type: C.TypeMixed,
+			Tag:  tunnelProxyInboundTag,
+			Options: &O.HTTPMixedInboundOptions{
+				ListenOptions: O.ListenOptions{
+					Listen:     &loopbackAddr,
+					ListenPort: netip.MustParseAddrPort(common.TunnelProxyAddr).Port(),
 				},
 			},
 		},

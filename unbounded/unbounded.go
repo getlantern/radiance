@@ -30,6 +30,7 @@ import (
 	"maps"
 	"math/rand"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"sync"
@@ -41,6 +42,7 @@ import (
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
 
+	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/sameorigin"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
@@ -121,6 +123,20 @@ var manager = &unboundedManager{}
 // clientcore.UI surface area.
 type widget interface {
 	Stop()
+}
+
+// egressHTTPClient makes the widget's WebSocket handshake to the egress. With
+// the VPN on, the widget runs in the VPN's own process, whose sockets bypass
+// the tunnel while the system resolver points into it, so a default dial
+// can't resolve the egress. The bypass proxy resolves and routes around the
+// tunnel, and bypass.DialContext dials directly when the VPN isn't running.
+var egressHTTPClient = newEgressHTTPClient(bypass.DialContext)
+
+func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dial
+	return &http.Client{Transport: transport}
 }
 
 // newWidget builds the live broflake widget. Package var so unit
@@ -222,6 +238,8 @@ type unboundedManager struct {
 	// usage receives the bytes relayed for each helper pairing. Nil counts
 	// nothing.
 	usage *helper.Usage
+	// runHook hears each start and stop of the worker, under mu.
+	runHook func(running bool)
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -349,6 +367,23 @@ func SetPairedUsage(u *helper.Usage) {
 	u.SetFlush(manager.foldPending)
 }
 
+// SetRunHook sets f to hear true when the widget's worker starts and false
+// when it is stopped or fails to build the widget. f runs with the manager's
+// lock held, so it must not block or call into this package.
+func SetRunHook(f func(running bool)) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.runHook = f
+}
+
+// fireRunLocked tells the run hook, if any, whether the worker runs. Caller
+// must hold m.mu.
+func (m *unboundedManager) fireRunLocked(running bool) {
+	if m.runHook != nil {
+		m.runHook(running)
+	}
+}
+
 // SetVPNStatus sets where the widget reads the VPN tunnel's state, which it
 // reports to freddie with its STUN preflights, so freddie can tell whether
 // STUN failures follow the tunnel. A widget already running keeps its source
@@ -367,7 +402,7 @@ var roomSyncInterval = 30 * time.Second
 // servePool is the "help others too" setting, shared with direct mode: unset
 // means on.
 func servePool() bool {
-	return settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey)
+	return settings.PeerServesPool()
 }
 
 // applyRooms points a new widget's options at the volunteer tickets and sets
@@ -728,6 +763,7 @@ func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
+	m.fireRunLocked(false)
 	m.releaseAllPeers()
 	m.peers = nil
 	m.mu.Unlock()
@@ -797,6 +833,7 @@ func (m *unboundedManager) startLocked() {
 	m.peers = make(map[int]string)
 	slots := &slotTable{}
 	m.slots = slots
+	m.fireRunLocked(true)
 	m.mu.Unlock()
 
 	go func() {
@@ -812,6 +849,10 @@ func (m *unboundedManager) startLocked() {
 			if ucfg.PTableSize > 0 {
 				bfOpt.PTableSize = ucfg.PTableSize
 			}
+			// Empty, the default, reports nothing. Set, the widget reports its
+			// connected consumers, IP addresses included, to netstated for the
+			// network visualizations, as the browser widget does.
+			bfOpt.Netstated = ucfg.Netstated
 		}
 
 		// Wire the broflake connection callback into the radiance event
@@ -905,6 +946,7 @@ func (m *unboundedManager) startLocked() {
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
+		egOpt.HTTPClient = egressHTTPClient
 		if ucfg != nil {
 			if ucfg.EgressAddr != "" {
 				egOpt.Addr = ucfg.EgressAddr
@@ -919,6 +961,7 @@ func (m *unboundedManager) startLocked() {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
 			cancel()
 			m.mu.Lock()
+			m.fireRunLocked(false)
 			m.cancel = nil
 			m.done = nil
 			m.runningCfg = nil

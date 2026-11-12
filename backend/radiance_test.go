@@ -400,6 +400,13 @@ func TestEndedHelpersAreThoseTheConfigNoLongerCarries(t *testing.T) {
 		"Lantern helpers the config dropped; a user server is not the config's to end")
 }
 
+// Reverse outbounds belong to the reverse client, not to the config.
+func TestEndedHelpersExcludeReverseOutbounds(t *testing.T) {
+	rev := lbA.ReverseHelperTag("helper-0123456789ab")
+	existing := []*servers.Server{newTestServer(rev, true, false, time.Time{})}
+	assert.Empty(t, endedHelpers(existing, map[string]struct{}{}))
+}
+
 func TestAppendManagedServerOptionsIncludesRetainedLanternServers(t *testing.T) {
 	options := option.Options{
 		Outbounds: []option.Outbound{
@@ -502,29 +509,85 @@ type fakePeerController struct {
 	// reregisterFn, when set, answers Reregister; it gets the call's number,
 	// from 1.
 	reregisterFn atomic.Pointer[func(context.Context, int64) error]
+	// onStart, if set, runs at the top of each Start.
+	onStart func()
+	// pairingsOnly, if set, is the client's Config.PairingsOnly.
+	pairingsOnly func() bool
+	// poolMaybe models the real client's MayServePool.
+	poolMaybe atomic.Bool
+	// status models the real client's CurrentStatus: the last Start's error
+	// phase, kept until the next Start, or serving while active.
+	status atomic.Pointer[peer.Status]
+	// teardown, if set, is a self-stop's teardown in flight: Stop waits for
+	// it to close.
+	teardown atomic.Pointer[chan struct{}]
 }
 
+// registrationPool is the serve_pool a registration now would send, as the
+// real client decides it.
+func (f *fakePeerController) registrationPool() bool {
+	return settings.PeerServesPool() && (f.pairingsOnly == nil || !f.pairingsOnly())
+}
+
+func (f *fakePeerController) MayServePool() bool { return f.poolMaybe.Load() }
+
 func (f *fakePeerController) Start(_ context.Context) error {
-	if f.startCalls.Add(1) == 1 {
+	if f.onStart != nil {
+		f.onStart()
+	}
+	// Counted even when refused, so a test can catch a redundant Start.
+	n := f.startCalls.Add(1)
+	if f.active.Load() {
+		return errors.New("peer client already active")
+	}
+	if n == 1 {
 		f.servePoolAtStart.Store(fmt.Sprint(settings.Get(settings.PeerServePoolKey)))
 	}
 	if f.startErr != nil {
+		// As the real client's rollback: no box serves.
+		f.poolMaybe.Store(false)
+		f.setStatus(peer.Status{Phase: peer.PhaseError, Error: f.startErr.Error()})
 		return f.startErr
 	}
+	f.poolMaybe.Store(f.registrationPool())
 	f.active.Store(true)
+	f.setStatus(peer.Status{Phase: peer.PhaseServing, Active: true})
 	return nil
 }
 
 func (f *fakePeerController) Stop(_ context.Context) error {
-	f.stopCalls.Add(1)
-	f.active.Store(false)
+	// As the real client: Stop waits for a teardown in flight.
+	if ch := f.teardown.Load(); ch != nil {
+		<-*ch
+	}
+	// Only a Stop that stops a session counts: on an idle client the real
+	// one does nothing.
+	if f.active.Swap(false) {
+		f.stopCalls.Add(1)
+		f.poolMaybe.Store(false)
+		f.setStatus(peer.Status{Phase: peer.PhaseIdle})
+	}
 	return nil
 }
 
 func (f *fakePeerController) Reregister(ctx context.Context) error {
+	if !f.active.Load() {
+		return peer.ErrNotActive
+	}
 	n := f.reregisterCalls.Add(1)
+	// As the real client: a pool registration may register the pool even if
+	// it fails; a pool-free one can't add it.
+	pool := f.registrationPool()
+	if pool {
+		f.poolMaybe.Store(true)
+	}
 	if fn := f.reregisterFn.Load(); fn != nil {
-		return (*fn)(ctx, n)
+		if err := (*fn)(ctx, n); err != nil {
+			return err
+		}
+	}
+	if !pool {
+		f.poolMaybe.Store(false)
 	}
 	return nil
 }
@@ -533,9 +596,33 @@ func (f *fakePeerController) setReregister(fn func(context.Context, int64) error
 	f.reregisterFn.Store(&fn)
 }
 
-func (f *fakePeerController) IsActive() bool               { return f.active.Load() }
-func (f *fakePeerController) CurrentStatus() peer.Status   { return peer.Status{Active: f.active.Load()} }
-func (f *fakePeerController) RelaySnapshot() peer.Snapshot { return peer.Snapshot{} }
+func (f *fakePeerController) IsActive() bool { return f.active.Load() }
+func (f *fakePeerController) CurrentStatus() peer.Status {
+	if st := f.status.Load(); st != nil {
+		return *st
+	}
+	// No Start recorded one: a test that set active directly.
+	return peer.Status{Active: f.active.Load()}
+}
+
+// setStatus records the client's status as the real one would, tagged with
+// the run's mode.
+func (f *fakePeerController) setStatus(st peer.Status) {
+	st.PairingsOnly = f.pairingsOnly != nil && f.pairingsOnly()
+	f.status.Store(&st)
+}
+
+func (f *fakePeerController) RetagStatus() {
+	if st := f.status.Load(); st != nil {
+		f.setStatus(*st)
+	}
+}
+func (f *fakePeerController) RelaySnapshot() peer.Snapshot {
+	if !f.active.Load() {
+		return peer.Snapshot{}
+	}
+	return peer.Snapshot{Running: true, Peers: []string{"friend"}, BytesUp: 1}
+}
 
 // newPeerTestBackend wires a minimal LocalBackend with only the fields
 // applyPeerShare touches. settings is initialized to a fresh tempdir per test
@@ -544,6 +631,8 @@ func newPeerTestBackend(t *testing.T, fake *fakePeerController) *LocalBackend {
 	t.Helper()
 	require.NoError(t, settings.InitSettings(t.TempDir()))
 	t.Cleanup(settings.Reset)
+	// A country where the pairings-only route may run.
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "US"))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	return &LocalBackend{ctx: ctx, peerClient: fake}
@@ -856,6 +945,8 @@ func (f *slowStartFake) IsActive() bool                   { return f.active.Load
 func (f *slowStartFake) CurrentStatus() peer.Status       { return peer.Status{Active: f.active.Load()} }
 func (f *slowStartFake) RelaySnapshot() peer.Snapshot     { return peer.Snapshot{} }
 func (f *slowStartFake) Reregister(context.Context) error { return nil }
+func (f *slowStartFake) MayServePool() bool               { return true }
+func (f *slowStartFake) RetagStatus()                     {}
 
 // newCloseableTestBackend mirrors newPeerTestBackend but provides the fields
 // Close needs (closeOnce, cancel) so we can exercise the shutdown path
@@ -1566,6 +1657,17 @@ func TestPersonalProxiesServerExistsWhileAHelperDoes(t *testing.T) {
 	}
 }
 
+func TestPersonalProxiesServerExistsWhileAReverseOutboundDoes(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addDirectServer(t, r, "lantern-1")
+	require.NoError(t, r.vpnClient.SetReverseOutbounds([]string{lbA.ReverseHelperTag("helper-0123456789ab")}))
+	_, found := r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.True(t, found)
+	require.NoError(t, r.vpnClient.SetReverseOutbounds(nil))
+	_, found = r.GetServerByTag(vpn.PersonalProxiesTag)
+	assert.False(t, found)
+}
+
 func TestPersonalProxiesSelectionLastsWhileAHelperDoes(t *testing.T) {
 	r := newPersonalProxiesBackend(t)
 	addDirectServer(t, r, "helper-0123456789ab")
@@ -1839,6 +1941,18 @@ type fakeHelperTunnel struct {
 	onSelect func() // if set, runs as each selection is applied
 	// onRestart, if set, runs as a restart begins, before it rebuilds.
 	onRestart func()
+	// platformRestart, if set, replaces a restart's rebuild: the tunnel is
+	// torn down and reports Restarting while it runs, as a platform restart
+	// that reconnects through the backend does.
+	platformRestart func()
+	restarting      bool
+	// onConnect, if set, runs once a connect is up, before it returns, as
+	// the VPN client's Connected event does.
+	onConnect func()
+	// connectErr, if set, fails every connect.
+	connectErr error
+	// autoChoice is the server auto mode reports having chosen.
+	autoChoice string
 	// selected is the selection the tunnel last applied.
 	selected string
 	// friend is the friend whose group the tunnel has selected, or "".
@@ -1847,6 +1961,8 @@ type fakeHelperTunnel struct {
 	// personal proxies group, as a tunnel built while the friend had no
 	// member does; refuseFriend refuses every selection of a friend.
 	friendless, refuseFriend bool
+	// refuseGroup refuses a selection of the personal proxies group.
+	refuseGroup bool
 	// rebuild makes a restart hold only the outbounds in its options, and a
 	// selection of a friend require the friend's outbound.
 	rebuild bool
@@ -1867,12 +1983,19 @@ func (f *fakeHelperTunnel) startOn(initial string) {
 
 func (f *fakeHelperTunnel) Connect(_ context.Context, boxOptions vpn.BoxOptions) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "connect:"+boxOptions.InitialServer)
+	if f.connectErr != nil {
+		f.mu.Unlock()
+		return f.connectErr
+	}
 	if f.live == nil {
 		f.live = make(map[string]string)
 	}
 	f.startOn(boxOptions.InitialServer)
+	f.mu.Unlock()
+	if f.onConnect != nil {
+		f.onConnect()
+	}
 	return nil
 }
 
@@ -1886,6 +2009,33 @@ func (f *fakeHelperTunnel) SelectedPersonalProxy() string {
 }
 
 var _ liveTunnel = (*fakeHelperTunnel)(nil)
+
+func (f *fakeHelperTunnel) CurrentAutoSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.autoChoice, nil
+}
+
+func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil {
+		return "", nil
+	}
+	if f.selected == vpn.AutoSelectTag && f.autoChoice != "" {
+		return f.autoChoice, nil
+	}
+	return f.selected, nil
+}
+
+func (f *fakeHelperTunnel) ManualSelection() (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == nil || f.selected == "" || f.selected == vpn.AutoSelectTag {
+		return "", false
+	}
+	return f.selected, true
+}
 
 func (f *fakeHelperTunnel) attach(r *LocalBackend) { r.live = f }
 
@@ -1938,6 +2088,9 @@ func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	if isFriend && f.refuseFriend {
 		return vpn.ErrPersonalProxyUnavailable
 	}
+	if tag == vpn.PersonalProxiesTag && f.refuseGroup {
+		return vpn.ErrPersonalProxiesUnavailable
+	}
 	if _, held := f.live[friend]; isFriend && f.rebuild && !held {
 		return vpn.ErrPersonalProxyUnavailable
 	}
@@ -1950,8 +2103,17 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 		f.onRestart()
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "restart:"+boxOptions.InitialServer)
+	if f.live != nil && f.platformRestart != nil {
+		f.live, f.restarting = nil, true
+		f.mu.Unlock()
+		f.platformRestart()
+		f.mu.Lock()
+		f.restarting = false
+		f.mu.Unlock()
+		return nil
+	}
+	defer f.mu.Unlock()
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
@@ -1963,6 +2125,18 @@ func (f *fakeHelperTunnel) Restart(boxOptions vpn.BoxOptions) error {
 	}
 	f.startOn(boxOptions.InitialServer)
 	return nil
+}
+
+func (f *fakeHelperTunnel) Status() vpn.VPNStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.restarting:
+		return vpn.Restarting
+	case f.live != nil:
+		return vpn.Connected
+	}
+	return vpn.Disconnected
 }
 
 func (f *fakeHelperTunnel) current() string {
@@ -2306,4 +2480,16 @@ func TestRemovalCleansUpAServerAddedConcurrently(t *testing.T) {
 	assert.False(t, held)
 	assert.False(t, tun.holds("late"), "the removed server leaves the tunnel")
 	assert.True(t, tun.holds("lantern-1"))
+}
+
+func TestServerListFromConfig_AutoSelectOptions(t *testing.T) {
+	list := serverListFromConfig(&config.Config{
+		AutoSelectOptions: json.RawMessage(`{"probe_timeouts_ms": {"hysteria2x": 3000}}`),
+	})
+	require.NotNil(t, list.AutoSelectOptions)
+	assert.Equal(t, map[string]uint32{"hysteria2x": 3000}, map[string]uint32(list.AutoSelectOptions.ProbeTimeoutsMs))
+
+	list = serverListFromConfig(&config.Config{})
+	require.NotNil(t, list.AutoSelectOptions, "a config without the field must still clear earlier timeouts")
+	assert.Empty(t, list.AutoSelectOptions.ProbeTimeoutsMs)
 }

@@ -144,10 +144,12 @@ func helperStub(v any) map[string]any {
 	return stub
 }
 
-// isHelperTag reports whether tag names a helper outbound or a group over
-// them, or selects one; all mark the device as having personal proxies.
+// isHelperTag reports whether tag names a helper or reverse outbound, a group
+// over them, the reverse portal, or selects one; all mark the device as having
+// personal proxies.
 func isHelperTag(tag string) bool {
-	return lbA.IsHelperTag(tag) || tag == redact.PersonalProxiesTag || tag == redact.PersonalProxyTag ||
+	return lbA.IsHelperTag(tag) || lbA.IsReverseHelperTag(tag) || tag == redact.ReversePortalTag ||
+		tag == redact.PersonalProxiesTag || tag == redact.PersonalProxyTag ||
 		strings.HasPrefix(tag, redact.PersonalProxyTag+":")
 }
 

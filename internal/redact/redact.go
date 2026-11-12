@@ -26,6 +26,11 @@ const PersonalProxiesTag = "personal-proxies"
 // like PersonalProxiesTag.
 const PersonalProxyTag = "personal-proxy"
 
+// ReversePortalTag is the tag of the VPN box's inbound that serves an
+// inviter's reverse outbounds. Its options hold the masquerade domain the
+// portal answers probes with, which a client must not export.
+const ReversePortalTag = "samizdat-portal"
+
 var groupTags = strings.NewReplacer(PersonalProxiesTag, "helper", PersonalProxyTag, "helper")
 
 // Tag returns s with every helper tag, PersonalProxiesTag and PersonalProxyTag

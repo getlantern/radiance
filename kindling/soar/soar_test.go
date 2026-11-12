@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getlantern/kindling"
 	"github.com/getlantern/soar"
 	"github.com/stretchr/testify/require"
 
@@ -112,4 +113,22 @@ func TestFileCacheSurvivesNullFile(t *testing.T) {
 	require.Empty(t, c.Load())
 	c.Store([]string{"1.2.3.4:53"})
 	require.Equal(t, []string{"1.2.3.4:53"}, c.Load())
+}
+
+// kindling keeps streaming requests off a tunnel whose IsStreamable is false. Unbounded's
+// signaling sends freddie requests as event streams, many a second on some peers: on Soar they
+// filled every stream the session has, and other requests failing over to Soar got none.
+func TestTunnelStaysOffStreamingRequests(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	t.Cleanup(func() { Zone, PublicKey = "", "" })
+	Zone, PublicKey = "t.example.com", base64.StdEncoding.EncodeToString(pub)
+	c, err := New(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Close() })
+
+	var tunnel kindling.DNSTunnel = c
+	streamable, ok := tunnel.(interface{ IsStreamable() bool })
+	require.True(t, ok, "the tunnel must tell kindling whether it can stream")
+	require.False(t, streamable.IsStreamable())
 }

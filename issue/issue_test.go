@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"mime"
@@ -54,7 +55,7 @@ func TestSendReport(t *testing.T) {
 		Language:          settings.GetString(settings.LocaleKey),
 	}
 
-	reporter := NewIssueReporter(newProtobufTestClient(t, want, assertLogsZipContainsHello), log.NoOpLogger())
+	reporter := NewIssueReporter(nil, newProtobufTestClient(t, want, assertLogsZipContainsHello), log.NoOpLogger())
 	report := IssueReport{
 		Type:                  CannotAccessBlockedSites,
 		Description:           "Description placeholder-test only",
@@ -96,7 +97,7 @@ func TestSendReportWithFirstClassAttachment(t *testing.T) {
 		Language:          settings.GetString(settings.LocaleKey),
 	}
 
-	reporter := NewIssueReporter(newMultipartTestClient(t, want, multipartFile{
+	reporter := NewIssueReporter(nil, newMultipartTestClient(t, want, multipartFile{
 		fieldName:   attachmentPartName,
 		filename:    "screenshot.png",
 		contentType: "image/png",
@@ -130,7 +131,7 @@ func TestSendReportRejectsInvalidFirstClassAttachment(t *testing.T) {
 	settings.InitSettings(t.TempDir())
 	defer settings.Reset()
 
-	reporter := NewIssueReporter(&http.Client{}, log.NoOpLogger())
+	reporter := NewIssueReporter(nil, &http.Client{}, log.NoOpLogger())
 	err := reporter.Report(context.Background(), IssueReport{
 		Type:        CannotAccessBlockedSites,
 		Description: "validation path",
@@ -309,7 +310,7 @@ func TestReportFailureLogsStatusOnly(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	err := NewIssueReporter(client, logger).Report(context.Background(), IssueReport{
+	err := NewIssueReporter(nil, client, logger).Report(context.Background(), IssueReport{
 		Type:        CannotAccessBlockedSites,
 		Description: description,
 		Email:       "user@example.com",
@@ -317,4 +318,38 @@ func TestReportFailureLogsStatusOnly(t *testing.T) {
 	require.Error(t, err, "expected an error for a 500 response")
 	assert.NotContains(t, buf.String(), "abc123", "echoed report data reached the log")
 	assert.Contains(t, buf.String(), "statusCode=500", "failure log dropped the status")
+}
+
+func TestReportFallsBackWhenTunnelFails(t *testing.T) {
+	settings.InitSettings(t.TempDir())
+	defer settings.Reset()
+
+	var sent [][]byte
+	client := func(err error) *http.Client {
+		return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			body, readErr := io.ReadAll(req.Body)
+			require.NoError(t, readErr)
+			sent = append(sent, body)
+			if err != nil {
+				return nil, err
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+		})}
+	}
+	report := IssueReport{Type: Other, Description: "tunnel down"}
+
+	t.Run("tunnel succeeds", func(t *testing.T) {
+		sent = nil
+		reporter := NewIssueReporter(client(nil), client(errors.New("kindling used")), log.NoOpLogger())
+		require.NoError(t, reporter.Report(context.Background(), report))
+		assert.Len(t, sent, 1)
+	})
+
+	t.Run("tunnel fails", func(t *testing.T) {
+		sent = nil
+		reporter := NewIssueReporter(client(errors.New("connection refused")), client(nil), log.NoOpLogger())
+		require.NoError(t, reporter.Report(context.Background(), report))
+		require.Len(t, sent, 2)
+		assert.Equal(t, sent[0], sent[1], "fallback must resend the full body")
+	})
 }

@@ -27,17 +27,19 @@ const (
 
 // IssueReporter is used to send issue reports to backend.
 type IssueReporter struct {
-	httpClient *http.Client
-	logger     *slog.Logger
+	tunnelClient *http.Client
+	httpClient   *http.Client
+	logger       *slog.Logger
 }
 
-// NewIssueReporter returns an IssueReporter that sends reports with httpClient.
-// A nil logger uses [slog.Default].
-func NewIssueReporter(httpClient *http.Client, logger *slog.Logger) *IssueReporter {
+// NewIssueReporter returns an IssueReporter that sends reports with
+// tunnelClient, falling back to httpClient when tunnelClient returns an error.
+// A nil tunnelClient sends with httpClient only. A nil logger uses [slog.Default].
+func NewIssueReporter(tunnelClient, httpClient *http.Client, logger *slog.Logger) *IssueReporter {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &IssueReporter{httpClient: httpClient, logger: logger}
+	return &IssueReporter{tunnelClient: tunnelClient, httpClient: httpClient, logger: logger}
 }
 
 type IssueType int
@@ -101,7 +103,11 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 	osVersion, err := osversion.GetHumanReadable()
 	if err != nil {
 		ir.logger.Error("Unable to get OS version", "error", err)
-		osVersion = runtime.GOOS + " " + runtime.GOARCH
+		// Android still returns its release number when it can't name the API level.
+		if osVersion == "" {
+			osVersion = runtime.GOARCH
+		}
+		osVersion = runtime.GOOS + " " + osVersion
 	}
 	r := &ReportIssueRequest{
 		Type:              ReportIssueRequest_ISSUE_TYPE(report.Type),
@@ -185,7 +191,7 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 		return traces.RecordError(ctx, err)
 	}
 
-	resp, err := ir.httpClient.Do(req)
+	resp, err := ir.send(req)
 	if err != nil {
 		ir.logger.Error("failed to send issue report", "error", err, "requestURL", issueURL)
 		return traces.RecordError(ctx, err)
@@ -200,6 +206,24 @@ func (ir *IssueReporter) Report(ctx context.Context, report IssueReport) error {
 
 	ir.logger.Debug("issue report sent")
 	return nil
+}
+
+func (ir *IssueReporter) send(req *http.Request) (*http.Response, error) {
+	if ir.tunnelClient == nil {
+		return ir.httpClient.Do(req)
+	}
+	resp, err := ir.tunnelClient.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	ir.logger.Info("issue report via tunnel failed, falling back to kindling", "error", err)
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	req = req.Clone(req.Context())
+	req.Body = body
+	return ir.httpClient.Do(req)
 }
 
 // newIssueRequest creates a new HTTP request with the required headers for issue reporting.

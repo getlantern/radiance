@@ -319,3 +319,30 @@ func TestIssueArchiveRedactsAPersonalProxySelection(t *testing.T) {
 		assert.NotContains(t, e.content, "203.0.113.7", e.name)
 	}
 }
+
+// debug-box-options.json carries the inviter's reverse outbounds and the
+// portal that serves them. Their tags name pairings and the portal's
+// masquerade domain is what a censor would match its listener against.
+func TestIssueArchiveStubsReverseOutboundsAndThePortal(t *testing.T) {
+	const reverse = "helper-0123456789ab-r"
+	const domain = "cover.example.com"
+	dir := t.TempDir()
+	opts := filepath.Join(dir, "debug-box-options.json")
+	require.NoError(t, os.WriteFile(opts, []byte(`{
+ "inbounds":[{"type":"samizdat-portal","tag":"samizdat-portal","masquerade_domain":"`+domain+`"}],
+ "outbounds":[
+ {"type":"samizdat-reverse","tag":"`+reverse+`","portal":"samizdat-portal"},
+ {"type":"mutableselector","tag":"manual","outbounds":["lantern-1","`+reverse+`"]}]}`), 0644))
+
+	result, err := buildIssueArchive(log.NoOpLogger(), dir, []string{opts}, 1024*1024)
+	require.NoError(t, err)
+	entries := readZipEntries(t, result)
+	require.Len(t, entries, 1)
+	content := entries[0].content
+	for _, secret := range []string{domain, "0123456789ab", "-r\""} {
+		assert.NotContains(t, content, secret)
+	}
+	assert.Contains(t, content, `"type": "samizdat-reverse"`)
+	assert.Contains(t, content, `"type": "samizdat-portal"`)
+	assert.Contains(t, content, `"lantern-1"`)
+}
