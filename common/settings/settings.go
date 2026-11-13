@@ -372,6 +372,12 @@ func GetBool(key _key) bool {
 	return snapshot().Bool(key.String())
 }
 
+// PeerServesPool reports the "help others too" setting (PeerServePoolKey):
+// unset means on.
+func PeerServesPool() bool {
+	return Get(PeerServePoolKey) == nil || GetBool(PeerServePoolKey)
+}
+
 func GetInt(key _key) int {
 	return snapshot().Int(key.String())
 }

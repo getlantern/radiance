@@ -535,6 +535,40 @@ func TestRestartKeepsTheSavedSelection(t *testing.T) {
 	assert.Equal(t, vpn.AutoSelectTag, r.restartBoxOptions().InitialServer)
 }
 
+// A platform restart reconnects through ConnectVPN on auto. The saved manual
+// selection must survive it, both saved and on the rebuilt tunnel.
+func TestPlatformRestartKeepsTheManualSelection(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, "lantern-1"))
+
+	tun.platformRestart = func() {
+		require.NoError(t, r.ConnectVPN(ctx, vpn.AutoSelectTag))
+	}
+	require.NoError(t, r.RestartVPN())
+	assert.Equal(t, "lantern-1", selectedTag(t))
+	assert.Equal(t, "lantern-1", tun.current())
+}
+
+// Outside a restart, an auto connect is how a manual selection is replaced
+// with auto, so it must not be redirected to the saved selection.
+func TestAutoConnectReplacesTheManualSelection(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.srvManager.AddServers(directServers("lantern-1"), false))
+	r.persistSelection("lantern-1")
+	tun := &fakeHelperTunnel{}
+	tun.attach(r)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, r.ConnectVPN(ctx, vpn.AutoSelectTag))
+	assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
+	assert.Equal(t, vpn.AutoSelectTag, tun.current())
+}
+
 // A server added and selected while a restart captures its options must not
 // become the initial selection of options that lack it.
 func TestRestartOptionsPairTheSelectionWithItsOutbounds(t *testing.T) {

@@ -149,7 +149,7 @@ func splitTunnelRuleSet(basePath string) []O.RuleSet {
 	return []O.RuleSet{
 		{
 			Type: C.RuleSetTypeLocal,
-			Tag:  splitTunnelTag,
+			Tag:  badoption.Listable[string]{splitTunnelTag},
 			LocalOptions: O.LocalRuleSet{
 				Path: splitTunnelPath,
 			},

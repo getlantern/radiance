@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -149,11 +150,16 @@ func (s *SplitTunnel) Filters() SplitTunnelFilter {
 		ProcessPath:      slices.Clone(s.ruleMap[TypeProcessPath].ProcessPath),
 		ProcessPathRegex: slices.Clone(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex),
 		PackageName:      slices.Clone(s.ruleMap[TypePackageName].PackageName),
+		PackageNameRegex: slices.Clone(s.ruleMap[TypePackageNameRegex].PackageNameRegex),
 	}
 }
 
-// AddItem adds a new item to the filter of the given type.
+// AddItem adds a new item to the filter of the given type. It returns an error
+// wrapping [ErrInvalidSplitTunnelFilter] if item is a regex that fails to compile.
 func (s *SplitTunnel) AddItem(filterType, item string) error {
+	if err := validateRegex(filterType, item); err != nil {
+		return err
+	}
 	s.access.Lock()
 	defer s.access.Unlock()
 	if err := s.updateFilterLocked(filterType, item, merge); err != nil {
@@ -166,7 +172,8 @@ func (s *SplitTunnel) AddItem(filterType, item string) error {
 	return nil
 }
 
-// RemoveItem removes an item from the filter of the given type.
+// RemoveItem removes an item from the filter of the given type. The item is not
+// validated, so a saved regex that fails to compile can still be removed.
 func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	s.access.Lock()
 	defer s.access.Unlock()
@@ -180,8 +187,20 @@ func (s *SplitTunnel) RemoveItem(filterType, item string) error {
 	return nil
 }
 
-// AddItems adds multiple items to the filter.
+// AddItems adds multiple items to the filter. It returns an error wrapping
+// [ErrInvalidSplitTunnelFilter] if any regex item fails to compile.
 func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
+	for filterType, exprs := range map[string][]string{
+		TypeDomainRegex:      items.DomainRegex,
+		TypeProcessPathRegex: items.ProcessPathRegex,
+		TypePackageNameRegex: items.PackageNameRegex,
+	} {
+		for _, expr := range exprs {
+			if err := validateRegex(filterType, expr); err != nil {
+				return err
+			}
+		}
+	}
 	s.access.Lock()
 	defer s.access.Unlock()
 	s.updateFiltersLocked(items, merge)
@@ -189,13 +208,26 @@ func (s *SplitTunnel) AddItems(items SplitTunnelFilter) error {
 	return s.saveLocked()
 }
 
-// RemoveItems removes multiple items from the filter.
+// RemoveItems removes multiple items from the filter. Items are not validated,
+// so a saved regex that fails to compile can still be removed.
 func (s *SplitTunnel) RemoveItems(items SplitTunnelFilter) error {
 	s.access.Lock()
 	defer s.access.Unlock()
 	s.updateFiltersLocked(items, remove)
 	s.logger.Debug("removed items from filter", "items", items.len())
 	return s.saveLocked()
+}
+
+// validateRegex rejects regex items that sing-box would fail to compile, which
+// would make the split-tunnel rule set, and with it every tunnel start, fail.
+func validateRegex(filterType, item string) error {
+	switch filterType {
+	case TypeDomainRegex, TypeProcessPathRegex, TypePackageNameRegex:
+		if _, err := regexp.Compile(item); err != nil {
+			return fmt.Errorf("%w: %s %q: %w", ErrInvalidSplitTunnelFilter, filterType, item, err)
+		}
+	}
+	return nil
 }
 
 type actionFn func(slice []string, items []string) []string
@@ -226,6 +258,8 @@ func (s *SplitTunnel) updateFilterLocked(filterType string, item string, fn acti
 		rule.ProcessPathRegex = fn(rule.ProcessPathRegex, items)
 	case TypePackageName:
 		rule.PackageName = fn(rule.PackageName, items)
+	case TypePackageNameRegex:
+		rule.PackageNameRegex = fn(rule.PackageNameRegex, items)
 	}
 	return nil
 }
@@ -241,6 +275,7 @@ func (s *SplitTunnel) updateFiltersLocked(diff SplitTunnelFilter, fn actionFn) {
 	s.ruleMap[TypeProcessPath].ProcessPath = fn(s.ruleMap[TypeProcessPath].ProcessPath, diff.ProcessPath)
 	s.ruleMap[TypeProcessPathRegex].ProcessPathRegex = fn(s.ruleMap[TypeProcessPathRegex].ProcessPathRegex, diff.ProcessPathRegex)
 	s.ruleMap[TypePackageName].PackageName = fn(s.ruleMap[TypePackageName].PackageName, diff.PackageName)
+	s.ruleMap[TypePackageNameRegex].PackageNameRegex = fn(s.ruleMap[TypePackageNameRegex].PackageNameRegex, diff.PackageNameRegex)
 }
 
 func merge(slice []string, items []string) []string {
@@ -320,7 +355,8 @@ func isEmptyRule(rule O.DefaultHeadlessRule) bool {
 	return len(rule.Domain) == 0 && len(rule.DomainSuffix) == 0 &&
 		len(rule.DomainKeyword) == 0 && len(rule.DomainRegex) == 0 &&
 		len(rule.ProcessName) == 0 && len(rule.PackageName) == 0 &&
-		len(rule.ProcessPath) == 0 && len(rule.ProcessPathRegex) == 0
+		len(rule.ProcessPath) == 0 && len(rule.ProcessPathRegex) == 0 &&
+		len(rule.PackageNameRegex) == 0
 }
 
 func validateSplitTunnelRule(rules []O.HeadlessRule) error {
@@ -501,7 +537,7 @@ func defaultRule() O.LogicalHeadlessRule {
 func (s *SplitTunnel) initRuleMap() {
 	s.ruleMap = make(map[string]*O.DefaultHeadlessRule)
 
-	categories := []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName}
+	categories := []string{TypeDomain, TypeProcessName, TypeProcessPath, TypeProcessPathRegex, TypePackageName, TypePackageNameRegex}
 
 	// First pass: find which categories already have rules, and ensure empty
 	// rules exist for the rest. All appends happen before any pointers are
@@ -524,6 +560,9 @@ func (s *SplitTunnel) initRuleMap() {
 		}
 		if len(rule.PackageName) > 0 {
 			found[TypePackageName] = true
+		}
+		if len(rule.PackageNameRegex) > 0 {
+			found[TypePackageNameRegex] = true
 		}
 	}
 	for _, cat := range categories {
@@ -566,6 +605,10 @@ func (s *SplitTunnel) initRuleMap() {
 		}
 		if len(rule.PackageName) > 0 {
 			s.ruleMap[TypePackageName] = rule
+			matched = true
+		}
+		if len(rule.PackageNameRegex) > 0 {
+			s.ruleMap[TypePackageNameRegex] = rule
 			matched = true
 		}
 		if !matched && emptyIdx < len(missing) {

@@ -1118,7 +1118,12 @@ func (s *localapi) envHandler(w http.ResponseWriter, r *http.Request) {
 			env.Set(k, v)
 			switch k {
 			case env.Country.String():
-				if err := settings.Set(settings.CountryCodeKey, v); err != nil {
+				err := settings.Set(settings.CountryCodeKey, v)
+				// A failed save still applies the live value.
+				if b := s.backend(r.Context()); b != nil {
+					b.CountryCodeChanged()
+				}
+				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
@@ -1160,10 +1165,17 @@ func (s *localapi) splitTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		err = s.backend(r.Context()).RemoveSplitTunnelItems(items)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), splitTunnelStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func splitTunnelStatus(err error) int {
+	if errors.Is(err, vpn.ErrInvalidSplitTunnelFilter) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 /////////////

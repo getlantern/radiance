@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 type fakeForwarder struct {
@@ -1107,6 +1109,21 @@ func TestClient_StatusEventOnStartError(t *testing.T) {
 var _ portForwarder = (*fakeForwarder)(nil)
 var _ boxService = (*fakeBoxService)(nil)
 
+// samizdatInboundJSON is a minimal but complete samizdat inbound: every field
+// option.SamizdatInboundOptions's json tags require to round-trip. Values are
+// placeholders; the box is never started.
+const samizdatInboundJSON = `{
+	"type": "samizdat",
+	"tag": "samizdat-in",
+	"listen": "127.0.0.1",
+	"listen_port": 5698,
+	"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
+	"short_ids": ["0000000000000000"],
+	"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
+	"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
+	"masquerade_domain": "example.com"
+}`
+
 // TestDefaultBuildBoxService_DecodesSamizdatInbound is the regression net
 // for the "missing inbound fields registry in context" failure that bit
 // us live: the peer box was built from a ctx that didn't have the
@@ -1123,30 +1140,37 @@ var _ boxService = (*fakeBoxService)(nil)
 // cycle (rebuild, redeploy, toggle UI, dial-back) — what used to take a
 // 5-minute round-trip is now a 0.1s test failure.
 func TestDefaultBuildBoxService_DecodesSamizdatInbound(t *testing.T) {
-	// Minimal but complete samizdat inbound — every field that
-	// option.SamizdatInboundOptions's json tags require to round-trip.
-	// Values are placeholders; we don't run the box, just decode.
-	const opts = `{
-		"inbounds": [{
-			"type": "samizdat",
-			"tag": "samizdat-in",
-			"listen": "127.0.0.1",
-			"listen_port": 5698,
-			"private_key": "0000000000000000000000000000000000000000000000000000000000000000",
-			"short_ids": ["0000000000000000"],
-			"cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgIQCHOFXAcuEzPfyHK6LdwxwzAKBggqhkjOPQQDAjATMREw\nDwYDVQQKEwhJbnRlcm5ldDAeFw0yNjA1MDYwMDAwMDBaFw0yNzA1MDYwMDAwMDBa\nMBMxETAPBgNVBAoTCEludGVybmV0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\nb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyDUwmfVTZiQ+wR\nkQXjrkAwsOWK99JsM3R2bqNIMEYwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAwGA1UdEwEB/wQCMAAwEQYDVR0RBAowCIIGdGVzdC5xMAoGCCqG\nSM49BAMCA0kAMEYCIQCqhyaQaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaIh\nAOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\n-----END CERTIFICATE-----\n",
-			"key_pem": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaoAoGCCqGSM49\nAwEHoUQDQgAEb6xQ7UDl11wL/8mZwLxrNqx6JJ+FczIw9V0a9Q3CYUYFGu5DzVyD\nUwmfVTZiQ+wRkQXjrkAwsOWK99JsM3R2bg==\n-----END EC PRIVATE KEY-----\n",
-			"masquerade_domain": "example.com"
-		}]
-	}`
-
-	bs, err := defaultBuildBoxService(context.Background(), opts)
+	bs, err := defaultBuildBoxService(context.Background(), `{"inbounds":[`+samizdatInboundJSON+`]}`)
 	require.NoError(t, err, "defaultBuildBoxService must decode a samizdat inbound — "+
 		"the lantern-box protocol registries have to be in ctx")
 	require.NotNil(t, bs)
 	// We never call Start; just verifying the decode path. Close drops
 	// any background structures the box might have stood up.
 	_ = bs.Close()
+}
+
+func TestDefaultBuildBoxService_BuildsAbuseBlockingLaunchCfg(t *testing.T) {
+	// Building binds the inbound, and an unstarted box keeps it bound after Close.
+	inbound := strings.Replace(samizdatInboundJSON, `"listen_port": 5698`, `"listen_port": 0`, 1)
+	cfg := strings.Replace(minimalValidLaunchCfg, `{"type":"samizdat","tag":"samizdat-in"}`, inbound, 1)
+	require.NotEqual(t, minimalValidLaunchCfg, cfg)
+	bs, err := defaultBuildBoxService(context.Background(), cfg)
+	require.NoError(t, err)
+	_ = bs.Close()
+}
+
+func TestDefaultBuildBoxService_DeniesHostAccess(t *testing.T) {
+	denied := map[string]string{
+		"outbound":     `{"outbounds":[{"type":"bridge","tag":"bridge"}]}`,
+		"route action": `{"route":{"rules":[{"action":"route-options","tls_spoof":"example.com"}]}}`,
+		"http client":  `{"http_clients":[{"tag":"client","netns":"/proc/1/ns/net"}]}`,
+		"certificate provider": `{"certificate_providers":[{"type":"cloudflare-origin-ca","tag":"origin-ca",` +
+			`"domain":["example.com"],"api_token":"token","data_directory":"/etc"}]}`,
+	}
+	for name, cfg := range denied {
+		_, err := defaultBuildBoxService(context.Background(), cfg)
+		assert.ErrorIs(t, err, hostaccess.ErrDenied, name)
+	}
 }
 
 func TestNewPeerBoxContext_LogFactoryIsRetrievable(t *testing.T) {
@@ -1620,6 +1644,118 @@ func TestClient_RegisterSendsServePool(t *testing.T) {
 	assert.False(t, *sp)
 }
 
+// TestClient_PairingsOnlyRegistersWithoutThePool checks that a run for pairings only registers serve_pool=false even when "help others
+// too" is on, and follows the setting again once it isn't pairings-only.
+func TestClient_PairingsOnlyRegistersWithoutThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, true))
+	var pairingsOnly atomic.Bool
+	pairingsOnly.Store(true)
+	srv := newStubServer(t)
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	sp := srv.lastRegisterReq.Load().(RegisterRequest).ServePool
+	require.NotNil(t, sp)
+	assert.False(t, *sp)
+	assert.False(t, c.MayServePool())
+	assert.True(t, c.CurrentStatus().PairingsOnly, "the status names the run it describes")
+
+	pairingsOnly.Store(false)
+	c.RetagStatus()
+	assert.False(t, c.CurrentStatus().PairingsOnly, "a hand-off re-tags it")
+	require.NoError(t, c.Reregister(ctx))
+	assert.Nil(t, srv.lastRegisterReq.Load().(RegisterRequest).ServePool,
+		"sharing takes over the same run and serves the pool again")
+	assert.True(t, c.MayServePool())
+}
+
+// TestClient_MayServePoolErrsTowardThePool checks that MayServePool errs toward true while a box serves: a registration in flight
+// reads true, a failed pool registration leaves it true and a pool-free one
+// can't add it. A committed pool-free registration clears it, as does no box
+// serving: a stop or a failed Start.
+func TestClient_MayServePoolErrsTowardThePool(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	var pairingsOnly atomic.Bool
+	srv := newStubServer(t)
+	// holdRegister, when set, holds the next register until it is closed;
+	// inRegister says a register is being held.
+	var holdRegister atomic.Pointer[chan struct{}]
+	inRegister := make(chan struct{}, 1)
+	srv.onRegister = func() {
+		if hold := holdRegister.Swap(nil); hold != nil {
+			inRegister <- struct{}{}
+			<-*hold
+		}
+	}
+	var c *Client
+	held := func(f func() error) {
+		release := make(chan struct{})
+		holdRegister.Store(&release)
+		// A late register mustn't park the stub's handler past the test.
+		var once sync.Once
+		releaseNow := func() { once.Do(func() { close(release) }) }
+		defer func() {
+			holdRegister.Store(nil)
+			releaseNow()
+		}()
+		done := make(chan error, 1)
+		go func() { done <- f() }()
+		select {
+		case <-inRegister:
+		case err := <-done:
+			t.Fatalf("returned before registering: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("never registered")
+		}
+		assert.True(t, c.MayServePool(), "a registration in flight on a route that may serve the pool")
+		releaseNow()
+		require.NoError(t, <-done)
+	}
+	c = newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+		cfg.PairingsOnly = pairingsOnly.Load
+	})
+	ctx := context.Background()
+	assert.False(t, c.MayServePool(), "a new client has registered nothing")
+
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Start(ctx))
+	assert.False(t, c.MayServePool(), "a failed Start leaves no box serving")
+	srv.registerStatus = http.StatusOK
+
+	held(func() error { return c.Start(ctx) })
+	t.Cleanup(func() { _ = c.Stop(ctx) })
+	require.True(t, c.MayServePool())
+
+	pairingsOnly.Store(true)
+	held(func() error { return c.Reregister(ctx) })
+	require.False(t, c.MayServePool(), "a committed pool-free registration")
+
+	srv.registerStatus = http.StatusInternalServerError
+	require.Error(t, c.Reregister(ctx))
+	assert.False(t, c.MayServePool(), "a failed pool-free registration can't add the pool")
+
+	pairingsOnly.Store(false)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "a failed pool registration may still have registered the pool")
+
+	pairingsOnly.Store(true)
+	require.Error(t, c.Reregister(ctx))
+	assert.True(t, c.MayServePool(), "only a committed pool-free registration clears it")
+
+	srv.registerStatus = http.StatusOK
+	require.NoError(t, c.Stop(ctx))
+	assert.False(t, c.MayServePool(), "a stopped client serves nobody")
+}
+
 func TestAPI_RegisterRejectsEmptyBody(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/peer/register", func(w http.ResponseWriter, r *http.Request) {
@@ -1857,4 +1993,50 @@ func TestAPIFollowsSameOriginRedirects(t *testing.T) {
 	_, err := NewAPI(srv.Client(), srv.URL+"/v1", "dev").Heartbeat(context.Background(), "route", 2, RelayUsage{})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"route_id": "route", "active_clients": 2.0}, got)
+}
+
+// TestErrorTypes_WalksJoinedErrors checks that errorTypes names every error in a wrap tree, through joins and multi-%w, so
+// an unclassified failure can be classified from its log without its text.
+func TestErrorTypes_WalksJoinedErrors(t *testing.T) {
+	leaf := &APIError{}
+	err := fmt.Errorf("start: %w", errors.Join(context.DeadlineExceeded, leaf))
+	got := errorTypes(err)
+	assert.Contains(t, got, "*errors.joinError")
+	assert.Contains(t, got, "*peer.APIError")
+	assert.Contains(t, got, "context.deadlineExceededError")
+}
+
+// TestClient_MayServePoolHoldsThroughTeardown checks that MayServePool stays
+// true until the box is closed: Stop clears active first, and a hand-off racing
+// the teardown must still see the pool and wait for it rather than return while
+// the old box may relay.
+func TestClient_MayServePoolHoldsThroughTeardown(t *testing.T) {
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	t.Cleanup(settings.Reset)
+	srv := newStubServer(t)
+	inDeregister, release := make(chan struct{}), make(chan struct{})
+	srv.onDeregister = func() {
+		close(inDeregister)
+		<-release
+	}
+	c := newTestClient(t, &fakeForwarder{}, &fakeBoxService{}, srv, func(cfg *Config) {
+		cfg.HeartbeatInterval = time.Hour
+	})
+	ctx := context.Background()
+	require.NoError(t, c.Start(ctx))
+	require.True(t, c.MayServePool())
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- c.Stop(ctx) }()
+	select {
+	case <-inDeregister:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("never deregistered")
+	}
+	assert.False(t, c.IsActive(), "Stop has cleared active")
+	assert.True(t, c.MayServePool(), "the box hasn't closed yet")
+	close(release)
+	require.NoError(t, <-stopped)
+	assert.False(t, c.MayServePool())
 }

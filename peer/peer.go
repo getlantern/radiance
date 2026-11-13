@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
+	"github.com/getlantern/radiance/internal/hostaccess"
 	rlog "github.com/getlantern/radiance/log"
 )
 
@@ -126,14 +129,23 @@ type Status struct {
 	ExternalIP   string    `json:"external_ip,omitempty"`
 	ExternalPort uint16    `json:"external_port,omitempty"`
 	RouteID      string    `json:"route_id,omitempty"`
+	// PairingsOnly is whether the run this status describes served only the
+	// device's helper pairings (Config.PairingsOnly), rather than Share My
+	// Connection.
+	PairingsOnly bool `json:"pairings_only,omitempty"`
 }
 
 // Config plumbs in dependencies. Zero-valued fields fall back to production
 // defaults; HeartbeatInterval, HeartbeatTimeout, and CredRotationInterval
 // exist so tests can drive the loops without sleeping a full minute / hour.
 type Config struct {
-	API                  *API
-	NewForwarder         func(ctx context.Context) (portForwarder, error)
+	API          *API
+	NewForwarder func(ctx context.Context) (portForwarder, error)
+	// PhysicalControl, if set, returns the socket control that keeps port
+	// mapping off the VPN tunnel, from discovering the gateway to every
+	// request to it and the LAN address mapped to, or nil with no tunnel. It
+	// applies to the default NewForwarder.
+	PhysicalControl      func() control.Func
 	BuildBoxService      boxFactory
 	HeartbeatInterval    time.Duration
 	HeartbeatTimeout     time.Duration
@@ -154,6 +166,11 @@ type Config struct {
 	// Live receives the connections that came through a helper pairing, for
 	// the volunteer's live per-friend status. Nil means helper.DefaultLive.
 	Live *helper.LiveTracker
+	// PairingsOnly, if set, reports whether this run serves only the device's
+	// helper pairings, whatever "help others too" says: the volunteer runs
+	// for its pairings with Share My Connection off. It is read at each
+	// registration, like the setting.
+	PairingsOnly func() bool
 }
 
 // liveOwner groups this package's connections in the LiveTracker.
@@ -172,6 +189,9 @@ const defaultBoxCloseTimeout = 5 * time.Second
 // Re-Starting a stopped Client is allowed.
 type Client struct {
 	cfg Config
+
+	// poolMaybe backs MayServePool.
+	poolMaybe atomic.Bool
 
 	mu sync.Mutex
 	// startingDone is created when Start sets starting=true and closed when
@@ -348,7 +368,10 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, errors.New("peer: Config.API is required")
 	}
 	if cfg.NewForwarder == nil {
-		cfg.NewForwarder = newDefaultForwarder
+		physical := cfg.PhysicalControl
+		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
+			return newDefaultForwarder(ctx, boundTo(physical)...)
+		}
 	}
 	if cfg.BuildBoxService == nil {
 		cfg.BuildBoxService = defaultBuildBoxService
@@ -409,6 +432,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		success   bool
 		fwd       portForwarder
 		regResp   *RegisterResponse
+		regPool   bool
 		box       boxService
 		runCtx    context.Context
 		cancelRun context.CancelFunc
@@ -449,6 +473,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		if regResp != nil {
 			_ = c.cfg.API.Deregister(cleanupCtx, regResp.RouteID)
 		}
+		c.poolMaybe.Store(false)
 		if fwd != nil {
 			_ = fwd.UnmapPort(cleanupCtx)
 		}
@@ -478,8 +503,16 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 					slog.Info("peer: start canceled before it finished",
 						"phase", failedPhase, "err", retErr)
 				} else {
-					slog.Error("peer: start failed", "phase", failedPhase,
-						"reason", named.Reason, "err", retErr)
+					if c.pairingsOnly() {
+						// A background attempt that is retried and that
+						// routers without UPnP fail routinely; the error can
+						// quote an API body, so it's left out.
+						slog.Warn("peer: pairings-only start failed", "phase", failedPhase,
+							"reason", named.Reason)
+					} else {
+						slog.Error("peer: start failed", "phase", failedPhase,
+							"reason", named.Reason, "err", retErr)
+					}
 				}
 				reason = named.Reason
 				retErr = named
@@ -487,8 +520,14 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 				// Unnamed, so the raw wrap is all the user gets — worth a
 				// log line of its own, since a reason we cannot classify is
 				// the signal that this list needs another entry.
-				slog.Error("peer: start failed with an unclassified error",
-					"phase", failedPhase, "err", retErr)
+				if c.pairingsOnly() {
+					// The types, not the text, which can quote an API body.
+					slog.Warn("peer: pairings-only start failed with an unclassified error",
+						"phase", failedPhase, "error_types", errorTypes(retErr))
+				} else {
+					slog.Error("peer: start failed with an unclassified error",
+						"phase", failedPhase, "err", retErr)
+				}
 			}
 			errMsg = retErr.Error()
 		}
@@ -518,11 +557,10 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	}
 
 	c.emitPhase(PhaseRegistering, "")
-	regResp, err = c.cfg.API.Register(ctx, RegisterRequest{
+	regResp, regPool, err = c.register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: mapping.ExternalPort,
 		InternalPort: mapping.InternalPort,
-		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("register with lantern-cloud: %w", err)
@@ -677,6 +715,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 
 	c.mu.Lock()
 	c.active = true
+	c.commitPool(regPool)
 	c.registration++
 	c.forwarder = fwd
 	c.box = box
@@ -704,6 +743,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		ExternalPort: mapping.ExternalPort,
 		RouteID:      regResp.RouteID,
 	}
+	c.tagStatusLocked()
 	statusSnapshot := c.status
 	c.mu.Unlock()
 
@@ -723,7 +763,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 		"heartbeat", heartbeat,
 	)
 	success = true
-	events.Emit(StatusEvent{Status: statusSnapshot})
+	c.publishStatus(statusSnapshot)
 	return nil
 }
 
@@ -827,9 +867,10 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	c.clearGroupsLocked()
 	c.runCtx = nil
 	c.status = Status{Phase: PhaseStopping}
+	c.tagStatusLocked()
 	stoppingSnapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: stoppingSnapshot})
+	c.publishStatus(stoppingSnapshot)
 
 	// Suppress the connection listener BEFORE box.Close. peerconn.Notify
 	// reads its registered listener under an RLock and releases it before
@@ -860,6 +901,9 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 		}
 		slog.Warn("peer client sing-box close failed", "err", err)
 	}
+	// Only now does no box serve: a hand-off racing this teardown must still
+	// see the pool, and re-register or wait for it.
+	c.poolMaybe.Store(false)
 	if err := fwd.UnmapPort(ctx); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("unmap port: %w", err)
@@ -870,9 +914,10 @@ func (c *Client) stopHeld(ctx context.Context, target stopTarget) (bool, error) 
 	slog.Info("peer client stopped", "route_id", routeID)
 	c.mu.Lock()
 	c.status = Status{Phase: PhaseIdle}
+	c.tagStatusLocked()
 	idleSnapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: idleSnapshot})
+	c.publishStatus(idleSnapshot)
 	return true, firstErr
 }
 
@@ -886,6 +931,92 @@ func (c *Client) CurrentStatus() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.status
+}
+
+// MayServePool reports whether this client's box may be serving the general
+// pool, erring toward true: false means it is known not to be.
+func (c *Client) MayServePool() bool {
+	return c.poolMaybe.Load()
+}
+
+// register registers the route with lantern-cloud, with serve_pool as this run
+// wants it, and reports whether that registration serves the pool. The caller
+// commits the result with commitPool.
+func (c *Client) register(ctx context.Context, req RegisterRequest) (*RegisterResponse, bool, error) {
+	// Set before the setting is read, so a caller racing this registration
+	// sees the pool it may register.
+	was := c.poolMaybe.Swap(true)
+	req.ServePool = c.servePool()
+	pool := req.ServePool == nil || *req.ServePool
+	if !pool {
+		// A pool-free registration can't add the pool, failed or not.
+		c.poolMaybe.Store(was)
+	}
+	resp, err := c.cfg.API.Register(ctx, req)
+	return resp, pool, err
+}
+
+// commitPool records the pool setting of the registration the running box now
+// serves.
+func (c *Client) commitPool(pool bool) {
+	if !pool {
+		c.poolMaybe.Store(false)
+	}
+}
+
+// pairingsOnly reports whether this run serves only the device's helper
+// pairings (Config.PairingsOnly).
+func (c *Client) pairingsOnly() bool {
+	return c.cfg.PairingsOnly != nil && c.cfg.PairingsOnly()
+}
+
+// errorTypes lists the dynamic types in err's wrap tree, breadth first and
+// following joined and multi-%w errors too: enough to tell which error to
+// classify without its text.
+func errorTypes(err error) string {
+	var types []string
+	queue := []error{err}
+	for len(queue) > 0 && len(types) < 12 {
+		e := queue[0]
+		queue = queue[1:]
+		if e == nil {
+			continue
+		}
+		types = append(types, fmt.Sprintf("%T", e))
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			queue = append(queue, u.Unwrap()...)
+		case interface{ Unwrap() error }:
+			queue = append(queue, u.Unwrap())
+		}
+	}
+	return strings.Join(types, ", ")
+}
+
+// tagStatusLocked records on c.status which kind of run it describes. The
+// caller holds c.mu.
+func (c *Client) tagStatusLocked() {
+	c.status.PairingsOnly = c.pairingsOnly()
+}
+
+// RetagStatus re-records which kind of run the current status describes,
+// after a hand-off between sharing and pairings-only changed it without a new
+// phase.
+func (c *Client) RetagStatus() {
+	c.mu.Lock()
+	c.tagStatusLocked()
+	c.mu.Unlock()
+}
+
+// publishStatus emits s for the sharing UI, unless it describes a run that
+// serves only the device's helper pairings: Share My Connection is off then,
+// and a background pairings-only run must not show as sharing, or as failing
+// to.
+func (c *Client) publishStatus(s Status) {
+	if s.PairingsOnly {
+		return
+	}
+	events.Emit(StatusEvent{Status: s})
 }
 
 // emitPhase updates c.status.Phase under the lock and emits a snapshot.
@@ -911,9 +1042,10 @@ func (c *Client) emitStatus(p Phase, errMsg string, reason Reason) {
 	// events.
 	c.status.Reason = reason
 	c.status.Active = (p == PhaseServing)
+	c.tagStatusLocked()
 	snapshot := c.status
 	c.mu.Unlock()
-	events.Emit(StatusEvent{Status: snapshot})
+	c.publishStatus(snapshot)
 }
 
 // currentPhase reports the phase Start had reached, which is the phase a
@@ -1274,11 +1406,10 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get external ip: %w", err)
 	}
-	regResp, err := c.cfg.API.Register(ctx, RegisterRequest{
+	regResp, regPool, err := c.register(ctx, RegisterRequest{
 		ExternalIP:   externalIP,
 		ExternalPort: extPort,
 		InternalPort: intPort,
-		ServePool:    servePool(),
 	})
 	if err != nil {
 		return fmt.Errorf("re-register: %w", err)
@@ -1416,6 +1547,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	}
 	c.box = newBox
 	c.routeID = regResp.RouteID
+	c.commitPool(regPool)
 	c.boxOptions = options
 	c.baseShortIDs = newBase
 	// Reconcile the new box with the current record, which a heartbeat may
@@ -1652,9 +1784,47 @@ func chooseManualForwarder(log *slog.Logger, logPort bool) portForwarder {
 	return nil
 }
 
-func newDefaultForwarder(ctx context.Context) (portForwarder, error) {
-	return newForwarder(ctx, pickManualForwarder())
+func newDefaultForwarder(ctx context.Context, opts ...portforward.Option) (portForwarder, error) {
+	return newForwarder(ctx, pickManualForwarder(), opts...)
 }
+
+// boundTo is the option that keeps a forwarder's sockets off the VPN tunnel,
+// or none without a way to find the physical interface.
+func boundTo(physical func() control.Func) []portforward.Option {
+	if fn := currentPhysical(physical); fn != nil {
+		return []portforward.Option{portforward.BoundTo(fn)}
+	}
+	return nil
+}
+
+// currentPhysical is a control that binds each socket through the control
+// physical returns when the socket is made, or nil with no physical. A
+// forwarder outlives the VPN state it was made under, renewing its mappings
+// through a connect, restart or disconnect: one made with the VPN off must
+// bind once it connects, and a control kept from an earlier tunnel reads
+// that tunnel's closed interface monitor. With no tunnel running, a socket
+// needs no binding.
+func currentPhysical(physical func() control.Func) control.Func {
+	if physical == nil {
+		return nil
+	}
+	return func(network, address string, conn syscall.RawConn) error {
+		if fn := physical(); fn != nil {
+			return fn(network, address, conn)
+		}
+		return nil
+	}
+}
+
+// ManualPort is the manual port the peer and reverse clients bind, from the
+// setting or the environment, or 0 if there is none. Both clients resolve it
+// this way, so a caller deciding whether they would collide must too.
+func ManualPort() uint16 {
+	// Quietly: chooseManualForwarder logs its choice, which Start logs again.
+	return reverseManualPort(discardLog)
+}
+
+var discardLog = slog.New(slog.DiscardHandler)
 
 // reverseManualPort is the configured manual port, or 0, found without the
 // port in the log.
@@ -1705,11 +1875,12 @@ func internalPortSkipping(i int, avoid uint16) uint16 {
 
 // servePool returns nil when this peer also serves the general pool, so the
 // register request leaves serve_pool out and the server applies its default,
-// and a pointer to false when the user has limited it to helper pairings.
-// It is read at each registration, so a change takes effect at the next one:
-// the next Start or the hourly credential rotation.
-func servePool() *bool {
-	if settings.Get(settings.PeerServePoolKey) == nil || settings.GetBool(settings.PeerServePoolKey) {
+// and a pointer to false when it serves only helper pairings: the user limited
+// it to them, or it runs only for them (Config.PairingsOnly). It is read at
+// each registration, so a change takes effect at the next one: the next Start
+// or the hourly credential rotation.
+func (c *Client) servePool() *bool {
+	if !c.pairingsOnly() && settings.PeerServesPool() {
 		return nil
 	}
 	off := false
@@ -2118,6 +2289,10 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 	if err != nil {
 		return nil, fmt.Errorf("decode sing-box options: %w", err)
 	}
+	// The registry checks don't see route rule actions.
+	if err := hostaccess.CheckOptions(opts); err != nil {
+		return nil, fmt.Errorf("check sing-box options: %w", err)
+	}
 	bs, err := sbox.New(sbox.Options{
 		Context: ctx,
 		Options: opts,
@@ -2131,14 +2306,15 @@ func defaultBuildBoxService(ctx context.Context, options string) (boxService, er
 // newPeerBoxContext augments ctx with everything one peer box needs: the
 // sing-box and lantern-box protocol registries plus this box's own sing-box
 // log factory. The caller's cancellation is preserved, so a Stop-induced
-// cancel still reaches the box.
+// cancel still reaches the box. The registries refuse outbounds, endpoints,
+// DNS servers, services and certificate providers that [hostaccess] denies.
 //
 // The registries are what let sing-box decode custom inbounds like the
 // samizdat stanza from /peer/register; without them the decode fails with
 // "missing inbound fields registry in context". Registering the log factory
 // routes this box's router and dial errors to lantern.log instead of
 // sing-box's stderr default. Both are scoped to the fresh registry
-// box.Context installs, so the peer and the main tunnel coexist without
+// hostaccess.Context installs, so the peer and the main tunnel coexist without
 // stomping on each other.
 func newPeerBoxContext(ctx context.Context) context.Context {
 	return newBoxContextLoggingTo(ctx, slog.Default().Handler())
@@ -2146,7 +2322,7 @@ func newPeerBoxContext(ctx context.Context) context.Context {
 
 // newBoxContextLoggingTo is newPeerBoxContext with the box logging to h.
 func newBoxContextLoggingTo(ctx context.Context, h slog.Handler) context.Context {
-	ctx = box.Context(ctx)
+	ctx = hostaccess.Context(ctx)
 	service.MustRegister[sblog.Factory](ctx, lblog.NewFactory(rlog.RedactConnectionInfo(h)))
 	return ctx
 }

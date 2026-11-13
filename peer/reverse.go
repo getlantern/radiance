@@ -78,8 +78,9 @@ type ReverseConfig struct {
 	// reads it once: a run started while it is on maps a port of its own
 	// rather than the manual port, which peer sharing binds.
 	PeerShareActive func() bool
-	// LocalIPControl, if set, returns the socket control that keeps a port
-	// mapping's LAN address lookup off the VPN tunnel, or nil with no tunnel.
+	// LocalIPControl, if set, returns the socket control that keeps port
+	// mapping off the VPN tunnel, from discovering the gateway to every
+	// request to it and the LAN address mapped to, or nil with no tunnel.
 	LocalIPControl   func() control.Func
 	Now              func() time.Time
 	RegisterInterval time.Duration
@@ -171,7 +172,7 @@ type reverseState struct {
 func NewReverseClient(cfg ReverseConfig) *ReverseClient {
 	if cfg.NewForwarder == nil {
 		cfg.NewForwarder = func(ctx context.Context) (portForwarder, error) {
-			return newForwarder(ctx, nil, portforward.QuietLogs())
+			return newForwarder(ctx, nil, append([]portforward.Option{portforward.QuietLogs()}, boundTo(cfg.LocalIPControl)...)...)
 		}
 	}
 	if cfg.Now == nil {
@@ -556,7 +557,7 @@ func (c *ReverseClient) mapPort(ctx context.Context) bool {
 		q.SetQuietLogs(true)
 	}
 	if lf, ok := fwd.(localIPControlSetter); ok && c.cfg.LocalIPControl != nil {
-		if fn := c.cfg.LocalIPControl(); fn != nil {
+		if fn := currentPhysical(c.cfg.LocalIPControl); fn != nil {
 			lf.SetLocalIPControl(fn)
 		}
 	}

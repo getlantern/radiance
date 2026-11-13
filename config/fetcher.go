@@ -91,7 +91,10 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		// gate such outbounds on the capability rather than the client version.
 		// Advertise UnboundedTuning because our lantern-box's Unbounded outbound
 		// accepts a "tuning" option, which the server withholds from older clients.
-		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning},
+		// Advertise OutlineSmartDialer only with lantern-box v0.0.219 or later,
+		// whose outline outbound accepts the server's smart-dialer config and
+		// dials a rule-set download's host.
+		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer},
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred

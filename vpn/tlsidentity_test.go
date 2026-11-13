@@ -60,7 +60,7 @@ func TestBuildOptionsVerifiesTLSWithoutChangingReferences(t *testing.T) {
 				input, err = json.UnmarshalExtendedContext[O.Options](ctx, encoded)
 				require.NoError(t, err)
 			}
-			options, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: input, NonSelectableOutbounds: []string{"helper"}})
+			options, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: input, NonSelectableOutbounds: []string{"helper"}})
 			require.NoError(t, err)
 			found := make(map[string]O.Outbound)
 			for _, out := range options.Outbounds {

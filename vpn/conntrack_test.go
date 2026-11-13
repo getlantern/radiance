@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"context"
 	"io"
 	"net"
 	"runtime"
@@ -8,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	A "github.com/sagernet/sing-box/adapter"
+	R "github.com/sagernet/sing-box/route/rule"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/stretchr/testify/assert"
@@ -69,7 +73,7 @@ type dummyAddr string
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
 
-// wrapTCP mirrors clashServer.RoutedConnection's counter wiring so byte counting can be exercised
+// wrapTCP mirrors connTracker.RoutedConnection's counter wiring so byte counting can be exercised
 // without a full tunnel.
 func wrapTCP(ct *connTracker, r *record, conn net.Conn) *tcpConn {
 	c := &tcpConn{
@@ -328,4 +332,195 @@ func TestConnTracker_CloseWaitsForInFlightWriteAccounting(t *testing.T) {
 	assert.Equal(t, int64(len(msg)), tr.pending[0].down)
 	require.Len(t, obs.closes, 1)
 	assert.Equal(t, int64(len(msg)), obs.closes[0].Downlink)
+}
+
+type fakeFlowHandle struct {
+	flow   *flowConn
+	closes int
+}
+
+func (h *fakeFlowHandle) CloseFlow() {
+	h.closes++
+	h.flow.CloseFlow(tun.FlowCloseReset)
+}
+
+func TestFlowConnTracksFlow(t *testing.T) {
+	ct := newConnTracker()
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+	assert.Zero(t, ct.activeConnectionCount(), "a flow joins only once attached")
+
+	handle := &fakeFlowHandle{flow: f}
+	f.AttachFlow(handle)
+	require.EqualValues(t, 1, ct.activeConnectionCount())
+	f.CountForward(3)
+	f.CountReverse(5)
+	up, down := ct.Total()
+	assert.EqualValues(t, 3, up)
+	assert.EqualValues(t, 5, down)
+
+	ct.closeRecord(r)
+	assert.Equal(t, 1, handle.closes, "closing the record ends the flow through its handle")
+	assert.Zero(t, ct.activeConnectionCount())
+	f.CloseFlow(tun.FlowCloseFinished)
+	assert.Zero(t, ct.activeConnectionCount(), "a flow leaves once")
+}
+
+func TestFlowConnClosedBeforeAttachNeverJoins(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+
+	f.CloseFlow(tun.FlowCloseReset)
+	f.AttachFlow(&fakeFlowHandle{flow: f})
+	assert.Zero(t, ct.activeConnectionCount())
+	_, ok := ct.conns.Load(r.id)
+	assert.False(t, ok)
+	assert.Empty(t, obs.closes, "a flow that never joined reports no close")
+}
+
+func TestFlowConnConcurrentAttachAndClose(t *testing.T) {
+	ct := newConnTracker()
+	for range 200 {
+		r := newRec("wg")
+		f := &flowConn{rec: r, ct: ct}
+		r.closer = f
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.AttachFlow(&fakeFlowHandle{flow: f})
+		}()
+		go func() {
+			defer wg.Done()
+			f.CloseFlow(tun.FlowCloseReset)
+		}()
+		wg.Wait()
+	}
+	assert.Zero(t, ct.activeConnectionCount())
+	for range ct.conns.Iter() {
+		t.Fatal("a flow outlived its close")
+	}
+}
+
+type taggedOutbound struct {
+	A.Outbound
+	tag string
+}
+
+func (o taggedOutbound) Tag() string  { return o.tag }
+func (o taggedOutbound) Type() string { return "stub" }
+
+type taggedGroup struct {
+	taggedOutbound
+	now string
+}
+
+func (g taggedGroup) Now() string   { return g.now }
+func (g taggedGroup) All() []string { return []string{g.now} }
+
+type routeRule struct {
+	A.Rule
+	action A.RuleAction
+}
+
+func (r routeRule) Action() A.RuleAction { return r.action }
+func (r routeRule) String() string       { return "stub" }
+
+func TestRoutedFlowChainStartsAtRuleOutbound(t *testing.T) {
+	endpoint := taggedOutbound{tag: "wg"}
+	ct := newConnTracker()
+	ct.outbound = stubOutboundManager{outbounds: map[string]A.Outbound{
+		AutoSelectTag: taggedGroup{taggedOutbound: taggedOutbound{tag: AutoSelectTag}, now: "wg"},
+		"wg":          endpoint,
+	}}
+	rule := routeRule{action: &R.RuleActionRoute{Outbound: AutoSelectTag}}
+
+	// sing-box passes the endpoint the group resolved to, not the group.
+	f, ok := ct.RoutedFlow(context.Background(), A.InboundContext{}, rule, endpoint).(*flowConn)
+	require.True(t, ok)
+	assert.Equal(t, []string{"wg", AutoSelectTag}, f.rec.chain)
+
+	handle := &fakeFlowHandle{flow: f}
+	f.AttachFlow(handle)
+	ct.closeMatchedTo(AutoSelectTag)
+	assert.Equal(t, 1, handle.closes, "a mode switch closes flows routed through the group")
+	assert.Zero(t, ct.activeConnectionCount())
+}
+
+func TestRoutedFlowKeepsResolvedEndpointAfterGroupSwitch(t *testing.T) {
+	endpoint := taggedOutbound{tag: "wg-a"}
+	ct := newConnTracker()
+	ct.outbound = stubOutboundManager{outbounds: map[string]A.Outbound{
+		AutoSelectTag: taggedGroup{taggedOutbound: taggedOutbound{tag: AutoSelectTag}, now: "wg-b"},
+		"wg-a":        endpoint,
+		"wg-b":        taggedOutbound{tag: "wg-b"},
+	}}
+	rule := routeRule{action: &R.RuleActionRoute{Outbound: AutoSelectTag}}
+
+	// auto switched to wg-b after sing-box routed the flow to wg-a.
+	f, ok := ct.RoutedFlow(context.Background(), A.InboundContext{}, rule, endpoint).(*flowConn)
+	require.True(t, ok)
+	assert.Equal(t, "wg-a", f.rec.outbound)
+	assert.Equal(t, []string{"wg-a", AutoSelectTag}, f.rec.chain)
+}
+
+func TestFlowConnDropsBytesCountedAfterClose(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	r := newRec("wg")
+	f := &flowConn{rec: r, ct: ct}
+	r.closer = f
+	f.AttachFlow(&fakeFlowHandle{flow: f})
+	f.CountForward(3)
+
+	f.CloseFlow(tun.FlowCloseReset)
+	f.CountForward(7)
+	f.CountReverse(5)
+	require.Len(t, obs.closes, 1)
+	assert.EqualValues(t, 3, obs.closes[0].Uplink)
+	assert.Zero(t, obs.closes[0].Downlink)
+	up, down := ct.Total()
+	assert.EqualValues(t, 3, up)
+	assert.Zero(t, down)
+}
+
+func TestFlowConnCountsConcurrentlyWithClose(t *testing.T) {
+	ct := newConnTracker()
+	obs := &recordingObserver{}
+	ct.SetObserver(obs)
+	for range 100 {
+		r := newRec("wg")
+		f := &flowConn{rec: r, ct: ct}
+		r.closer = f
+		f.AttachFlow(&fakeFlowHandle{flow: f})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				f.CountForward(1)
+				f.CountReverse(1)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			f.CloseFlow(tun.FlowCloseReset)
+		}()
+		wg.Wait()
+	}
+	// Every counted byte lands in a flow's close report.
+	var up, down int64
+	for _, c := range obs.closes {
+		up += c.Uplink
+		down += c.Downlink
+	}
+	totalUp, totalDown := ct.Total()
+	assert.Equal(t, totalUp, up)
+	assert.Equal(t, totalDown, down)
 }
