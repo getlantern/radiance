@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/testutil"
 )
 
 // TestMain initializes the settings package once for the whole test
@@ -35,6 +36,10 @@ import (
 // explicitly: capture m.Run's exit code, RemoveAll, then exit with
 // that code. A naked defer + os.Exit would silently leak a directory
 // per test invocation.
+//
+// The widget's HTTP clients dial through the fixed bypass proxy port, so
+// the package holds testutil.LockBypassPort while its tests run: another
+// package's fake proxy on that port would otherwise take their requests.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "radiance-unbounded-settings-*")
 	if err != nil {
@@ -44,7 +49,9 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(dir)
 		panic(err)
 	}
+	unlock := testutil.LockBypassPort()
 	code := m.Run()
+	unlock()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
