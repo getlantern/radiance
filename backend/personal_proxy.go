@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
@@ -77,10 +79,23 @@ func (r *LocalBackend) personalProxyServer(friend string) (*servers.Server, bool
 	return &servers.Server{Tag: vpn.PersonalProxySelection(friend), Type: lbC.TypeMutableURLTest}, true
 }
 
+// connectTicketWait bounds how long a connect waits for the first ticket fetch
+// before judging a friend reachable only through rooms. A variable so tests
+// can shorten it.
+var connectTicketWait = 10 * time.Second
+
 // checkConnectSelection refuses a connect that newly chooses a friend who is
 // not selectable. The persisted friend is exempt, so a connect can restore it
 // before the ticket source is first answered.
-func (r *LocalBackend) checkConnectSelection(tag string) error {
+//
+// A friend reachable only through rooms is selectable once its inviter ticket
+// is held, and tickets are fetched only after the backend starts. On macOS and
+// iOS the backend starts with the tunnel, a moment before this check, so with
+// auto-connect on (no exemption) the check would always find no ticket yet,
+// refuse, and stop the backend with the fetch still running. So when rooms are
+// the friend's only way and lantern-cloud hasn't answered yet, it waits for
+// the first fetch, up to connectTicketWait.
+func (r *LocalBackend) checkConnectSelection(ctx context.Context, tag string) error {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
 	if !ok {
 		return nil
@@ -90,7 +105,14 @@ func (r *LocalBackend) checkConnectSelection(tag string) error {
 		!settings.GetBool(settings.AutoConnectKey) && persisted.Tag == tag {
 		return nil
 	}
-	if !r.friendReach(friend).selectable() {
+	f := r.friendReach(friend)
+	if !f.selectable() && f.consumer && !f.answered && r.helperTickets != nil {
+		waitCtx, cancel := context.WithTimeout(ctx, connectTicketWait)
+		r.helperTickets.WaitFetched(waitCtx)
+		cancel()
+		f = r.friendReach(friend)
+	}
+	if !f.selectable() {
 		return fmt.Errorf("failed to connect: %w", vpn.ErrPersonalProxyUnavailable)
 	}
 	return nil

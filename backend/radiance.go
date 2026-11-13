@@ -1787,7 +1787,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 			return fmt.Errorf("no server found with tag %s", tag)
 		}
 	}
-	if err := r.checkConnectSelection(tag); err != nil {
+	if err := r.checkConnectSelection(ctx, tag); err != nil {
 		return err
 	}
 	bOptions := r.getBoxOptions()
