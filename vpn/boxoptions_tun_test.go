@@ -4,14 +4,22 @@ package vpn
 
 import (
 	"context"
+	"maps"
+	"net"
 	"net/netip"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/miekg/dns"
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	sbdns "github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/dns/transport/hosts"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badjson"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -121,7 +129,7 @@ func TestBuildOptions_SplitTunnelResolvesWithSystemDNS(t *testing.T) {
 	}{
 		{name: "base DNS"},
 		{name: "config DNS", dns: serverDNS(remote)},
-		{name: "config DNS with system server", dns: serverDNS(remote, splitTunnelDNSServers()[0])},
+		{name: "config DNS with system server", dns: serverDNS(remote, systemDNSServers()[0])},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -143,14 +151,20 @@ func TestBuildOptions_SplitTunnelResolvesWithSystemDNS(t *testing.T) {
 				assert.Equal(t, make([]O.DNSServerOptions, len(spare)), spare, "config DNS servers must not be modified")
 			}
 
-			require.GreaterOrEqual(t, len(opts.DNS.Rules), 3)
-			evaluate := opts.DNS.Rules[0].DefaultOptions.DNSRuleAction
-			assert.Equal(t, C.RuleActionTypeEvaluate, evaluate.Action, "split-tunnel evaluate must come first")
-			assert.Equal(t, systemDNSTag, evaluate.EvaluateOptions.Server)
-			assert.Equal(t, badoption.Duration(systemDNSEvaluateTimeout), evaluate.EvaluateOptions.Timeout)
-			assert.Equal(t, C.RuleActionTypeRespond, opts.DNS.Rules[1].DefaultOptions.DNSRuleAction.Action)
-			assert.Equal(t, C.RuleActionTypePredefined, opts.DNS.Rules[2].DefaultOptions.DNSRuleAction.Action,
-				"AAAA suppression must follow the split-tunnel DNS rules")
+			require.GreaterOrEqual(t, len(opts.DNS.Rules), 5)
+			for i, tag := range []string{splitTunnelTag, localNameTag} {
+				evaluate := opts.DNS.Rules[2*i].DefaultOptions.DNSRuleAction
+				assert.Equal(t, C.RuleActionTypeEvaluate, evaluate.Action, "%s evaluate", tag)
+				assert.Equal(t, systemDNSTag, evaluate.EvaluateOptions.Server)
+				assert.Equal(t, tag, evaluate.EvaluateOptions.Tag)
+				assert.Equal(t, badoption.Duration(systemDNSEvaluateTimeout), evaluate.EvaluateOptions.Timeout)
+				assert.Equal(t, C.RuleActionTypeRespond, opts.DNS.Rules[2*i+1].DefaultOptions.DNSRuleAction.Action)
+			}
+			local := opts.DNS.Rules[2].DefaultOptions
+			assert.Equal(t, []string{systemDNSTag}, []string(local.PreferredBy))
+			assert.Empty(t, local.DomainSuffix, "local-name rule must match only names the system resolver claims")
+			assert.Equal(t, C.RuleActionTypePredefined, opts.DNS.Rules[4].DefaultOptions.DNSRuleAction.Action,
+				"AAAA suppression must follow the system DNS rules")
 
 			ruleIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
 				return slices.Contains(r.DefaultOptions.RuleSet, splitTunnelTag)
@@ -170,6 +184,22 @@ func TestBuildOptions_SplitTunnelResolvesWithSystemDNS(t *testing.T) {
 	}
 }
 
+// TestBuildOptions_StartsWithSystemDNS starts a box with the real system DNS
+// server, which the local-name preferred_by match depends on.
+func TestBuildOptions_StartsWithSystemDNS(t *testing.T) {
+	options, _ := testBoxOptions(t)
+	opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
+	require.NoError(t, err)
+	opts.Inbounds = nil
+	opts.Log = &O.LogOptions{Disabled: true}
+	opts.Experimental = nil
+
+	instance, err := sbox.New(sbox.Options{Context: box.Context(context.Background()), Options: opts})
+	require.NoError(t, err)
+	t.Cleanup(func() { instance.Close() })
+	require.NoError(t, instance.Start())
+}
+
 // TestSplitTunnelDNSEndToEnd runs queries through a started box's DNS router,
 // with the system resolver replaced by fixed answers. A split-tunnel domain
 // gets its real address only when it is private; otherwise it gets a fake IP
@@ -180,15 +210,75 @@ func TestSplitTunnelDNSEndToEnd(t *testing.T) {
 	require.NoError(t, st.AddItem(TypeDomainSuffix, "example.com"))
 	require.NoError(t, st.SetEnabled(true))
 
+	test := startSystemDNSTest(t, dir, map[string]string{
+		"intranet.example.com": "192.168.9.138",
+		"public.example.com":   "203.0.113.10",
+		"other.org":            "198.51.100.1",
+	}, nil, nil)
+
+	assert.Equal(t, netip.MustParseAddr("192.168.9.138"), test.resolve("intranet.example.com", dns.TypeA),
+		"private split-tunnel answer is returned as-is")
+	for _, domain := range []string{"public.example.com", "other.org"} {
+		test.assertFakeIP(domain)
+	}
+	assert.NotContains(t, test.system.queriedNames(), "other.org")
+}
+
+// TestLocalNameDNSEndToEnd checks that a private system answer is returned
+// only for names the system resolver claims, and that no other name, however
+// local it looks, is sent to it.
+func TestLocalNameDNSEndToEnd(t *testing.T) {
+	private := map[string]string{
+		"tv.local":                 "192.168.1.40",
+		"corp-printer.example.com": "10.1.1.9",
+	}
+	answers := map[string]string{
+		"nas6.local":               "fd00::20",
+		"public-hosts.example.net": "203.0.113.9",
+		"nas.lan":                  "192.168.1.20",
+		"printer.home.arpa":        "192.168.1.30",
+		"box.internal":             "10.0.0.5",
+		"intranet.example.org":     "192.168.9.1",
+		"router":                   "192.168.1.1",
+	}
+	maps.Copy(answers, private)
+	// The local server claims hosts-file entries and .local names.
+	claimed := []string{"tv.local", "corp-printer.example.com", "nas6.local", "public-hosts.example.net", "missing.local", "slow.local"}
+	test := startSystemDNSTest(t, t.TempDir(), answers, claimed, []string{"slow.local"})
+
+	for domain, addr := range private {
+		assert.Equal(t, netip.MustParseAddr(addr), test.resolve(domain, dns.TypeA), domain)
+	}
+	assert.Equal(t, netip.MustParseAddr("fd00::20"), test.resolve("nas6.local", dns.TypeAAAA),
+		"private AAAA answer must precede AAAA suppression")
+	unclaimed := []string{"nas.lan", "printer.home.arpa", "box.internal", "intranet.example.org", "router"}
+	for _, domain := range append([]string{"public-hosts.example.net", "missing.local", "slow.local"}, unclaimed...) {
+		test.assertFakeIP(domain)
+	}
+	queried := test.system.queriedNames()
+	require.Contains(t, queried, "tv.local")
+	for _, domain := range unclaimed {
+		assert.NotContains(t, queried, domain, "only claimed names may reach the system resolver")
+	}
+}
+
+type systemDNSTest struct {
+	t      *testing.T
+	ctx    context.Context
+	router adapter.DNSRouter
+	fakeIP adapter.FakeIPStore
+	system *recordingSystemDNS
+}
+
+// startSystemDNSTest starts a box built by buildOptions with the system
+// resolver replaced by a recordingSystemDNS that returns answers, claims the
+// preferred names, and never answers the stalled ones.
+func startSystemDNSTest(t *testing.T, dir string, answers map[string]string, preferred, stalled []string) *systemDNSTest {
+	t.Helper()
 	options, _ := testBoxOptions(t)
 	opts, _, err := buildOptions(BoxOptions{BasePath: dir, Options: options})
 	require.NoError(t, err)
 
-	answers := map[string]string{
-		"intranet.example.com": "192.168.9.138",
-		"public.example.com":   "203.0.113.10",
-		"other.org":            "198.51.100.1",
-	}
 	predefined := new(badjson.TypedMap[string, badoption.Listable[netip.Addr]])
 	for domain, addr := range answers {
 		predefined.Put(domain, badoption.Listable[netip.Addr]{netip.MustParseAddr(addr)})
@@ -196,7 +286,7 @@ func TestSplitTunnelDNSEndToEnd(t *testing.T) {
 	i := slices.IndexFunc(opts.DNS.Servers, func(s O.DNSServerOptions) bool { return s.Tag == systemDNSTag })
 	require.NotEqual(t, -1, i)
 	opts.DNS.Servers[i] = O.DNSServerOptions{
-		Type:    C.DNSTypeHosts,
+		Type:    recordingSystemDNSType,
 		Tag:     systemDNSTag,
 		Options: &O.HostsDNSServerOptions{Predefined: predefined},
 	}
@@ -204,34 +294,109 @@ func TestSplitTunnelDNSEndToEnd(t *testing.T) {
 	opts.Log = &O.LogOptions{Disabled: true}
 	opts.Experimental = nil
 
-	ctx := box.Context(context.Background())
+	test := &systemDNSTest{t: t}
+	registry := include.DNSTransportRegistry()
+	sbdns.RegisterTransport(registry, recordingSystemDNSType, func(ctx context.Context, logger log.ContextLogger, tag string, options O.HostsDNSServerOptions) (adapter.DNSTransport, error) {
+		inner, err := hosts.NewTransport(ctx, logger, tag, options)
+		if err != nil {
+			return nil, err
+		}
+		test.system = &recordingSystemDNS{DNSTransport: inner, preferred: preferred, stalled: stalled}
+		return test.system, nil
+	})
+	ctx := service.ContextWith[O.DNSTransportOptionsRegistry](context.Background(), registry)
+	ctx = service.ContextWith[adapter.DNSTransportRegistry](ctx, registry)
+	ctx = box.Context(ctx)
 	instance, err := sbox.New(sbox.Options{Context: ctx, Options: opts})
 	require.NoError(t, err)
 	require.NoError(t, instance.Start())
 	t.Cleanup(func() { instance.Close() })
 
-	router := service.FromContext[adapter.DNSRouter](ctx)
-	fakeIP := service.FromContext[adapter.DNSTransportManager](ctx).FakeIP().Store()
-	resolve := func(domain string) netip.Addr {
-		t.Helper()
-		query := new(dns.Msg)
-		query.SetQuestion(dns.Fqdn(domain), dns.TypeA)
-		response, err := router.Exchange(adapter.WithContext(ctx, &adapter.InboundContext{}), query, adapter.DNSQueryOptions{})
-		require.NoError(t, err)
-		require.Len(t, response.Answer, 1)
-		a, ok := response.Answer[0].(*dns.A)
-		require.True(t, ok)
-		addr, _ := netip.AddrFromSlice(a.A)
-		return addr.Unmap()
-	}
+	test.ctx = ctx
+	test.router = service.FromContext[adapter.DNSRouter](ctx)
+	test.fakeIP = service.FromContext[adapter.DNSTransportManager](ctx).FakeIP().Store()
+	return test
+}
 
-	assert.Equal(t, netip.MustParseAddr("192.168.9.138"), resolve("intranet.example.com"),
-		"private split-tunnel answer is returned as-is")
-	for _, domain := range []string{"public.example.com", "other.org"} {
-		addr := resolve(domain)
-		require.True(t, fakeIP.Contains(addr), "%s should get a fake IP, got %s", domain, addr)
-		mapped, ok := fakeIP.Lookup(addr)
-		require.True(t, ok)
-		assert.Equal(t, domain, mapped, "fake IP must map back to the queried domain")
+// resolve returns domain's single answer of qtype.
+func (s *systemDNSTest) resolve(domain string, qtype uint16) netip.Addr {
+	s.t.Helper()
+	query := new(dns.Msg)
+	query.SetQuestion(dns.Fqdn(domain), qtype)
+	response, err := s.router.Exchange(adapter.WithContext(s.ctx, &adapter.InboundContext{}), query, adapter.DNSQueryOptions{})
+	require.NoError(s.t, err, domain)
+	require.Len(s.t, response.Answer, 1, domain)
+	var ip net.IP
+	switch rr := response.Answer[0].(type) {
+	case *dns.A:
+		ip = rr.A
+	case *dns.AAAA:
+		ip = rr.AAAA
+	default:
+		require.Failf(s.t, "unexpected answer type", "%s: %T", domain, rr)
 	}
+	addr, _ := netip.AddrFromSlice(ip)
+	return addr.Unmap()
+}
+
+// assertFakeIP checks that domain gets a fake IP mapping back to it.
+func (s *systemDNSTest) assertFakeIP(domain string) {
+	s.t.Helper()
+	addr := s.resolve(domain, dns.TypeA)
+	require.True(s.t, s.fakeIP.Contains(addr), "%s should get a fake IP, got %s", domain, addr)
+	mapped, ok := s.fakeIP.Lookup(addr)
+	require.True(s.t, ok, domain)
+	assert.Equal(s.t, domain, mapped, "fake IP must map back to the queried domain")
+}
+
+const recordingSystemDNSType = "recording-system"
+
+// recordingSystemDNS stands in for the local system resolver: it claims only
+// preferred names for preferred_by, records every name it is asked to resolve,
+// and never answers stalled names.
+type recordingSystemDNS struct {
+	adapter.DNSTransport
+	preferred []string
+	stalled   []string
+
+	access  sync.Mutex
+	queried []string
+}
+
+func (r *recordingSystemDNS) PreferredDomain(domain string) bool {
+	return slices.ContainsFunc(r.preferred, func(p string) bool { return dns.CanonicalName(p) == domain })
+}
+
+func (r *recordingSystemDNS) Exchange(ctx context.Context, message *dns.Msg) (*dns.Msg, error) {
+	if r.record(message) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return r.DNSTransport.Exchange(ctx, message)
+}
+
+func (r *recordingSystemDNS) ExchangeAsync(ctx context.Context, message *dns.Msg, callback func(*dns.Msg, error)) {
+	if r.record(message) {
+		go func() {
+			<-ctx.Done()
+			callback(nil, ctx.Err())
+		}()
+		return
+	}
+	r.DNSTransport.ExchangeAsync(ctx, message, callback)
+}
+
+// record reports whether the queried name is stalled.
+func (r *recordingSystemDNS) record(message *dns.Msg) bool {
+	name := strings.TrimSuffix(message.Question[0].Name, ".")
+	r.access.Lock()
+	defer r.access.Unlock()
+	r.queried = append(r.queried, name)
+	return slices.Contains(r.stalled, name)
+}
+
+func (r *recordingSystemDNS) queriedNames() []string {
+	r.access.Lock()
+	defer r.access.Unlock()
+	return slices.Clone(r.queried)
 }

@@ -68,8 +68,8 @@ func ReservedTags() []string {
 type BoxOptions struct {
 	BasePath string `json:"base_path,omitempty"`
 	// Options contains the main options that are merged into the base options with the exception of
-	// DNS, which replaces the base DNS options; only the AAAA-suppression rule and the split-tunnel
-	// DNS server and rules are still added. Options should contain all servers (both lantern and user).
+	// DNS, which replaces the base DNS options; only the AAAA-suppression rule and the system DNS
+	// server and its rules are still added. Options should contain all servers (both lantern and user).
 	Options O.Options `json:"options"`
 	// SmartRouting contains smart routing rules to merge into the final options.
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
@@ -453,9 +453,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
-	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, splitTunnelDNSServers())
-	// Private split-tunnel answers must be returned before AAAA suppression drops them.
-	opts.DNS.Rules = append(splitTunnelDNSRules(), opts.DNS.Rules...)
+	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, systemDNSServers())
+	// Private system-resolver answers must be returned before AAAA suppression drops them.
+	opts.DNS.Rules = slices.Concat(splitTunnelDNSRules(), localNameDNSRules(), opts.DNS.Rules)
 	if bOptions.reversePortal {
 		opts.Inbounds = append(opts.Inbounds, reversePortalInbound(bOptions.reverseMasquerade))
 	}
