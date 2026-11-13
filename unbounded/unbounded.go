@@ -125,14 +125,15 @@ type widget interface {
 	Stop()
 }
 
-// egressHTTPClient makes the widget's WebSocket handshake to the egress. With
-// the VPN on, the widget runs in the VPN's own process, whose sockets bypass
-// the tunnel while the system resolver points into it, so a default dial
-// can't resolve the egress. The bypass proxy resolves and routes around the
-// tunnel, and bypass.DialContext dials directly when the VPN isn't running.
-var egressHTTPClient = newEgressHTTPClient(bypass.DialContext)
+// bypassHTTPClient makes the widget's HTTP requests: its signaling with
+// freddie and its WebSocket handshake to the egress. With the VPN on, the
+// widget runs in the VPN's own process, whose sockets bypass the tunnel while
+// the system resolver points into it, so a default dial can't resolve either
+// host. The bypass proxy resolves and routes around the tunnel, and
+// bypass.DialContext dials directly when the VPN isn't running.
+var bypassHTTPClient = newBypassHTTPClient(bypass.DialContext)
 
-func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+func newBypassHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = dial
@@ -907,7 +908,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		// A genesis POST carries this widget's room tickets; never let a
 		// redirect replay it to another origin.
-		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
+		rtcOpt.HTTPClient = sameorigin.Client(bypassHTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
 		// freddie counts outcomes for each kind of volunteer, so the apps can be
@@ -946,7 +947,7 @@ func (m *unboundedManager) startLocked() {
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
-		egOpt.HTTPClient = egressHTTPClient
+		egOpt.HTTPClient = bypassHTTPClient
 		if ucfg != nil {
 			if ucfg.EgressAddr != "" {
 				egOpt.Addr = ucfg.EgressAddr

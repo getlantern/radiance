@@ -973,24 +973,31 @@ func TestRunHookFollowsTheWorker(t *testing.T) {
 	assert.Equal(t, []bool{true, false}, heardSoFar())
 }
 
-func TestWidgetDialsTheEgressAroundTheTunnel(t *testing.T) {
-	received := make(chan *http.Client, 1)
-	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
-		received <- eg.HTTPClient
+// Both of the widget's HTTP clients, for freddie and for the egress, go around
+// the tunnel. Signaling that resolved through the system resolver couldn't
+// reach freddie while the VPN was on, so a volunteer took no new consumers.
+func TestWidgetDialsAroundTheTunnel(t *testing.T) {
+	type clients struct{ signaling, egress *http.Client }
+	received := make(chan clients, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
+		received <- clients{rtc.HTTPClient, eg.HTTPClient}
 		return &fakeWidget{}, nil
 	})
 	defer manager.stop()
 	primeManager(t, testCfg())
 	manager.start()
 	select {
-	case client := <-received:
-		require.Same(t, egressHTTPClient, client)
+	case c := <-received:
+		require.Same(t, bypassHTTPClient, c.egress)
+		require.NotNil(t, c.signaling)
+		require.Same(t, bypassHTTPClient.Transport, c.signaling.Transport)
+		require.NotNil(t, c.signaling.CheckRedirect, "signaling still refuses cross-origin redirects")
 	case <-time.After(time.Second):
 		t.Fatal("donor startup blocked")
 	}
 }
 
-func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
+func TestBypassHTTPClientDialsWithItsDialer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
@@ -999,7 +1006,7 @@ func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
 	// The name doesn't resolve, so only a dial through the client's dialer,
 	// which sends every connection to the test server, reaches it.
 	var dialer net.Dialer
-	client := newEgressHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newBypassHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, network, srv.Listener.Addr().String())
 	})
 	require.Zero(t, client.Timeout, "websocket.Dial bounds the dial with its own context")
