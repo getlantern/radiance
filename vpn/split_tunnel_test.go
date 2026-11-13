@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -429,7 +430,7 @@ type mockRouter struct {
 }
 
 func (r *mockRouter) RuleSet(tag string) (adapter.RuleSet, bool) {
-	return r.ruleSet, true
+	return r.ruleSet, r.ruleSet != nil
 }
 
 // splitTunnelMatcher builds a live route rule from st's saved rule file.
@@ -752,4 +753,93 @@ func TestMigration(t *testing.T) {
 `
 	rule, _ := json.UnmarshalExtended[O.LogicalHeadlessRule]([]byte(want))
 	assert.Equal(t, rule, st.rule)
+}
+
+type countingDNSRouter struct {
+	adapter.DNSRouter
+	clears atomic.Int32
+}
+
+func (r *countingDNSRouter) ClearCache() { r.clears.Add(1) }
+
+// A reload of the split-tunnel rule set clears the DNS cache and closes the
+// connections opened under the previous rules, until the closer unregisters it.
+func TestResetOnSplitTunnelReload(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	router := &mockRouter{}
+	service.MustRegister[adapter.Router](ctx, router)
+	service.MustRegister(ctx, new(adapter.NetworkManager))
+	ruleSet, err := R.NewRuleSet(ctx, log.NewNOPFactory().Logger(), splitTunnelTag, O.RuleSet{
+		Type:         C.RuleSetTypeLocal,
+		Tag:          badoption.Listable[string]{splitTunnelTag},
+		LocalOptions: O.LocalRuleSet{Path: st.ruleFile},
+		Format:       C.RuleSetFormatSource,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ruleSet.StartContext(ctx, new(adapter.HTTPStartContext)))
+	t.Cleanup(func() { ruleSet.Close() })
+	router.ruleSet = ruleSet
+
+	ct := newConnTracker()
+	dns := &countingDNSRouter{}
+	unregister := resetOnSplitTunnelReload(router, dns, ct)
+	require.NotNil(t, unregister)
+
+	// Registered after the closer's callback, so it fires once that callback has run.
+	reloaded := make(chan struct{}, 1)
+	ruleSet.RegisterCallback(func(adapter.RuleSet) { reloaded <- struct{}{} })
+	waitReload := func() {
+		t.Helper()
+		select {
+		case <-reloaded:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for rule reload")
+		}
+	}
+
+	conn := joinClosable(ct, "srv-a", time.Now())
+	require.NoError(t, st.SetEnabled(true))
+	waitReload()
+	assert.True(t, conn.closed.Load(), "enabling split tunneling must close existing connections")
+	assert.Equal(t, int32(1), dns.clears.Load(), "enabling split tunneling must clear the DNS cache")
+
+	// The policy is persisted only with a non-empty filter.
+	require.NoError(t, st.AddItem(TypeDomain, "example.com"))
+	waitReload()
+	conn = joinClosable(ct, "direct", time.Now())
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	waitReload()
+	assert.True(t, conn.closed.Load(), "switching policy must close existing connections")
+	assert.Equal(t, int32(3), dns.clears.Load(), "every reload must clear the DNS cache")
+
+	require.NoError(t, unregister.Close())
+	conn = joinClosable(ct, "srv-a", time.Now())
+	require.NoError(t, st.SetEnabled(false))
+	waitReload()
+	assert.False(t, conn.closed.Load(), "an unregistered callback must not close connections")
+	assert.Equal(t, int32(3), dns.clears.Load(), "an unregistered callback must not clear the DNS cache")
+}
+
+func TestResetOnSplitTunnelReloadWithoutRuleSet(t *testing.T) {
+	assert.Nil(t, resetOnSplitTunnelReload(&mockRouter{}, &countingDNSRouter{}, newConnTracker()))
+}
+
+// A save that leaves the rule file's content unchanged must not rewrite it,
+// since any write reloads the rule set and closes every connection.
+func TestSaveSkipsUnchangedRuleFile(t *testing.T) {
+	st := newSplitTunnel(t.TempDir(), rlog.NoOpLogger())
+	before, err := os.Stat(st.ruleFile)
+	require.NoError(t, err)
+
+	// An empty filter doesn't persist the policy, so this save is byte-identical.
+	require.NoError(t, st.SetPolicy(SplitTunnelPolicyInclude))
+	after, err := os.Stat(st.ruleFile)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "an unchanged save must not replace the rule file")
+
+	require.NoError(t, st.SetEnabled(true))
+	after, err = os.Stat(st.ruleFile)
+	require.NoError(t, err)
+	assert.False(t, os.SameFile(before, after), "a changed save must replace the rule file")
 }

@@ -396,6 +396,10 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.connTracker.SetObserver(t.connObserver)
+	dnsRouter := service.FromContext[adapter.DNSRouter](t.ctx)
+	if unregister := resetOnSplitTunnelReload(t.boxInstance.Router(), dnsRouter, t.connTracker); unregister != nil {
+		t.closers = append([]io.Closer{unregister}, t.closers...)
+	}
 	if pm := service.FromContext[pause.Manager](t.ctx); pm != nil {
 		t.pauseManager = pm
 		t.netRecovery = newNetRecovery(t.boxInstance.Network(), pm.IsNetworkPaused)
@@ -454,6 +458,29 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	slog.Info("Tunnel connection established")
 	return nil
+}
+
+// resetOnSplitTunnelReload clears the DNS cache and closes every tracked
+// connection each time the split-tunnel rule set reloads, since DNS rules can
+// match the rule set and a connection keeps the route it matched when it
+// opened. It returns nil when the router has no split-tunnel rule set;
+// otherwise closing the result unregisters the callback.
+func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter, tracker *connTracker) io.Closer {
+	ruleSet, ok := router.RuleSet(splitTunnelTag)
+	if !ok {
+		return nil
+	}
+	cb := ruleSet.RegisterCallback(func(adapter.RuleSet) {
+		slog.Info("Split-tunnel rules reloaded; clearing DNS cache and closing connections",
+			"connections", tracker.activeConnectionCount())
+		// Cleared first, so reconnecting flows don't resolve from the old cache.
+		dnsRouter.ClearCache()
+		tracker.closeAllTracked()
+	})
+	return closerFunc(func() error {
+		ruleSet.UnregisterCallback(cb)
+		return nil
+	})
 }
 
 // onPauseUpdate mirrors the pause manager's network-axis transitions onto
