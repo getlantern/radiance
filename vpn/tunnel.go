@@ -464,13 +464,24 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 // connection each time the split-tunnel rule set reloads, since DNS rules can
 // match the rule set and a connection keeps the route it matched when it
 // opened. It returns nil when the router has no split-tunnel rule set;
-// otherwise closing the result unregisters the callback.
+// otherwise closing the result unregisters the callback, and once Close returns,
+// no reset is running or will run.
 func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter, tracker *connTracker) io.Closer {
 	ruleSet, ok := router.RuleSet(splitTunnelTag)
 	if !ok {
 		return nil
 	}
+	var (
+		mu     sync.Mutex
+		closed bool
+	)
 	cb := ruleSet.RegisterCallback(func(adapter.RuleSet) {
+		mu.Lock()
+		defer mu.Unlock()
+		// A reload invokes a snapshot of its callbacks, so this can run after unregistering.
+		if closed {
+			return
+		}
 		slog.Info("Split-tunnel rules reloaded; clearing DNS cache and closing connections",
 			"connections", tracker.activeConnectionCount())
 		// Cleared first, so reconnecting flows don't resolve from the old cache.
@@ -479,6 +490,9 @@ func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter
 	})
 	return closerFunc(func() error {
 		ruleSet.UnregisterCallback(cb)
+		mu.Lock()
+		closed = true
+		mu.Unlock()
 		return nil
 	})
 }

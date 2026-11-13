@@ -19,6 +19,7 @@ import (
 	R "github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
+	"github.com/sagernet/sing/common/x/list"
 	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -819,6 +820,91 @@ func TestResetOnSplitTunnelReload(t *testing.T) {
 	waitReload()
 	assert.False(t, conn.closed.Load(), "an unregistered callback must not close connections")
 	assert.Equal(t, int32(3), dns.clears.Load(), "an unregistered callback must not clear the DNS cache")
+}
+
+// capturingRuleSet keeps every registered callback, as a reload's snapshot does
+// after the callback is unregistered.
+type capturingRuleSet struct {
+	adapter.RuleSet
+	callbacks    list.List[adapter.RuleSetUpdateCallback]
+	unregistered chan struct{}
+}
+
+func (r *capturingRuleSet) RegisterCallback(cb adapter.RuleSetUpdateCallback) *list.Element[adapter.RuleSetUpdateCallback] {
+	return r.callbacks.PushBack(cb)
+}
+
+func (r *capturingRuleSet) UnregisterCallback(*list.Element[adapter.RuleSetUpdateCallback]) {
+	if r.unregistered != nil {
+		close(r.unregistered)
+	}
+}
+
+func TestResetOnSplitTunnelReloadIgnoresCallbackAfterClose(t *testing.T) {
+	ruleSet := &capturingRuleSet{}
+	ct := newConnTracker()
+	dns := &countingDNSRouter{}
+	unregister := resetOnSplitTunnelReload(&mockRouter{ruleSet: ruleSet}, dns, ct)
+	require.NotNil(t, unregister)
+	require.NoError(t, unregister.Close())
+
+	conn := joinClosable(ct, "srv-a", time.Now())
+	for _, cb := range ruleSet.callbacks.Array() {
+		cb(ruleSet)
+	}
+	assert.False(t, conn.closed.Load(), "a callback run after close must not close connections")
+	assert.Zero(t, dns.clears.Load(), "a callback run after close must not clear the DNS cache")
+}
+
+type blockingDNSRouter struct {
+	adapter.DNSRouter
+	entered, release chan struct{}
+}
+
+func (r *blockingDNSRouter) ClearCache() {
+	close(r.entered)
+	<-r.release
+}
+
+func TestResetOnSplitTunnelReloadCloseWaitsForRunningReset(t *testing.T) {
+	ruleSet := &capturingRuleSet{unregistered: make(chan struct{})}
+	ct := newConnTracker()
+	dns := &blockingDNSRouter{entered: make(chan struct{}), release: make(chan struct{})}
+	unregister := resetOnSplitTunnelReload(&mockRouter{ruleSet: ruleSet}, dns, ct)
+	require.NotNil(t, unregister)
+	conn := joinClosable(ct, "srv-a", time.Now())
+
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(dns.release) }) }
+	t.Cleanup(release)
+	await := func(ch <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+
+	go ruleSet.callbacks.Array()[0](ruleSet)
+	await(dns.entered, "the reset to start")
+	closed := make(chan error, 1)
+	go func() { closed <- unregister.Close() }()
+	await(ruleSet.unregistered, "Close to start")
+
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a reset was running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Close")
+	}
+	assert.True(t, conn.closed.Load(), "the running reset must finish before Close returns")
 }
 
 func TestResetOnSplitTunnelReloadWithoutRuleSet(t *testing.T) {
