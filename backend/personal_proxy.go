@@ -80,9 +80,11 @@ func (r *LocalBackend) personalProxyServer(friend string) (*servers.Server, bool
 }
 
 // connectTicketWait bounds how long a connect waits for the first ticket fetch
-// before judging a friend reachable only through rooms. A variable so tests
-// can shorten it.
-var connectTicketWait = 10 * time.Second
+// before judging a friend reachable only through rooms. iOS gives a starting
+// tunnel about 7.5s, and the tunnel itself still has to be built after this,
+// so a slower fetch is refused as before rather than risk the extension being
+// killed. A variable so tests can shorten it.
+var connectTicketWait = 4 * time.Second
 
 // checkConnectSelection refuses a connect that newly chooses a friend who is
 // not selectable. The persisted friend is exempt, so a connect can restore it
@@ -94,7 +96,7 @@ var connectTicketWait = 10 * time.Second
 // auto-connect on (no exemption) the check would always find no ticket yet,
 // refuse, and stop the backend with the fetch still running. So when rooms are
 // the friend's only way and lantern-cloud hasn't answered yet, it waits for
-// the first fetch, up to connectTicketWait.
+// the first fetch, up to connectTicketWait or until ctx is done.
 func (r *LocalBackend) checkConnectSelection(ctx context.Context, tag string) error {
 	friend, ok := vpn.ParsePersonalProxySelection(tag)
 	if !ok {
@@ -110,6 +112,9 @@ func (r *LocalBackend) checkConnectSelection(ctx context.Context, tag string) er
 		waitCtx, cancel := context.WithTimeout(ctx, connectTicketWait)
 		r.helperTickets.WaitFetched(waitCtx)
 		cancel()
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("connect cancelled: %w", err)
+		}
 		f = r.friendReach(friend)
 	}
 	if !f.selectable() {

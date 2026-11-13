@@ -784,3 +784,32 @@ func TestConnectDoesNotWaitForTicketsWithoutAConsumer(t *testing.T) {
 	assert.ErrorIs(t, err, vpn.ErrPersonalProxyUnavailable)
 	assert.Less(t, time.Since(start), time.Second)
 }
+
+// A disconnect while a connect waits for tickets stops it from starting the
+// tunnel once they arrive: Disconnect found no tunnel to stop.
+func TestDisconnectCancelsAConnectWaitingForTickets(t *testing.T) {
+	shortenConnectTicketWait(t, 5*time.Second)
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	release := delayedTickets(t, r, map[string]string{ppFriendB: ppPairingB})
+
+	done := make(chan error, 1)
+	go func() { done <- r.ConnectVPN(t.Context(), vpn.PersonalProxySelection(ppFriendB)) }()
+	require.Eventually(t, func() bool {
+		r.pendingConnectMu.Lock()
+		defer r.pendingConnectMu.Unlock()
+		return r.pendingConnect != nil
+	}, 2*time.Second, 5*time.Millisecond, "the connect is waiting")
+	time.Sleep(50 * time.Millisecond)
+	_ = r.DisconnectVPN()
+	close(release)
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the connect didn't return after the disconnect")
+	}
+	assert.NotEqual(t, vpn.Connected, r.liveTunnel().Status())
+}
