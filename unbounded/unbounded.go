@@ -280,14 +280,36 @@ const (
 	maxNATFailTimeout = 30 * time.Second
 )
 
+// volunteerSocketKey, set to "true", has the widget send its signaling to
+// freddie over one persistent WebSocket rather than a POST per message,
+// falling back to POSTs whenever it can't have the socket (see
+// clientcore.WebRTCOptions.VolunteerSocket).
+const volunteerSocketKey = "volunteer_socket"
+
+// widgetVolunteerSocket reports whether the server's widget tuning turns on
+// the volunteer socket. A value that isn't a bool is ignored, leaving it off.
+func widgetVolunteerSocket(opts map[string]string) (on bool, ignored []string) {
+	raw, ok := opts[volunteerSocketKey]
+	if !ok {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, []string{fmt.Sprintf("%s=%q", volunteerSocketKey, raw)}
+	}
+	return on, nil
+}
+
 // widgetTuning splits the server's widget tuning map into the NAT fail timeout,
 // which isn't WebRTC tuning, and everything clientcore.ParseWebRTCTuning reads.
 // A zero timeout means the key was absent or invalid; keep broflake's default.
+// It skips volunteerSocketKey, which widgetVolunteerSocket reads.
 func widgetTuning(opts map[string]string) (natFail time.Duration, tuning clientcore.WebRTCTuning, ignored []string) {
 	raw, ok := opts[natFailTimeoutKey]
-	if ok {
+	if _, socket := opts[volunteerSocketKey]; ok || socket {
 		opts = maps.Clone(opts)
 		delete(opts, natFailTimeoutKey)
+		delete(opts, volunteerSocketKey)
 	}
 	tuning, ignored = clientcore.ParseWebRTCTuning(opts)
 	if !ok {
@@ -927,6 +949,9 @@ func (m *unboundedManager) startLocked() {
 			if natFail > 0 {
 				rtcOpt.NATFailTimeout = natFail
 			}
+			socket, socketIgnored := widgetVolunteerSocket(ucfg.Tuning)
+			rtcOpt.VolunteerSocket = socket
+			ignored = append(ignored, socketIgnored...)
 			if len(ignored) > 0 {
 				slog.Warn("Unbounded: ignoring widget tuning", "ignored", ignored)
 			}
