@@ -183,7 +183,7 @@ func (a *Client) sendRequest(
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		a.logger.Debug("error response", "path", redactDeviceID(req.URL.Path), "status", resp.StatusCode)
-		return nil, fmt.Errorf("unexpected status %v body %s", resp.StatusCode, sanitizeResponseBody(respBody))
+		return nil, &responseError{status: resp.StatusCode, body: respBody}
 	}
 
 	if len(respBody) == 0 {
@@ -193,6 +193,15 @@ func (a *Client) sendRequest(
 		return sanitizeResponseBody(respBody), nil
 	}
 	return respBody, nil
+}
+
+type responseError struct {
+	status int
+	body   []byte
+}
+
+func (e *responseError) Error() string {
+	return fmt.Sprintf("unexpected status %v body %s", e.status, sanitizeResponseBody(e.body))
 }
 
 // sendProRequest sends a request to the Pro server, automatically adding the required headers,
