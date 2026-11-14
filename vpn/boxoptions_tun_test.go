@@ -29,6 +29,7 @@ import (
 
 	box "github.com/getlantern/lantern-box"
 
+	"github.com/getlantern/radiance/common"
 	rlog "github.com/getlantern/radiance/log"
 )
 
@@ -151,8 +152,12 @@ func TestBuildOptions_SplitTunnelResolvesWithSystemDNS(t *testing.T) {
 				assert.Equal(t, make([]O.DNSServerOptions, len(spare)), spare, "config DNS servers must not be modified")
 			}
 
-			require.GreaterOrEqual(t, len(opts.DNS.Rules), 5)
-			for i, tag := range []string{splitTunnelTag, localNameTag} {
+			tags := []string{splitTunnelTag}
+			if !common.IsAndroid() {
+				tags = append(tags, localNameTag)
+			}
+			require.Greater(t, len(opts.DNS.Rules), 2*len(tags))
+			for i, tag := range tags {
 				evaluate := opts.DNS.Rules[2*i].DefaultOptions.DNSRuleAction
 				assert.Equal(t, C.RuleActionTypeEvaluate, evaluate.Action, "%s evaluate", tag)
 				assert.Equal(t, systemDNSTag, evaluate.EvaluateOptions.Server)
@@ -160,10 +165,12 @@ func TestBuildOptions_SplitTunnelResolvesWithSystemDNS(t *testing.T) {
 				assert.Equal(t, badoption.Duration(systemDNSEvaluateTimeout), evaluate.EvaluateOptions.Timeout)
 				assert.Equal(t, C.RuleActionTypeRespond, opts.DNS.Rules[2*i+1].DefaultOptions.DNSRuleAction.Action)
 			}
-			local := opts.DNS.Rules[2].DefaultOptions
-			assert.Equal(t, []string{systemDNSTag}, []string(local.PreferredBy))
-			assert.Empty(t, local.DomainSuffix, "local-name rule must match only names the system resolver claims")
-			assert.Equal(t, C.RuleActionTypePredefined, opts.DNS.Rules[4].DefaultOptions.DNSRuleAction.Action,
+			if !common.IsAndroid() {
+				local := opts.DNS.Rules[2].DefaultOptions
+				assert.Equal(t, []string{systemDNSTag}, []string(local.PreferredBy))
+				assert.Empty(t, local.DomainSuffix, "local-name rule must match only names the system resolver claims")
+			}
+			assert.Equal(t, C.RuleActionTypePredefined, opts.DNS.Rules[2*len(tags)].DefaultOptions.DNSRuleAction.Action,
 				"AAAA suppression must follow the system DNS rules")
 
 			ruleIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
@@ -228,6 +235,9 @@ func TestSplitTunnelDNSEndToEnd(t *testing.T) {
 // only for names the system resolver claims, and that no other name, however
 // local it looks, is sent to it.
 func TestLocalNameDNSEndToEnd(t *testing.T) {
+	if common.IsAndroid() {
+		t.Skip("local-name rules are disabled on Android")
+	}
 	private := map[string]string{
 		"tv.local":                 "192.168.1.40",
 		"corp-printer.example.com": "10.1.1.9",
