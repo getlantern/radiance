@@ -301,6 +301,7 @@ func setMobileMemoryLimits() {
 }
 
 func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
+	lanternTags = slices.DeleteFunc(slices.Clone(lanternTags), isHelperOutboundTag)
 	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
 			DeviceID:    settings.GetString(settings.DeviceIDKey),
@@ -312,8 +313,18 @@ func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 	}, lanternTags...)
 }
 
+// isHelperOutboundTag reports whether tag is a personal proxy's outbound, direct
+// or reverse. It reaches a friend's peer box, not a Lantern server: the box
+// doesn't strip client info, so a frame sent ahead of the stream reaches the
+// destination and corrupts it (a TLS server answers "protocol version not
+// supported").
+func isHelperOutboundTag(tag string) bool {
+	return lbA.IsHelperTag(tag) || lbA.IsReverseHelperTag(tag)
+}
+
 // updateInjectionLocked enables client info injection only for selectable
-// Lantern outbounds that load successfully.
+// Lantern outbounds that load successfully, and never for a personal proxy's
+// (isHelperOutboundTag), though its servers come in the same config.
 //
 // The caller must hold t.outboundMu.
 func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
@@ -322,7 +333,7 @@ func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
 	}
 	_, nonSelectable := t.nonSelectableTags[tag]
 	switch {
-	case !lantern || nonSelectable:
+	case !lantern || nonSelectable || isHelperOutboundTag(tag):
 		t.injector.RemoveOutboundTags(tag)
 	case loaded:
 		// Failed loads leave the tag unchanged.
