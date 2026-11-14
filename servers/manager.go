@@ -187,6 +187,9 @@ type ServerList struct {
 	// options, and the tunnel applies their probe timeouts. Nil, as on
 	// user-added servers, leaves the current probe timeouts in place.
 	AutoSelectOptions *lbO.MutableAutoSelectOutboundOptions `json:"auto_select_options,omitempty"`
+	// SmartRouting maps each smart-routing group's tag to the outbounds the
+	// config assigns to it.
+	SmartRouting map[string][]string `json:"smart_routing,omitempty"`
 }
 
 func (sl ServerList) Tags() []string {
