@@ -2,11 +2,13 @@ package hostaccess
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
@@ -68,4 +70,29 @@ func TestContextWrapsOnce(t *testing.T) {
 	require.True(t, ok)
 	_, nested := common.Cast[outboundRegistry](r.OutboundRegistry)
 	assert.False(t, nested)
+}
+
+type stubLocalDNSTransport struct{}
+
+func (stubLocalDNSTransport) Raw() bool                                            { return true }
+func (stubLocalDNSTransport) Lookup(*libbox.ExchangeContext, string, string) error { return nil }
+func (stubLocalDNSTransport) Exchange(*libbox.ExchangeContext, []byte) error       { return nil }
+
+type stubPlatform struct{}
+
+func (stubPlatform) LocalDNSTransport() libbox.LocalDNSTransport { return stubLocalDNSTransport{} }
+
+func TestContextWithDNSTransport(t *testing.T) {
+	ctx := ContextWithDNSTransport(context.Background(), stubPlatform{})
+	registry := service.FromContext[adapter.DNSTransportRegistry](ctx)
+	_, wrapped := registry.(dnsTransportRegistry)
+	require.True(t, wrapped)
+	logger := log.NewNOPFactory().NewLogger("test")
+
+	transport, err := registry.CreateDNSTransport(ctx, logger, "system", C.DNSTypeLocal, &option.LocalDNSServerOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "*libbox.platformTransport", fmt.Sprintf("%T", transport))
+
+	_, err = registry.CreateDNSTransport(ctx, logger, "ovpn-dns", C.DNSTypeOpenVPN, &option.OpenVPNDNSServerOptions{})
+	assert.ErrorIs(t, err, ErrDenied)
 }

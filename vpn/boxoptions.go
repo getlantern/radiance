@@ -68,8 +68,8 @@ func ReservedTags() []string {
 type BoxOptions struct {
 	BasePath string `json:"base_path,omitempty"`
 	// Options contains the main options that are merged into the base options with the exception of
-	// DNS, which overrides the base DNS options entirely instead of being merged. Options should
-	// contain all servers (both lantern and user).
+	// DNS, which replaces the base DNS options; only the AAAA-suppression rule and the split-tunnel
+	// DNS server and rules are still added. Options should contain all servers (both lantern and user).
 	Options O.Options `json:"options"`
 	// SmartRouting contains smart routing rules to merge into the final options.
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
@@ -453,6 +453,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, splitTunnelDNSServers())
+	// Private split-tunnel answers must be returned before AAAA suppression drops them.
+	opts.DNS.Rules = append(splitTunnelDNSRules(), opts.DNS.Rules...)
 	if bOptions.reversePortal {
 		opts.Inbounds = append(opts.Inbounds, reversePortalInbound(bOptions.reverseMasquerade))
 	}
@@ -543,11 +546,8 @@ func jsonRoundTrip(path string, opts O.Options) (O.Options, error) {
 
 // mergeAndCollectTags merges src into dst and returns the selectable outbound and
 // endpoint tags from src. The returned tags become the members of both the auto
-// (URLTest) group and the manual selector, so reserved tags (auto, manual,
-// direct, block) and any server-declared non-selectable tags are omitted:
-// they're still merged into the config (references resolve) but are never added
-// to the auto group (auto-selection won't route traffic through them) nor offered
-// in the manual selector.
+// (URLTest) group and the manual selector, so [reservedTags] and nonSelectable
+// tags are omitted; they're still merged so references resolve.
 func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 	dst.Outbounds = append(dst.Outbounds, src.Outbounds...)
 	dst.Endpoints = append(dst.Endpoints, src.Endpoints...)
@@ -581,6 +581,18 @@ func mergeAndCollectTags(dst, src *O.Options, nonSelectable []string) []string {
 		}
 	}
 	return tags
+}
+
+// appendMissingDNSServers adds each extra server whose tag is absent, without
+// writing to servers' backing array.
+func appendMissingDNSServers(servers, extra []O.DNSServerOptions) []O.DNSServerOptions {
+	servers = slices.Clip(servers)
+	for _, server := range extra {
+		if !slices.ContainsFunc(servers, func(s O.DNSServerOptions) bool { return s.Tag == server.Tag }) {
+			servers = append(servers, server)
+		}
+	}
+	return servers
 }
 
 func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRoutingRules {

@@ -7,7 +7,9 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/miekg/dns"
 	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -26,6 +28,13 @@ const (
 	inboundTag = "tun-in"
 
 	tunnelProxyInboundTag = "tunnel-in"
+
+	systemDNSTag = "dns_system"
+
+	// systemDNSEvaluateTimeout is shorter than sing-box's 10s DNS default
+	// because a timeout costs only the real address in the answer: split-tunnel
+	// connections still resolve through the system resolver when they dial.
+	systemDNSEvaluateTimeout = 2 * time.Second
 )
 
 var (
@@ -158,8 +167,27 @@ func splitTunnelRuleSet(basePath string) []O.RuleSet {
 	}
 }
 
+// splitTunnelRoutingRules resolves split-tunnel destinations with the system
+// resolver, as they would resolve with the VPN off, before routing them to
+// "direct". A resolve action, rather than a domain resolver on "direct", keeps
+// other direct traffic on the route's default resolver.
 func splitTunnelRoutingRules() []O.Rule {
 	return []O.Rule{
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultRule{
+				RawDefaultRule: O.RawDefaultRule{
+					RuleSet: []string{splitTunnelTag},
+				},
+				RuleAction: O.RuleAction{
+					Action: C.RuleActionTypeResolve,
+					ResolveOptions: O.RouteActionResolve{
+						Server:   systemDNSTag,
+						Strategy: O.DomainStrategy(C.DomainStrategyPreferIPv4),
+					},
+				},
+			},
+		},
 		{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultRule{
@@ -173,6 +201,54 @@ func splitTunnelRoutingRules() []O.Rule {
 					},
 				},
 			},
+		},
+	}
+}
+
+// splitTunnelDNSRules answers a split-tunnel query with the system resolver's
+// answer when it holds a private address, which routes direct by IP.
+// Other answers fall through to the remaining DNS rules. Only A and AAAA
+// queries are evaluated, since only address answers can match.
+func splitTunnelDNSRules() []O.DNSRule {
+	return []O.DNSRule{
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultDNSRule{
+				RawDefaultDNSRule: O.RawDefaultDNSRule{
+					RuleSet:   []string{splitTunnelTag},
+					QueryType: badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeA), O.DNSQueryType(dns.TypeAAAA)},
+				},
+				DNSRuleAction: O.DNSRuleAction{
+					Action: C.RuleActionTypeEvaluate,
+					EvaluateOptions: O.DNSEvaluateActionOptions{
+						Server: systemDNSTag,
+						Tag:    splitTunnelTag,
+						AbstractDNSRouteActionOptions: O.AbstractDNSRouteActionOptions{
+							Timeout: badoption.Duration(systemDNSEvaluateTimeout),
+						},
+					},
+				},
+			},
+		},
+		{
+			Type: C.RuleTypeDefault,
+			DefaultOptions: O.DefaultDNSRule{
+				RawDefaultDNSRule: O.RawDefaultDNSRule{
+					MatchResponse: &O.DNSRuleMatchResponse{Enabled: true, Tag: splitTunnelTag},
+					IPIsPrivate:   true,
+				},
+				DNSRuleAction: O.DNSRuleAction{Action: C.RuleActionTypeRespond},
+			},
+		},
+	}
+}
+
+func splitTunnelDNSServers() []O.DNSServerOptions {
+	return []O.DNSServerOptions{
+		{
+			Type:    C.DNSTypeLocal,
+			Tag:     systemDNSTag,
+			Options: &O.LocalDNSServerOptions{},
 		},
 	}
 }
