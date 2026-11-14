@@ -411,6 +411,8 @@ func (s *Source) refresh(gen uint64) {
 	// a ticket's life past what lantern-cloud granted.
 	start := s.now()
 	t, err := s.safeFetch()
+	// Before taking the lock, so the logged duration is the fetch's alone.
+	took := s.now().Sub(start)
 	s.mu.Lock()
 	now := s.now()
 	s.fetching = false
@@ -459,11 +461,12 @@ func (s *Source) refresh(gen uint64) {
 
 	// How long a fetch takes bounds how soon a rooms consumer on a cold start can subscribe with
 	// its tickets.
-	took := now.Sub(start)
 	switch {
 	case errors.Is(err, errPanicked):
 		slog.Warn("helper: fetching pairing tickets panicked", "took", took)
-	case err != nil && !errors.Is(err, ErrDisabled):
+	case errors.Is(err, ErrDisabled):
+		slog.Debug("helper: lantern-cloud has helper invites off for this client", "took", took)
+	case err != nil:
 		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err, "took", took)
 	case err == nil:
 		slog.Debug("helper: fetched pairing tickets", "took", took, "inviter", len(t.Inviter), "volunteer", len(t.Volunteer))
