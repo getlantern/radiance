@@ -31,9 +31,15 @@ const (
 
 	systemDNSTag = "dns_system"
 
-	// systemDNSEvaluateTimeout is shorter than sing-box's 10s DNS default
-	// because a timeout costs only the real address in the answer: split-tunnel
-	// connections still resolve through the system resolver when they dial.
+	localNameTag = "local-names"
+
+	// systemDNSEvaluateTimeout is shorter than sing-box's 10s DNS default because
+	// every matching A/AAAA query waits on it. On timeout the query falls through
+	// to the remaining DNS rules: a split-tunnel connection still resolves
+	// through the system resolver when it dials, but a local name loses its
+	// direct route. On Windows and Linux, a .local name not in the hosts file
+	// goes over mDNS, which returns its answers only once the full timeout
+	// elapses.
 	systemDNSEvaluateTimeout = 2 * time.Second
 )
 
@@ -205,24 +211,42 @@ func splitTunnelRoutingRules() []O.Rule {
 	}
 }
 
-// splitTunnelDNSRules answers a split-tunnel query with the system resolver's
-// answer when it holds a private address, which routes direct by IP.
-// Other answers fall through to the remaining DNS rules. Only A and AAAA
-// queries are evaluated, since only address answers can match.
 func splitTunnelDNSRules() []O.DNSRule {
+	return privateSystemAnswerRules(O.RawDefaultDNSRule{RuleSet: []string{splitTunnelTag}}, splitTunnelTag)
+}
+
+// localNameDNSRules matches only names the system resolver claims: hosts-file
+// entries and .local names, which it answers on the device or over mDNS. It
+// never matches a name a unicast resolver would answer, such as "x.lan": a page
+// can make the browser look up any name, and that lookup would reach the
+// network's resolver from the user's real IP. For the same reason it is empty
+// on Android, whose platform resolver may send .local names to the network's
+// unicast resolver. The preferred_by match requires systemDNSTag's server to
+// support it, as local servers do, or the box fails to start.
+func localNameDNSRules() []O.DNSRule {
+	if common.IsAndroid() {
+		return nil
+	}
+	return privateSystemAnswerRules(O.RawDefaultDNSRule{PreferredBy: []string{systemDNSTag}}, localNameTag)
+}
+
+// privateSystemAnswerRules answers a query matching match with the system
+// resolver's answer when it holds a private address, which routes direct by
+// IP. Other answers fall through to the remaining DNS rules. Only A and AAAA
+// queries are evaluated, since only address answers can match. tag must be
+// unique among the DNS rules' evaluate tags.
+func privateSystemAnswerRules(match O.RawDefaultDNSRule, tag string) []O.DNSRule {
+	match.QueryType = badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeA), O.DNSQueryType(dns.TypeAAAA)}
 	return []O.DNSRule{
 		{
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultDNSRule{
-				RawDefaultDNSRule: O.RawDefaultDNSRule{
-					RuleSet:   []string{splitTunnelTag},
-					QueryType: badoption.Listable[O.DNSQueryType]{O.DNSQueryType(dns.TypeA), O.DNSQueryType(dns.TypeAAAA)},
-				},
+				RawDefaultDNSRule: match,
 				DNSRuleAction: O.DNSRuleAction{
 					Action: C.RuleActionTypeEvaluate,
 					EvaluateOptions: O.DNSEvaluateActionOptions{
 						Server: systemDNSTag,
-						Tag:    splitTunnelTag,
+						Tag:    tag,
 						AbstractDNSRouteActionOptions: O.AbstractDNSRouteActionOptions{
 							Timeout: badoption.Duration(systemDNSEvaluateTimeout),
 						},
@@ -234,7 +258,7 @@ func splitTunnelDNSRules() []O.DNSRule {
 			Type: C.RuleTypeDefault,
 			DefaultOptions: O.DefaultDNSRule{
 				RawDefaultDNSRule: O.RawDefaultDNSRule{
-					MatchResponse: &O.DNSRuleMatchResponse{Enabled: true, Tag: splitTunnelTag},
+					MatchResponse: &O.DNSRuleMatchResponse{Enabled: true, Tag: tag},
 					IPIsPrivate:   true,
 				},
 				DNSRuleAction: O.DNSRuleAction{Action: C.RuleActionTypeRespond},
@@ -243,7 +267,7 @@ func splitTunnelDNSRules() []O.DNSRule {
 	}
 }
 
-func splitTunnelDNSServers() []O.DNSServerOptions {
+func systemDNSServers() []O.DNSServerOptions {
 	return []O.DNSServerOptions{
 		{
 			Type:    C.DNSTypeLocal,
