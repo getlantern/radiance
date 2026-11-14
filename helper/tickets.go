@@ -457,11 +457,16 @@ func (s *Source) refresh(gen uint64) {
 		onChange()
 	}
 
+	// How long a fetch takes bounds how soon a rooms consumer on a cold start can subscribe with
+	// its tickets.
+	took := now.Sub(start)
 	switch {
 	case errors.Is(err, errPanicked):
-		slog.Warn("helper: fetching pairing tickets panicked")
+		slog.Warn("helper: fetching pairing tickets panicked", "took", took)
 	case err != nil && !errors.Is(err, ErrDisabled):
-		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err)
+		slog.Debug("helper: fetching pairing tickets failed; keeping the last ones", "error", err, "took", took)
+	case err == nil:
+		slog.Debug("helper: fetched pairing tickets", "took", took, "inviter", len(t.Inviter), "volunteer", len(t.Volunteer))
 	}
 }
 
