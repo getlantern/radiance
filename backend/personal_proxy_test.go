@@ -333,12 +333,13 @@ func TestPersonalProxyStatusFoldsReverseOutboundsIntoTheirFriend(t *testing.T) {
 	}, r.PersonalProxyStatus(), "configured, but no session")
 	_, found := r.GetServerByTag(vpn.PersonalProxySelection(ppFriendB))
 	assert.True(t, found)
-	assert.NoError(t, r.checkConnectSelection(vpn.PersonalProxySelection(ppFriendB)))
+	assert.NoError(t, r.checkConnectSelection(t.Context(), vpn.PersonalProxySelection(ppFriendB)))
 }
 
 // A connect may restore the persisted friend before its tickets are known,
 // but a friend it newly chooses must be selectable, as SelectServer requires.
 func TestConnectRefusesANewFriendWithoutAMember(t *testing.T) {
+	shortenConnectTicketWait(t, 50*time.Millisecond)
 	r := newPersonalProxiesBackend(t)
 	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
 	block := make(chan struct{})
@@ -355,7 +356,7 @@ func TestConnectRefusesANewFriendWithoutAMember(t *testing.T) {
 	require.Equal(t, persisted, selectedTag(t))
 
 	require.ErrorIs(t, r.ConnectVPN(t.Context(), fresh), vpn.ErrPersonalProxyUnavailable)
-	assert.NoError(t, r.checkConnectSelection(persisted), "the persisted friend is restored")
+	assert.NoError(t, r.checkConnectSelection(t.Context(), persisted), "the persisted friend is restored")
 }
 
 // selectionSaves records, for each SelectionSavedEvent, the selection a
@@ -710,4 +711,105 @@ func TestRestartTakesUpAFriendAddedDuringIt(t *testing.T) {
 	assert.Equal(t, sel, tun.current())
 	assert.Equal(t, ppFriendB, tun.SelectedPersonalProxy())
 	assert.Empty(t, evts)
+}
+
+func shortenConnectTicketWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := connectTicketWait
+	connectTicketWait = d
+	t.Cleanup(func() { connectTicketWait = prev })
+}
+
+// delayedTickets gives r a ticket source whose first fetch answers with
+// pairings only once release is closed.
+func delayedTickets(t *testing.T, r *LocalBackend, pairings map[string]string) (release chan struct{}) {
+	t.Helper()
+	f := &fakeTickets{}
+	f.issue(t, pairings)
+	release = make(chan struct{})
+	r.helperTickets = helper.NewSource(r.ctx, func(ctx context.Context) (helper.Tickets, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return helper.Tickets{}, ctx.Err()
+		}
+		return f.fetch(ctx)
+	})
+	return release
+}
+
+// On macOS and iOS the backend starts with the tunnel, a moment before the
+// connect is checked, and holds no tickets yet. With auto-connect on, no
+// selection is exempt, so a friend reachable only through rooms is accepted
+// once the first fetch brings its ticket.
+func TestConnectWaitsForTheFirstTicketFetch(t *testing.T) {
+	shortenConnectTicketWait(t, 5*time.Second)
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	release := delayedTickets(t, r, map[string]string{ppFriendB: ppPairingB})
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		close(release)
+	}()
+
+	assert.NoError(t, r.checkConnectSelection(t.Context(), vpn.PersonalProxySelection(ppFriendB)))
+}
+
+// Once lantern-cloud has answered, a friend whose ticket it didn't send is
+// refused at once rather than after the whole wait.
+func TestConnectRefusesOnceTicketsAnswerWithoutTheFriend(t *testing.T) {
+	shortenConnectTicketWait(t, 5*time.Second)
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	close(delayedTickets(t, r, map[string]string{ppFriendA: ppPairingA}))
+
+	start := time.Now()
+	err := r.checkConnectSelection(t.Context(), vpn.PersonalProxySelection(ppFriendB))
+	assert.ErrorIs(t, err, vpn.ErrPersonalProxyUnavailable)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+// Without a rooms consumer, tickets can't make the friend selectable, so the
+// connect is refused without waiting for them.
+func TestConnectDoesNotWaitForTicketsWithoutAConsumer(t *testing.T) {
+	shortenConnectTicketWait(t, 5*time.Second)
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+	delayedTickets(t, r, map[string]string{ppFriendB: ppPairingB})
+
+	start := time.Now()
+	err := r.checkConnectSelection(t.Context(), vpn.PersonalProxySelection(ppFriendB))
+	assert.ErrorIs(t, err, vpn.ErrPersonalProxyUnavailable)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+// A disconnect while a connect waits for tickets stops it from starting the
+// tunnel once they arrive: Disconnect found no tunnel to stop.
+func TestDisconnectCancelsAConnectWaitingForTickets(t *testing.T) {
+	shortenConnectTicketWait(t, 5*time.Second)
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, settings.Set(settings.AutoConnectKey, true))
+	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
+	release := delayedTickets(t, r, map[string]string{ppFriendB: ppPairingB})
+
+	done := make(chan error, 1)
+	go func() { done <- r.ConnectVPN(t.Context(), vpn.PersonalProxySelection(ppFriendB)) }()
+	require.Eventually(t, func() bool {
+		r.pendingConnectMu.Lock()
+		defer r.pendingConnectMu.Unlock()
+		return r.pendingConnect != nil
+	}, 2*time.Second, 5*time.Millisecond, "the connect is waiting")
+	time.Sleep(50 * time.Millisecond)
+	_ = r.DisconnectVPN()
+	close(release)
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the connect didn't return after the disconnect")
+	}
+	assert.NotEqual(t, vpn.Connected, r.liveTunnel().Status())
 }

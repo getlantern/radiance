@@ -38,14 +38,14 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261112211524-851e192b6f46
+	github.com/getlantern/broflake v0.0.0-20261113224259-ef45a738a257
 	github.com/getlantern/common v1.2.1-0.20261110195018-962f63413c3f
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261111193957-924b15fffbf0
-	github.com/getlantern/lantern-box v0.0.226
+	github.com/getlantern/lantern-box v0.0.228
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
-	github.com/getlantern/samizdat v0.0.3-0.20261107182626-9bcbf6ccba7c
+	github.com/getlantern/samizdat v0.0.3-0.20261113121353-9718d8050e9b
 	github.com/getlantern/semconv v0.0.0-20261103162524-c0c2ac0e0a3e
 	github.com/getlantern/soar v0.2.5
 	github.com/goccy/go-yaml v1.19.0

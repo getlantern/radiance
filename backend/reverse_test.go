@@ -233,7 +233,7 @@ func TestReverseKeepsASelectionWhileTheVPNIsDown(t *testing.T) {
 	r.applyConfig(cachedConfig(), true)
 	r.clearSelectedIfMissing()
 	assert.Equal(t, friend, selectedTag(t))
-	assert.NoError(t, r.checkConnectSelection(friend))
+	assert.NoError(t, r.checkConnectSelection(t.Context(), friend))
 
 	emitVPNStatus(vpn.Connected)
 	require.Eventually(t, fake.running.Load, time.Second, 5*time.Millisecond)

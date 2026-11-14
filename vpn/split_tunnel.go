@@ -3,6 +3,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -349,6 +350,10 @@ func (s *SplitTunnel) saveLocked() error {
 	buf, err := json.Marshal(rs)
 	if err != nil {
 		return fmt.Errorf("marshalling rule set: %w", err)
+	}
+	// Every write reloads the tunnel's rule set, which closes all connections.
+	if cur, err := os.ReadFile(s.ruleFile); err == nil && bytes.Equal(cur, buf) {
+		return nil
 	}
 	if err := atomicfile.WriteFile(s.ruleFile, buf, fileperm.File); err != nil {
 		return fmt.Errorf("writing rule file %s: %w", s.ruleFile, err)

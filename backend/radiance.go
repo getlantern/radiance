@@ -123,6 +123,11 @@ type LocalBackend struct {
 	// Rejects overlapping ConnectVPN calls (TryLock) so a burst can't each
 	// drive a full tunnel bring-up.
 	connectMu sync.Mutex
+	// pendingConnect cancels the waits of the ConnectVPN in progress, for
+	// DisconnectVPN: a connect still waiting for a config or tickets has no
+	// tunnel for Disconnect to stop. Guarded by pendingConnectMu.
+	pendingConnectMu sync.Mutex
+	pendingConnect   context.CancelFunc
 
 	// selectionMu serializes a selection and its persistence with the server
 	// changes that can withdraw it (config updates and removals), so the
@@ -1772,6 +1777,19 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 	}
 	defer r.connectMu.Unlock()
 
+	// waitCtx bounds only the waits below; the tunnel gets ctx, so a later
+	// cancel can never reach a tunnel this started.
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r.pendingConnectMu.Lock()
+	r.pendingConnect = cancel
+	r.pendingConnectMu.Unlock()
+	defer func() {
+		r.pendingConnectMu.Lock()
+		r.pendingConnect = nil
+		r.pendingConnectMu.Unlock()
+	}()
+
 	if tag == "" || tag == vpn.AutoSelectTag {
 		tag = vpn.AutoSelectTag
 		// A platform restart reconnects through here on auto; keep the saved selection.
@@ -1779,7 +1797,7 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 			tag = r.savedSelectionTag()
 		}
 	}
-	if err := r.awaitConnectable(ctx, tag); err != nil {
+	if err := r.awaitConnectable(waitCtx, tag); err != nil {
 		return err
 	}
 	if tag != vpn.AutoSelectTag {
@@ -1787,8 +1805,12 @@ func (r *LocalBackend) ConnectVPN(ctx context.Context, tag string) error {
 			return fmt.Errorf("no server found with tag %s", tag)
 		}
 	}
-	if err := r.checkConnectSelection(tag); err != nil {
+	if err := r.checkConnectSelection(waitCtx, tag); err != nil {
 		return err
+	}
+	// A disconnect during the waits leaves nothing to start.
+	if err := waitCtx.Err(); err != nil {
+		return fmt.Errorf("connect cancelled: %w", err)
 	}
 	bOptions := r.getBoxOptions()
 	bOptions.InitialServer = r.startSelection(tag)
@@ -2030,6 +2052,12 @@ func optionTagSet(options option.Options) map[string]struct{} {
 }
 
 func (r *LocalBackend) DisconnectVPN() error {
+	// A connect still waiting has no tunnel to stop; stop it from starting one.
+	r.pendingConnectMu.Lock()
+	if r.pendingConnect != nil {
+		r.pendingConnect()
+	}
+	r.pendingConnectMu.Unlock()
 	return r.vpnClient.Disconnect()
 }
 
