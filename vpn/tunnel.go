@@ -1171,10 +1171,7 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 				continue // skip nested groups
 			}
 		}
-		err := mutGrpMgr.RemoveFromGroup(ManualSelectTag, tag)
-		if err == nil {
-			err = mutGrpMgr.RemoveFromGroup(AutoSelectTag, tag)
-		}
+		err := t.leaveGroupsLocked(tag)
 		if errors.Is(err, groups.ErrIsClosed) {
 			return errLibboxClosed
 		}
@@ -1190,6 +1187,64 @@ func (t *tunnel) removeOutboundsLocked(tags []string) error {
 	}
 	slog.Debug("Removed servers", "removed", len(removed))
 	return errors.Join(errs...)
+}
+
+// leaveGroupsLocked removes tag from every managed group and then queues its
+// outbound's teardown. Mutable groups don't depend on their members, so a
+// teardown queued while one still held tag would leave it holding a closed
+// outbound. The caller must hold t.outboundMu.
+func (t *tunnel) leaveGroupsLocked(tag string) error {
+	for _, group := range t.mutGrpMgr.OutboundGroups() {
+		n, err := group.Remove(tag)
+		if err != nil && !errors.Is(err, lbA.ErrGroupClosed) {
+			return fmt.Errorf("remove %s from %s: %w", loggableTag(tag), group.Tag(), err)
+		}
+		if n > 0 && len(group.All()) == 0 {
+			slog.Warn("Group has no members left", "group", group.Tag())
+		}
+	}
+	// tag is no longer a member, so this only queues the teardown.
+	return t.mutGrpMgr.RemoveFromGroup(AutoSelectTag, tag)
+}
+
+// addToSmartRoutingGroupsLocked adds to each group that members names those
+// of its members that can join it, other than those in leaving. A member
+// leaves a group only when it leaves the tunnel (leaveGroupsLocked): a config
+// lists only the servers it offers, so one it omits may be a retained server
+// that still belongs to the group. The caller must hold t.outboundMu.
+func (t *tunnel) addToSmartRoutingGroupsLocked(members map[string][]string, leaving []string) error {
+	var errs []error
+	for groupTag, tags := range members {
+		group, ok := t.mutGrpMgr.OutboundGroup(groupTag)
+		if !ok {
+			continue
+		}
+		tags = slices.DeleteFunc(slices.Clone(tags), func(tag string) bool {
+			return slices.Contains(leaving, tag) || !t.canJoinSmartRoutingGroup(tag)
+		})
+		if len(tags) == 0 {
+			continue
+		}
+		if _, err := group.Add(tags...); err != nil {
+			errs = append(errs, fmt.Errorf("add to %s: %w", group.Tag(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// canJoinSmartRoutingGroup reports whether tag names an outbound or endpoint
+// the tunnel holds, other than a group. A removed server stays registered
+// until its queued teardown runs, but leaves t.optsMap at once.
+func (t *tunnel) canJoinSmartRoutingGroup(tag string) bool {
+	if _, tracked := t.optsMap.Load(tag); !tracked {
+		return false
+	}
+	out := t.liveOutbound(tag)
+	if out == nil {
+		return false
+	}
+	_, isGroup := out.(adapter.OutboundGroup)
+	return !isGroup
 }
 
 func (t *tunnel) updateOutbounds(list servers.ServerList) error {
@@ -1248,15 +1303,21 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 		}
 	}
 
-	if hasNewOutbound {
-		if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
-			return err
-		} else if err != nil {
-			errs = append(errs, err)
-		}
-	} else {
+	if !hasNewOutbound {
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
 			"failed_tags", newTags, "would_remove_tags", toRemove)
+		toRemove = nil
+	}
+	// Before the removal, so a group whose members all leave gets its new ones first.
+	if err := t.addToSmartRoutingGroupsLocked(list.SmartRouting, toRemove); errors.Is(err, lbA.ErrGroupClosed) {
+		return errLibboxClosed
+	} else if err != nil {
+		errs = append(errs, err)
+	}
+	if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
+		return err
+	} else if err != nil {
+		errs = append(errs, err)
 	}
 
 	if err := t.syncPersonalProxiesLocked(); err != nil {
@@ -1281,11 +1342,8 @@ func removeDuplicates(ctx context.Context, curr *lsync.TypedMap[string, []byte],
 	if len(dropped) > 0 {
 		slog.Debug("Dropped duplicate outbounds/endpoints", "tags", loggableTags(dropped))
 	}
-	return servers.ServerList{
-		Servers:           deduped,
-		URLOverrides:      list.URLOverrides,
-		AutoSelectOptions: list.AutoSelectOptions,
-	}
+	list.Servers = deduped
+	return list
 }
 
 func makeOutboundOptsMap(ctx context.Context, options O.Options) *lsync.TypedMap[string, []byte] {

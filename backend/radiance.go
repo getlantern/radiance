@@ -594,6 +594,7 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 		Servers:           srvs,
 		URLOverrides:      cfg.BanditURLOverrides,
 		AutoSelectOptions: vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions),
+		SmartRouting:      vpn.SmartRoutingMembers(cfg.SmartRouting),
 	}
 }
 
@@ -1387,11 +1388,8 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	}
 	// updateOutbounds evicts any outbound absent from the list; include all
 	// servers so user-added outbounds aren't removed on a Lantern config update.
-	allList := servers.ServerList{
-		Servers:           r.srvManager.AllServers(),
-		URLOverrides:      list.URLOverrides,
-		AutoSelectOptions: list.AutoSelectOptions,
-	}
+	allList := list
+	allList.Servers = r.srvManager.AllServers()
 	// An evicted selection falls back to auto-select before the update removes
 	// it from the tunnel: the manual selector would otherwise pick an
 	// arbitrary member meanwhile.

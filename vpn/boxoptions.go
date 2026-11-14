@@ -435,7 +435,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	smartRoutingRules := normalizeSmartRoutingRules(bOptions.SmartRouting)
 	if len(smartRoutingRules) > 0 {
 		slog.Info("Adding smart-routing rules")
-		outbounds, rules, rulesets := smartRoutingRules.ToOptions(urlTestInterval, urlTestIdleTimeout)
+		outbounds, rules, rulesets := smartRoutingOptions(smartRoutingRules)
 		opts.Outbounds = append(opts.Outbounds, outbounds...)
 		opts.Route.Rules = append(opts.Route.Rules, rules...)
 		opts.Route.RuleSet = append(opts.Route.RuleSet, rulesets...)
@@ -604,6 +604,53 @@ func normalizeSmartRoutingRules(rules lcommon.SmartRoutingRules) lcommon.SmartRo
 		normalized = append(normalized, sr)
 	}
 	return normalized
+}
+
+// mutableSmartRoutingGroup returns out as a mutable url-test group if it is
+// one of the url-test groups [lcommon.SmartRoutingRules.ToOptions] builds, so
+// a config update can change its members.
+func mutableSmartRoutingGroup(out O.Outbound) O.Outbound {
+	urlTest, ok := out.Options.(*O.URLTestOutboundOptions)
+	if !ok {
+		return out
+	}
+	return O.Outbound{
+		Type: lbC.TypeMutableURLTest,
+		Tag:  out.Tag,
+		Options: &lbO.MutableURLTestOutboundOptions{
+			Outbounds:   urlTest.Outbounds,
+			URL:         urlTest.URL,
+			Interval:    urlTest.Interval,
+			Tolerance:   urlTest.Tolerance,
+			IdleTimeout: urlTest.IdleTimeout,
+		},
+	}
+}
+
+// smartRoutingOptions returns the outbounds, rules and rule sets that rules
+// produce, with the smart-routing groups as mutable url-test groups.
+func smartRoutingOptions(rules lcommon.SmartRoutingRules) ([]O.Outbound, []O.Rule, []O.RuleSet) {
+	outbounds, routeRules, ruleSets := rules.ToOptions(urlTestInterval, urlTestIdleTimeout)
+	for i, out := range outbounds {
+		outbounds[i] = mutableSmartRoutingGroup(out)
+	}
+	return outbounds, routeRules, ruleSets
+}
+
+// SmartRoutingMembers maps the tag of each smart-routing group that rules
+// produce to its members. It returns nil when rules is empty.
+func SmartRoutingMembers(rules lcommon.SmartRoutingRules) map[string][]string {
+	if len(rules) == 0 {
+		return nil
+	}
+	outbounds, _, _ := smartRoutingOptions(normalizeSmartRoutingRules(rules))
+	members := make(map[string][]string, len(outbounds))
+	for _, out := range outbounds {
+		if group, ok := out.Options.(*lbO.MutableURLTestOutboundOptions); ok {
+			members[out.Tag] = group.Outbounds
+		}
+	}
+	return members
 }
 
 func normalizeAdBlockRules(rules lcommon.AdBlockRules) lcommon.AdBlockRules {
