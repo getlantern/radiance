@@ -54,8 +54,7 @@ func startPersonalProxiesTestTunnel(t *testing.T, helpers ...string) *tunnel {
 }
 
 // startPersonalProxiesTestTunnelWith is startPersonalProxiesTestTunnel with
-// the inbounds that inbounds returns. It calls inbounds again for each retry
-// of a start whose inbound port was taken before the inbound bound it.
+// the inbounds that inbounds returns, called as startTestTunnel calls it.
 func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds func() []O.Inbound, helpers ...string) *tunnel {
 	t.Helper()
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -80,6 +79,14 @@ func startPersonalProxiesTestTunnelWith(t *testing.T, inbounds func() []O.Inboun
 		O.Outbound{Type: lbC.TypeMutableAutoSelect, Tag: AutoSelectTag,
 			Options: &lbO.MutableAutoSelectOutboundOptions{Outbounds: members, URL: probe.URL}},
 	)
+	return startTestTunnel(t, outbounds, inbounds)
+}
+
+// startTestTunnel starts a tunnel with outbounds in auto mode. inbounds, if
+// set, is called again for each retry of a start whose inbound port was taken
+// before the inbound bound it.
+func startTestTunnel(t *testing.T, outbounds []O.Outbound, inbounds func() []O.Inbound) *tunnel {
+	t.Helper()
 	options := O.Options{
 		Log:       &O.LogOptions{Disabled: true},
 		Outbounds: outbounds,

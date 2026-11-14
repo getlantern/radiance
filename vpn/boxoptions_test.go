@@ -67,7 +67,7 @@ func TestBuildOptions_Rulesets(t *testing.T) {
 	{
 		"outbounds": [
 			{
-				"type": "urltest",
+				"type": "mutableurltest",
 				"tag": "sr-openai",
 				"outbounds": ["http1-out", "socks1-out"],
 				"url": "https://google.com/generate_204",
@@ -263,6 +263,13 @@ func findOutbound(outs []O.Outbound, tag string) *O.Outbound {
 		return nil
 	}
 	return &outs[idx]
+}
+
+func TestSmartRoutingMembers(t *testing.T) {
+	cfg := testConfig(t)
+	assert.Equal(t, map[string][]string{"sr-openai": {"http1-out", "socks1-out"}},
+		SmartRoutingMembers(cfg.SmartRouting), "the direct-only category builds no group")
+	assert.Nil(t, SmartRoutingMembers(nil))
 }
 
 func testConfig(t *testing.T) config.Config {
