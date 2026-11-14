@@ -909,6 +909,28 @@ func TestWidgetTuningNATFailTimeout(t *testing.T) {
 	require.Empty(t, ignored)
 }
 
+func TestWidgetVolunteerSocket(t *testing.T) {
+	tests := []struct {
+		opts    map[string]string
+		want    bool
+		ignored bool
+	}{
+		{opts: nil},
+		{opts: map[string]string{volunteerSocketKey: "true"}, want: true},
+		{opts: map[string]string{volunteerSocketKey: "1"}, want: true},
+		{opts: map[string]string{volunteerSocketKey: "false"}},
+		{opts: map[string]string{volunteerSocketKey: "yes"}, ignored: true},
+	}
+	for _, tt := range tests {
+		on, ignored := widgetVolunteerSocket(tt.opts)
+		require.Equal(t, tt.want, on, tt.opts)
+		require.Equal(t, tt.ignored, len(ignored) > 0, tt.opts)
+	}
+	// It isn't WebRTC tuning, so widgetTuning neither reads nor reports it.
+	_, _, ignored := widgetTuning(map[string]string{volunteerSocketKey: "true"})
+	require.Empty(t, ignored)
+}
+
 func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
 	received := make(chan clientcore.WebRTCTuning, 3)
 	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
