@@ -1765,11 +1765,27 @@ func TestConfigUpdateRefreshesAHelperWhoseOptionsChanged(t *testing.T) {
 	after, _ := r.srvManager.GetServerByTag(h)
 	require.NotNil(t, after.SelectionHistory, "the server's history is kept")
 	assert.Equal(t, time.Unix(100, 0).UTC(), after.SelectionHistory.UpdatedAt)
+}
 
-	// Non-helper servers keep the first offer, as before.
-	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1080)}}, true))
-	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort("lantern-x", 1081)}}, true))
-	assert.Equal(t, uint16(1080), storedPort(t, r, "lantern-x"))
+// A plain Lantern server's tag repeats across config batches while the
+// credentials behind it rotate, so a known tag with new options replaces the
+// stored server and carries its SelectionHistory over. Keeping the first
+// offer forever left a rotated server dead in the list until the tag was
+// finally evicted.
+func TestConfigUpdateRefreshesALanternServerWhoseOptionsChanged(t *testing.T) {
+	const tag = "lantern-rotate"
+	r := newPersonalProxiesBackend(t)
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(tag, 1080)}}, true))
+	require.Equal(t, uint16(1080), storedPort(t, r, tag))
+	before, _ := r.srvManager.GetServerByTag(tag)
+	before.SelectionHistory = &servers.SelectionHistory{UpdatedAt: time.Unix(100, 0).UTC()}
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{before}}, true))
+
+	require.NoError(t, r.updateServers(servers.ServerList{Servers: []*servers.Server{helperWithPort(tag, 1081)}}, true))
+	assert.Equal(t, uint16(1081), storedPort(t, r, tag), "the new options are stored")
+	after, _ := r.srvManager.GetServerByTag(tag)
+	require.NotNil(t, after.SelectionHistory, "the server's history is kept")
+	assert.Equal(t, time.Unix(100, 0).UTC(), after.SelectionHistory.UpdatedAt)
 }
 
 func TestConfigUpdateLeavesAnUnchangedHelperAlone(t *testing.T) {
