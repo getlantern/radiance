@@ -22,6 +22,7 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
+	"github.com/getlantern/radiance/internal/testutil"
 )
 
 // TestMain initializes the settings package once for the whole test
@@ -35,6 +36,10 @@ import (
 // explicitly: capture m.Run's exit code, RemoveAll, then exit with
 // that code. A naked defer + os.Exit would silently leak a directory
 // per test invocation.
+//
+// The widget's HTTP clients dial through the fixed bypass proxy port, so
+// the package holds testutil.LockBypassPort while its tests run: another
+// package's fake proxy on that port would otherwise take their requests.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "radiance-unbounded-settings-*")
 	if err != nil {
@@ -44,7 +49,9 @@ func TestMain(m *testing.M) {
 		os.RemoveAll(dir)
 		panic(err)
 	}
+	unlock := testutil.LockBypassPort()
 	code := m.Run()
+	unlock()
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
@@ -902,6 +909,28 @@ func TestWidgetTuningNATFailTimeout(t *testing.T) {
 	require.Empty(t, ignored)
 }
 
+func TestWidgetVolunteerSocket(t *testing.T) {
+	tests := []struct {
+		opts    map[string]string
+		want    bool
+		ignored bool
+	}{
+		{opts: nil},
+		{opts: map[string]string{volunteerSocketKey: "true"}, want: true},
+		{opts: map[string]string{volunteerSocketKey: "1"}, want: true},
+		{opts: map[string]string{volunteerSocketKey: "false"}},
+		{opts: map[string]string{volunteerSocketKey: "yes"}, ignored: true},
+	}
+	for _, tt := range tests {
+		on, ignored := widgetVolunteerSocket(tt.opts)
+		require.Equal(t, tt.want, on, tt.opts)
+		require.Equal(t, tt.ignored, len(ignored) > 0, tt.opts)
+	}
+	// It isn't WebRTC tuning, so widgetTuning neither reads nor reports it.
+	_, _, ignored := widgetTuning(map[string]string{volunteerSocketKey: "true"})
+	require.Empty(t, ignored)
+}
+
 func TestApplyConfigRestartsOnTuningChange(t *testing.T) {
 	received := make(chan clientcore.WebRTCTuning, 3)
 	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
@@ -973,24 +1002,31 @@ func TestRunHookFollowsTheWorker(t *testing.T) {
 	assert.Equal(t, []bool{true, false}, heardSoFar())
 }
 
-func TestWidgetDialsTheEgressAroundTheTunnel(t *testing.T) {
-	received := make(chan *http.Client, 1)
-	resetManager(t, func(_ *clientcore.BroflakeOptions, _ *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
-		received <- eg.HTTPClient
+// Both of the widget's HTTP clients, for freddie and for the egress, go around
+// the tunnel. Signaling that resolved through the system resolver couldn't
+// reach freddie while the VPN was on, so a volunteer took no new consumers.
+func TestWidgetDialsAroundTheTunnel(t *testing.T) {
+	type clients struct{ signaling, egress *http.Client }
+	received := make(chan clients, 1)
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtc *clientcore.WebRTCOptions, eg *clientcore.EgressOptions) (widget, error) {
+		received <- clients{rtc.HTTPClient, eg.HTTPClient}
 		return &fakeWidget{}, nil
 	})
 	defer manager.stop()
 	primeManager(t, testCfg())
 	manager.start()
 	select {
-	case client := <-received:
-		require.Same(t, egressHTTPClient, client)
+	case c := <-received:
+		require.Same(t, bypassHTTPClient, c.egress)
+		require.NotNil(t, c.signaling)
+		require.Same(t, bypassHTTPClient.Transport, c.signaling.Transport)
+		require.NotNil(t, c.signaling.CheckRedirect, "signaling still refuses cross-origin redirects")
 	case <-time.After(time.Second):
 		t.Fatal("donor startup blocked")
 	}
 }
 
-func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
+func TestBypassHTTPClientDialsWithItsDialer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
@@ -999,7 +1035,7 @@ func TestEgressHTTPClientDialsWithItsDialer(t *testing.T) {
 	// The name doesn't resolve, so only a dial through the client's dialer,
 	// which sends every connection to the test server, reaches it.
 	var dialer net.Dialer
-	client := newEgressHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client := newBypassHTTPClient(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, network, srv.Listener.Addr().String())
 	})
 	require.Zero(t, client.Timeout, "websocket.Dial bounds the dial with its own context")

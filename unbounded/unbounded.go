@@ -125,14 +125,15 @@ type widget interface {
 	Stop()
 }
 
-// egressHTTPClient makes the widget's WebSocket handshake to the egress. With
-// the VPN on, the widget runs in the VPN's own process, whose sockets bypass
-// the tunnel while the system resolver points into it, so a default dial
-// can't resolve the egress. The bypass proxy resolves and routes around the
-// tunnel, and bypass.DialContext dials directly when the VPN isn't running.
-var egressHTTPClient = newEgressHTTPClient(bypass.DialContext)
+// bypassHTTPClient makes the widget's HTTP requests: its signaling with
+// freddie and its WebSocket handshake to the egress. With the VPN on, the
+// widget runs in the VPN's own process, whose sockets bypass the tunnel while
+// the system resolver points into it, so a default dial can't resolve either
+// host. The bypass proxy resolves and routes around the tunnel, and
+// bypass.DialContext dials directly when the VPN isn't running.
+var bypassHTTPClient = newBypassHTTPClient(bypass.DialContext)
 
-func newEgressHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+func newBypassHTTPClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = dial
@@ -279,14 +280,36 @@ const (
 	maxNATFailTimeout = 30 * time.Second
 )
 
+// volunteerSocketKey, set to "true", has the widget send its signaling to
+// freddie over one persistent WebSocket rather than a POST per message,
+// falling back to POSTs whenever it can't have the socket (see
+// clientcore.WebRTCOptions.VolunteerSocket).
+const volunteerSocketKey = "volunteer_socket"
+
+// widgetVolunteerSocket reports whether the server's widget tuning turns on
+// the volunteer socket. A value that isn't a bool is ignored, leaving it off.
+func widgetVolunteerSocket(opts map[string]string) (on bool, ignored []string) {
+	raw, ok := opts[volunteerSocketKey]
+	if !ok {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, []string{fmt.Sprintf("%s=%q", volunteerSocketKey, raw)}
+	}
+	return on, nil
+}
+
 // widgetTuning splits the server's widget tuning map into the NAT fail timeout,
 // which isn't WebRTC tuning, and everything clientcore.ParseWebRTCTuning reads.
 // A zero timeout means the key was absent or invalid; keep broflake's default.
+// It skips volunteerSocketKey, which widgetVolunteerSocket reads.
 func widgetTuning(opts map[string]string) (natFail time.Duration, tuning clientcore.WebRTCTuning, ignored []string) {
 	raw, ok := opts[natFailTimeoutKey]
-	if ok {
+	if _, socket := opts[volunteerSocketKey]; ok || socket {
 		opts = maps.Clone(opts)
 		delete(opts, natFailTimeoutKey)
+		delete(opts, volunteerSocketKey)
 	}
 	tuning, ignored = clientcore.ParseWebRTCTuning(opts)
 	if !ok {
@@ -907,7 +930,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		// A genesis POST carries this widget's room tickets; never let a
 		// redirect replay it to another origin.
-		rtcOpt.HTTPClient = sameorigin.Client(rtcOpt.HTTPClient, "unbounded: signaling")
+		rtcOpt.HTTPClient = sameorigin.Client(bypassHTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
 		// freddie counts outcomes for each kind of volunteer, so the apps can be
@@ -926,6 +949,9 @@ func (m *unboundedManager) startLocked() {
 			if natFail > 0 {
 				rtcOpt.NATFailTimeout = natFail
 			}
+			socket, socketIgnored := widgetVolunteerSocket(ucfg.Tuning)
+			rtcOpt.VolunteerSocket = socket
+			ignored = append(ignored, socketIgnored...)
 			if len(ignored) > 0 {
 				slog.Warn("Unbounded: ignoring widget tuning", "ignored", ignored)
 			}
@@ -946,7 +972,7 @@ func (m *unboundedManager) startLocked() {
 		served := applyRooms(rtcOpt, tickets)
 
 		egOpt := clientcore.NewDefaultEgressOptions()
-		egOpt.HTTPClient = egressHTTPClient
+		egOpt.HTTPClient = bypassHTTPClient
 		if ucfg != nil {
 			if ucfg.EgressAddr != "" {
 				egOpt.Addr = ucfg.EgressAddr

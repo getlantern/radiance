@@ -15,6 +15,7 @@ import (
 
 	lsync "github.com/getlantern/common/sync"
 	box "github.com/getlantern/lantern-box"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/clientcontext"
@@ -329,6 +330,9 @@ func startInfoServer(t *testing.T, dest string) (uint16, *infoRecorder) {
 	return port, recorder
 }
 
+// testHelperTag is a personal proxy's direct outbound tag (lbA.IsHelperTag).
+const testHelperTag = "helper-dff687a0c548"
+
 // TestTunnelClientInfo checks that the tunnel sends client info through
 // selectable lantern servers only, including on dials made directly through
 // their outbounds rather than the router, as servers are added, replaced and
@@ -376,10 +380,12 @@ func TestTunnelClientInfo(t *testing.T) {
 			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
 		},
 	}
-	// infra is a lantern server declared non-selectable.
+	// infra is a lantern server declared non-selectable. helper is a personal
+	// proxy's outbound, which comes in the same config as lantern servers.
+	options.Outbounds = append(options.Outbounds, proxyOutbound(testHelperTag))
 	tun := &tunnel{
 		dataPath:             t.TempDir(),
-		initialLanternTags:   []string{"lantern", "infra"},
+		initialLanternTags:   []string{"lantern", "infra", testHelperTag},
 		initialNonSelectable: []string{"infra"},
 		initialMode:          ManualSelectTag,
 	}
@@ -447,6 +453,20 @@ func TestTunnelClientInfo(t *testing.T) {
 		requireInfo(t, "lantern", true)
 		requireInfo(t, "other", false)
 		requireInfo(t, "infra", false)
+		requireInfo(t, testHelperTag, false)
+	})
+	// A personal proxy's peer box doesn't strip client info, so its outbounds,
+	// direct or reverse, never send it, though the config lists them with the
+	// lantern servers.
+	t.Run("helpers", func(t *testing.T) {
+		const added = "helper-0123456789ab"
+		addServer(t, added, true)
+		requireInfo(t, added, false)
+		reverse := testHelperTag + lbA.ReverseTagSuffix
+		addServer(t, reverse, true)
+		requireInfo(t, reverse, false)
+		replaceServer(t, testHelperTag, true)
+		requireInfo(t, testHelperTag, false)
 	})
 	t.Run("added", func(t *testing.T) {
 		addServer(t, "added", true)

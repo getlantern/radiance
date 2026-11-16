@@ -301,6 +301,7 @@ func setMobileMemoryLimits() {
 }
 
 func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
+	lanternTags = slices.DeleteFunc(slices.Clone(lanternTags), isHelperOutboundTag)
 	return clientcontext.NewInjector(func() clientcontext.ClientInfo {
 		return clientcontext.ClientInfo{
 			DeviceID:    settings.GetString(settings.DeviceIDKey),
@@ -312,8 +313,18 @@ func newClientInfoInjector(lanternTags []string) *clientcontext.Injector {
 	}, lanternTags...)
 }
 
+// isHelperOutboundTag reports whether tag is a personal proxy's outbound, direct
+// or reverse. It reaches a friend's peer box, not a Lantern server: the box
+// doesn't strip client info, so a frame sent ahead of the stream reaches the
+// destination and corrupts it (a TLS server answers "protocol version not
+// supported").
+func isHelperOutboundTag(tag string) bool {
+	return lbA.IsHelperTag(tag) || lbA.IsReverseHelperTag(tag)
+}
+
 // updateInjectionLocked enables client info injection only for selectable
-// Lantern outbounds that load successfully.
+// Lantern outbounds that load successfully, and never for a personal proxy's
+// (isHelperOutboundTag), though its servers come in the same config.
 //
 // The caller must hold t.outboundMu.
 func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
@@ -322,7 +333,7 @@ func (t *tunnel) updateInjectionLocked(tag string, lantern, loaded bool) {
 	}
 	_, nonSelectable := t.nonSelectableTags[tag]
 	switch {
-	case !lantern || nonSelectable:
+	case !lantern || nonSelectable || isHelperOutboundTag(tag):
 		t.injector.RemoveOutboundTags(tag)
 	case loaded:
 		// Failed loads leave the tag unchanged.
@@ -396,6 +407,10 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	t.outboundMgr = service.FromContext[adapter.OutboundManager](t.ctx)
 	t.connTracker.SetObserver(t.connObserver)
+	dnsRouter := service.FromContext[adapter.DNSRouter](t.ctx)
+	if unregister := resetOnSplitTunnelReload(t.boxInstance.Router(), dnsRouter, t.connTracker); unregister != nil {
+		t.closers = append([]io.Closer{unregister}, t.closers...)
+	}
 	if pm := service.FromContext[pause.Manager](t.ctx); pm != nil {
 		t.pauseManager = pm
 		t.netRecovery = newNetRecovery(t.boxInstance.Network(), pm.IsNetworkPaused)
@@ -454,6 +469,43 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 
 	slog.Info("Tunnel connection established")
 	return nil
+}
+
+// resetOnSplitTunnelReload clears the DNS cache and closes every tracked
+// connection each time the split-tunnel rule set reloads, since DNS rules can
+// match the rule set and a connection keeps the route it matched when it
+// opened. It returns nil when the router has no split-tunnel rule set;
+// otherwise closing the result unregisters the callback, and once Close returns,
+// no reset is running or will run.
+func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter, tracker *connTracker) io.Closer {
+	ruleSet, ok := router.RuleSet(splitTunnelTag)
+	if !ok {
+		return nil
+	}
+	var (
+		mu     sync.Mutex
+		closed bool
+	)
+	cb := ruleSet.RegisterCallback(func(adapter.RuleSet) {
+		mu.Lock()
+		defer mu.Unlock()
+		// A reload invokes a snapshot of its callbacks, so this can run after unregistering.
+		if closed {
+			return
+		}
+		slog.Info("Split-tunnel rules reloaded; clearing DNS cache and closing connections",
+			"connections", tracker.activeConnectionCount())
+		// Cleared first, so reconnecting flows don't resolve from the old cache.
+		dnsRouter.ClearCache()
+		tracker.closeAllTracked()
+	})
+	return closerFunc(func() error {
+		ruleSet.UnregisterCallback(cb)
+		mu.Lock()
+		closed = true
+		mu.Unlock()
+		return nil
+	})
 }
 
 // onPauseUpdate mirrors the pause manager's network-axis transitions onto
