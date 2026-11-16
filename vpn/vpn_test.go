@@ -478,3 +478,8 @@ func TestManualSelectionIsModeAware(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "srv-a", tag)
 }
+
+func TestBoxContextWithoutATunnel(t *testing.T) {
+	c := &VPNClient{}
+	assert.Nil(t, c.BoxContext())
+}

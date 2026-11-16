@@ -651,6 +651,18 @@ func (c *VPNClient) PhysicalInterfaceControl() control.Func {
 	return nm.AutoDetectInterfaceFunc()
 }
 
+// BoxContext returns the running tunnel's sing-box context, or nil with no
+// tunnel running. Code that opens sockets in this process for itself reads the
+// tunnel's network and DNS services from it.
+func (c *VPNClient) BoxContext() context.Context {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.ctx
+}
+
 // restoreReverseLocked gives the tunnel the kept reverse direct state. The
 // caller must hold c.mu.
 func (c *VPNClient) restoreReverseLocked() error {
