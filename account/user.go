@@ -282,12 +282,17 @@ func currentLoginIdentity() loginIdentity {
 }
 
 func (a *Client) login(ctx context.Context, email, password string, expectedLegacyID int64) (*UserData, error) {
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
-	defer span.End()
-
 	a.mu.RLock()
 	identity := currentLoginIdentity()
 	a.mu.RUnlock()
+	return a.loginAs(ctx, identity, email, password, expectedLegacyID)
+}
+
+// loginAs fails without saving anything if the active identity no longer matches identity.
+func (a *Client) loginAs(ctx context.Context, identity loginIdentity, email, password string, expectedLegacyID int64) (*UserData, error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "login")
+	defer span.End()
+
 	guarded := expectedLegacyID != 0
 	if guarded && identity.userID != expectedLegacyID {
 		return nil, traces.RecordError(ctx, errors.New("active account does not match expected account"))

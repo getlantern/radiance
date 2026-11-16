@@ -91,7 +91,7 @@ func (a *Client) CompleteBindLegacyEmail(ctx context.Context, email, password, c
 	if err != nil && (ctx.Err() != nil || !a.emailBound(ctx, identity, email)) {
 		return traces.RecordError(ctx, bindError(err))
 	}
-	if _, err := a.login(ctx, email, password, identity.userID); err != nil {
+	if _, err := a.loginAs(ctx, identity, email, password, identity.userID); err != nil {
 		return traces.RecordError(ctx, fmt.Errorf("%w: %w", ErrBoundLoginRequired, err))
 	}
 	return nil

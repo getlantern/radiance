@@ -25,6 +25,7 @@ type bindingServer struct {
 	rejectBind     bool
 	boundEmail     string
 	completed      *protos.CompleteBindLegacyEmailRequest
+	duringComplete func()
 }
 
 // legacyBindingClient returns a client signed in to legacy account 42 with a
@@ -48,6 +49,9 @@ func legacyBindingClient(t *testing.T) (*Client, *bindingServer) {
 				state.salt[req.Email] = req.NewSalt
 				state.verifier = req.NewVerifier
 				server.boundEmail = req.Email
+			}
+			if server.duringComplete != nil {
+				server.duringComplete()
 			}
 			if server.completeStatus != http.StatusOK {
 				http.Error(w, "bad gateway", server.completeStatus)
@@ -162,6 +166,28 @@ func TestCompleteBindLegacyEmailLoginFailure(t *testing.T) {
 	err := a.CompleteBindLegacyEmail(t.Context(), "real@example.com", "new-password", "123456")
 	require.ErrorIs(t, err, ErrBoundLoginRequired)
 	assert.ErrorContains(t, err, "authenticated account does not match")
+}
+
+func TestCompleteBindLegacyEmailRejectsChangedIdentity(t *testing.T) {
+	for name, change := range map[string]func(*Client) error{
+		"token":  func(a *Client) error { return a.storeIdentity(42, "replacement-token") },
+		"device": func(*Client) error { return settings.Set(settings.DeviceIDKey, "replacement-device") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, server := legacyBindingClient(t)
+			var before string
+			server.duringComplete = func() {
+				assert.NoError(t, change(a))
+				before = bindingSettings(t)
+			}
+
+			err := a.CompleteBindLegacyEmail(t.Context(), "real@example.com", "new-password", "123456")
+			require.ErrorIs(t, err, ErrBoundLoginRequired)
+			assert.ErrorContains(t, err, "account changed during login")
+			assert.JSONEq(t, before, bindingSettings(t))
+			assert.Nil(t, a.getSaltCached())
+		})
+	}
 }
 
 func TestBindLegacyEmailRequiresDeviceCredentials(t *testing.T) {
