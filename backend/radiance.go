@@ -464,9 +464,12 @@ func (r *LocalBackend) Start() {
 		unbounded.SetRunHook(func(running bool) { r.bridgeClient.SetRunning(r.ctx, running) })
 	}
 	// The widget reports the tunnel's state with its STUN preflights, so
-	// freddie can tell whether STUN failures follow the VPN.
+	// freddie can tell whether STUN failures follow the VPN. The widget also
+	// reads the tunnel's sing-box context to keep its WebRTC sockets off the
+	// tunnel.
 	if r.vpnClient != nil {
 		unbounded.SetVPNStatus(func() string { return string(r.vpnClient.Status()) })
+		unbounded.SetBoxContext(r.vpnClient.BoxContext)
 	}
 	unbounded.InitSubscription(cachedCfg)
 

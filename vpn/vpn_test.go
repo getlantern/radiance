@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	box "github.com/getlantern/lantern-box"
 	"github.com/sagernet/sing-box/adapter"
@@ -477,4 +478,36 @@ func TestManualSelectionIsModeAware(t *testing.T) {
 	tag, ok := c.ManualSelection()
 	assert.True(t, ok)
 	assert.Equal(t, "srv-a", tag)
+}
+
+func TestBoxContextWithoutATunnel(t *testing.T) {
+	c := &VPNClient{}
+	assert.Nil(t, c.BoxContext())
+}
+
+func TestBoxContextFollowsTheTunnel(t *testing.T) {
+	c := &VPNClient{}
+	ctx := context.WithValue(context.Background(), boxCtxKey{}, 1)
+	c.setTunnelLocked(&tunnel{ctx: ctx})
+	assert.Equal(t, ctx, c.BoxContext())
+	c.setTunnelLocked(nil)
+	assert.Nil(t, c.BoxContext())
+}
+
+type boxCtxKey struct{}
+
+func TestBoxContextDoesNotWaitOnABringUp(t *testing.T) {
+	c := &VPNClient{}
+	ctx := context.WithValue(context.Background(), boxCtxKey{}, 1)
+	c.setTunnelLocked(&tunnel{ctx: ctx})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	got := make(chan context.Context, 1)
+	go func() { got <- c.BoxContext() }()
+	select {
+	case g := <-got:
+		assert.Equal(t, ctx, g)
+	case <-time.After(5 * time.Second):
+		t.Fatal("BoxContext waited on c.mu")
+	}
 }

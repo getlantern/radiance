@@ -203,6 +203,11 @@ type unboundedManager struct {
 	// freddie with its STUN preflights. nil: it reports none.
 	vpnStatus func() string
 
+	// boxCtx returns the running VPN tunnel's sing-box context, or nil with
+	// none. The widget's WebRTC sockets follow it (see tunnelNet). nil: they
+	// use the host stack.
+	boxCtx func() context.Context
+
 	// runningCfg is the snapshot of UnboundedConfig the live worker
 	// was started with. broflake consumes its discovery/egress
 	// options once in clientcore.NewBroflake, so a server-side config
@@ -415,6 +420,15 @@ func SetVPNStatus(status func() string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.vpnStatus = status
+}
+
+// SetBoxContext sets where the widget finds the running VPN tunnel's
+// sing-box context, so its WebRTC sockets stay off the tunnel. A widget
+// already running keeps its source until it restarts.
+func SetBoxContext(boxCtx func() context.Context) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.boxCtx = boxCtx
 }
 
 // roomSyncInterval is how often a running widget re-reads its tickets and the
@@ -846,6 +860,7 @@ func (m *unboundedManager) startLocked() {
 	ucfg := m.lastCfg
 	tickets := m.tickets
 	vpnStatus := m.vpnStatus
+	boxCtx := m.boxCtx
 	syncInterval := roomSyncInterval
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -933,6 +948,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt.HTTPClient = sameorigin.Client(bypassHTTPClient, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
+		rtcOpt.Net = newTunnelNet(boxCtx)
 		// freddie counts outcomes for each kind of volunteer, so the apps can be
 		// compared with the browser widget and lantern-box nodes.
 		rtcOpt.VolunteerKind = common.VolunteerKindApp

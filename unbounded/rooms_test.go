@@ -308,6 +308,17 @@ func TestWidgetReportsTheVPNStatus(t *testing.T) {
 	assert.Equal(t, "connected", opts(0).VPNStatus())
 }
 
+func TestWidgetGetsATunnelNet(t *testing.T) {
+	count, opts, _ := recordingWidgets(t)
+	SetBoxContext(func() context.Context { return nil })
+	t.Cleanup(func() { SetBoxContext(nil) })
+	primeManager(t, nil)
+	manager.start()
+	waitForCount(t, count, 1, 2*time.Second)
+	_, ok := opts(0).Net.(*tunnelNet)
+	assert.True(t, ok, "the widget's Net is %T", opts(0).Net)
+}
+
 // The widget reports to the netstated server lantern-cloud names, and to none
 // when it names none.
 func TestWidgetNetstatedFromConfig(t *testing.T) {
