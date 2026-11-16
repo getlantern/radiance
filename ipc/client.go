@@ -520,25 +520,21 @@ func (c *Client) NewUser(ctx context.Context) (*account.UserData, error) {
 
 // Login authenticates the user with email and password.
 func (c *Client) Login(ctx context.Context, email, password string) (*account.UserData, error) {
-	return c.login(ctx, email, password, 0)
+	return c.login(ctx, accountLoginEndpoint, email, password, 0)
 }
 
 // LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
 func (c *Client) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
-	if expectedLegacyID <= 0 {
-		return nil, errors.New("expected account ID must be positive")
-	}
-	return c.login(ctx, email, password, expectedLegacyID)
+	return c.login(ctx, accountLoginCurrentEndpoint, email, password, expectedLegacyID)
 }
 
-func (c *Client) login(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
-	endpoint := accountLoginEndpoint
-	if expectedLegacyID != 0 {
-		endpoint += "/current"
+func (c *Client) login(ctx context.Context, endpoint, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	req := LoginRequest{
+		EmailPasswordRequest: EmailPasswordRequest{Email: email, Password: password},
+		ExpectedLegacyID:     expectedLegacyID,
 	}
 	var userData account.UserData
-	err := c.doJSON(ctx, http.MethodPost, endpoint,
-		LoginRequest{EmailPasswordRequest: EmailPasswordRequest{Email: email, Password: password}, ExpectedLegacyID: expectedLegacyID}, &userData)
+	err := c.doJSON(ctx, http.MethodPost, endpoint, req, &userData)
 	if err != nil {
 		return nil, err
 	}

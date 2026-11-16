@@ -288,26 +288,26 @@ func (a *Client) login(ctx context.Context, email, password string, expectedLega
 	a.mu.RLock()
 	identity := currentLoginIdentity()
 	a.mu.RUnlock()
-	if expectedLegacyID != 0 && identity.userID != expectedLegacyID {
-		return nil, errors.New("active account does not match expected account")
+	guarded := expectedLegacyID != 0
+	if guarded && identity.userID != expectedLegacyID {
+		return nil, traces.RecordError(ctx, errors.New("active account does not match expected account"))
 	}
 
 	lowerCaseEmail := strings.ToLower(email)
-	saltResponse, err := a.fetchSalt(ctx, lowerCaseEmail)
+	saltResp, err := a.fetchSalt(ctx, lowerCaseEmail)
 	if err != nil {
 		return nil, traces.RecordError(ctx, err)
 	}
-	salt := saltResponse.Salt
+	salt := saltResp.Salt
 
-	deviceID := identity.deviceID
 	proof, err := a.clientProof(ctx, lowerCaseEmail, password, salt)
 	if err != nil {
-		return nil, err
+		return nil, traces.RecordError(ctx, err)
 	}
 
 	loginData := &protos.LoginRequest{
 		Email:    lowerCaseEmail,
-		DeviceId: deviceID,
+		DeviceId: identity.deviceID,
 		Proof:    proof,
 	}
 	resp, err := a.sendRequest(ctx, "POST", "/users/login", nil, nil, loginData)
@@ -319,21 +319,21 @@ func (a *Client) login(ctx context.Context, email, password string, expectedLega
 	if err := proto.Unmarshal(resp, &loginResp); err != nil {
 		return nil, traces.RecordError(ctx, fmt.Errorf("error unmarshalling login response: %w", err))
 	}
-	if expectedLegacyID != 0 && loginResp.LegacyID != expectedLegacyID {
-		return nil, errors.New("authenticated account does not match expected account")
+	if guarded && loginResp.LegacyID != expectedLegacyID {
+		return nil, traces.RecordError(ctx, errors.New("authenticated account does not match expected account"))
 	}
-	if expectedLegacyID != 0 && (!loginResp.Success || loginResp.LegacyUserData == nil) {
-		return nil, errors.New("account login did not complete")
+	if guarded && (!loginResp.Success || loginResp.LegacyUserData == nil) {
+		return nil, traces.RecordError(ctx, errors.New("account login did not complete"))
 	}
 	//this can be nil if the user has reached the device limit
 	if loginResp.LegacyUserData != nil {
-		loginResp.LegacyUserData.DeviceID = deviceID
+		loginResp.LegacyUserData.DeviceID = identity.deviceID
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if currentLoginIdentity() != identity {
-		return nil, errors.New("account changed during login")
+		return nil, traces.RecordError(ctx, errors.New("account changed during login"))
 	}
 	if saltErr := writeSalt(salt, a.saltPath); saltErr != nil {
 		return nil, traces.RecordError(ctx, saltErr)

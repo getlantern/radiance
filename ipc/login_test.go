@@ -26,7 +26,7 @@ func TestLoginClientAccountGuard(t *testing.T) {
 				require.Equal(t, http.MethodPost, r.Method)
 				path := accountLoginEndpoint
 				if expectedID != 0 {
-					path += "/current"
+					path = accountLoginCurrentEndpoint
 				}
 				require.Equal(t, path, r.URL.Path)
 				body, err := io.ReadAll(r.Body)
@@ -57,7 +57,7 @@ func TestLoginClientAccountGuard(t *testing.T) {
 func TestLoginRouteRejectsInvalidAccountGuard(t *testing.T) {
 	api := newLocalAPI(&backend.LocalBackend{}, false)
 	for _, body := range []string{`{"expectedLegacyID":-1}`, `{"expectedLegacyID":0}`, `{}`} {
-		request := httptest.NewRequest(http.MethodPost, accountLoginEndpoint+"/current", strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, accountLoginCurrentEndpoint, strings.NewReader(body))
 		response := httptest.NewRecorder()
 		api.ServeHTTP(response, request)
 		require.Equal(t, http.StatusUnauthorized, response.Code)
