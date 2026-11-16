@@ -75,6 +75,13 @@ func (a *Client) setSalt(salt []byte) {
 	a.salt = salt
 }
 
+// PatchSettings saves updates under the account lock, so a login can't commit over them.
+func (a *Client) PatchSettings(updates settings.Settings) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return settings.Patch(updates)
+}
+
 func (a *Client) proBaseURL() string {
 	if a.proURL != "" {
 		return a.proURL

@@ -133,3 +133,25 @@ func TestLoginRejectsChangedIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestPatchSettingsWaitsForAccountLock(t *testing.T) {
+	ac, _ := newTestClientWithSRP(t, "test@example.com", "password")
+	ac.setData(&UserData{LegacyID: 123, LegacyToken: "original-token"})
+
+	ac.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- ac.PatchSettings(settings.Settings{settings.UserIDKey: int64(456)})
+	}()
+	select {
+	case <-done:
+		ac.mu.Unlock()
+		t.Fatal("patch did not wait for the account lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.Equal(t, int64(123), settings.GetInt64(settings.UserIDKey))
+	ac.mu.Unlock()
+
+	require.NoError(t, <-done)
+	require.Equal(t, int64(456), settings.GetInt64(settings.UserIDKey))
+}

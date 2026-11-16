@@ -869,6 +869,20 @@ func (r *LocalBackend) Features() map[string]bool {
 	return cfg.Features
 }
 
+// saveSettings persists diff. Identity changes go through the account client so they can't
+// land in the middle of a login.
+func (r *LocalBackend) saveSettings(diff settings.Settings) error {
+	if r.accountClient != nil {
+		for key := range diff {
+			switch key {
+			case settings.UserIDKey, settings.TokenKey, settings.DeviceIDKey:
+				return r.accountClient.PatchSettings(diff)
+			}
+		}
+	}
+	return settings.Patch(diff)
+}
+
 func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
@@ -902,7 +916,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// peer_serve_pool, rather than the previous ones.
 	var patchErr error
 	if len(diff) > 0 {
-		patchErr = settings.Patch(diff)
+		patchErr = r.saveSettings(diff)
 	}
 	// A failed save still applies the live value, which the route follows.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
