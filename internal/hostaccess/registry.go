@@ -16,7 +16,13 @@ import (
 // [ErrDenied] for options that may not be built. box.Context keeps registries
 // already in ctx, and those are wrapped in place at most once.
 func Context(ctx context.Context) context.Context {
-	ctx = box.Context(ctx)
+	return ContextWithDNSTransport(ctx, nil)
+}
+
+// ContextWithDNSTransport is [Context], with `local` DNS servers resolved
+// through platform's local DNS transport when it provides one.
+func ContextWithDNSTransport(ctx context.Context, platform box.PlatformInterface) context.Context {
+	ctx = box.ContextWithDNSTransport(ctx, platform)
 	wrap[adapter.OutboundRegistry, outboundRegistry](ctx, func(r adapter.OutboundRegistry) adapter.OutboundRegistry {
 		return outboundRegistry{r}
 	})
