@@ -57,6 +57,10 @@ func TestTunnelNetFollowsTheTunnel(t *testing.T) {
 	n, err = tn.current()
 	require.NoError(t, err)
 	assert.Equal(t, "std", n.(*taggedNet).tag, "VPN off again: the host stack")
+	tn.mu.Lock()
+	assert.Nil(t, tn.ctx, "the dead tunnel's context is dropped")
+	assert.Nil(t, tn.net, "the dead tunnel's Net is dropped")
+	tn.mu.Unlock()
 }
 
 func TestTunnelNetWithoutASource(t *testing.T) {

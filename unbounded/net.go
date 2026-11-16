@@ -36,13 +36,17 @@ func newTunnelNet(boxCtx func() context.Context) *tunnelNet {
 }
 
 // current is the Net for the running tunnel, built once per tunnel, or a fresh host-stack Net with
-// none (stdnet captures the interfaces when it is made).
+// none (stdnet captures the interfaces when it is made). With none it drops the last tunnel's,
+// which would otherwise keep that box alive until the next tunnel.
 func (t *tunnelNet) current() (transport.Net, error) {
 	var ctx context.Context
 	if t.boxCtx != nil {
 		ctx = t.boxCtx()
 	}
 	if ctx == nil {
+		t.mu.Lock()
+		t.ctx, t.net = nil, nil
+		t.mu.Unlock()
 		return t.newStd()
 	}
 	t.mu.Lock()

@@ -72,6 +72,9 @@ func (s *VPNStatus) String() string {
 // VPNClient manages the lifecycle of the VPN tunnel.
 type VPNClient struct {
 	tunnel *tunnel
+	// boxCtx is tunnel's sing-box context, read lock-free so the Unbounded
+	// widget's sockets never wait out a connect.
+	boxCtx atomic.Pointer[context.Context]
 
 	platformIfce PlatformInterface
 	logger       *slog.Logger
@@ -227,7 +230,7 @@ func (c *VPNClient) Connect(ctx context.Context, boxOptions BoxOptions) error {
 			return fmt.Errorf("tunnel is currently %s", status)
 		case Disconnected, ErrorStatus:
 			// Clean up the stale tunnel so we can reconnect.
-			c.tunnel = nil
+			c.setTunnelLocked(nil)
 		default:
 			return fmt.Errorf("tunnel is in unexpected state: %s", status)
 		}
@@ -273,7 +276,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 		t := c.newTunnel(boxOptions, initialMode)
 		err := t.start(ctx, options, c.platformIfce, isRestart)
 		if err == nil {
-			c.tunnel = t
+			c.setTunnelLocked(t)
 			if err := c.restoreReverseLocked(); err != nil {
 				// The error can name a reverse tag or the portal's port.
 				c.logger.Warn("Failed to restore reverse direct state on the new tunnel")
@@ -300,7 +303,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 
 func (c *VPNClient) close() error {
 	t := c.tunnel
-	c.tunnel = nil
+	c.setTunnelLocked(nil)
 
 	c.logger.Debug("Closing tunnel")
 	c.setStatus(Disconnecting, nil)
@@ -655,12 +658,21 @@ func (c *VPNClient) PhysicalInterfaceControl() control.Func {
 // tunnel running. Code that opens sockets in this process for itself reads the
 // tunnel's network and DNS services from it.
 func (c *VPNClient) BoxContext() context.Context {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.tunnel == nil {
-		return nil
+	if ctx := c.boxCtx.Load(); ctx != nil {
+		return *ctx
 	}
-	return c.tunnel.ctx
+	return nil
+}
+
+// setTunnelLocked makes t the running tunnel. The caller must hold c.mu.
+func (c *VPNClient) setTunnelLocked(t *tunnel) {
+	c.tunnel = t
+	if t == nil {
+		c.boxCtx.Store(nil)
+		return
+	}
+	ctx := t.ctx
+	c.boxCtx.Store(&ctx)
 }
 
 // restoreReverseLocked gives the tunnel the kept reverse direct state. The
