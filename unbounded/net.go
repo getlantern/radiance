@@ -158,18 +158,34 @@ func (t *tunnelNet) InterfaceByName(name string) (*transport.Interface, error) {
 	return n.InterfaceByName(name)
 }
 
-// CreateDialer and CreateListenConfig can't fail, so with no Net to hand them to they use the host
-// stack's.
+// CreateDialer and CreateListenConfig can't fail, so with no Net to hand them to they return ones
+// whose every call fails: the host stack's would route the widget's sockets into a running tunnel.
 func (t *tunnelNet) CreateDialer(d *net.Dialer) transport.Dialer {
-	if n, err := t.current(); err == nil {
-		return n.CreateDialer(d)
+	n, err := t.current()
+	if err != nil {
+		return failingDialer{err}
 	}
-	return d
+	return n.CreateDialer(d)
 }
 
 func (t *tunnelNet) CreateListenConfig(lc *net.ListenConfig) transport.ListenConfig {
-	if n, err := t.current(); err == nil {
-		return n.CreateListenConfig(lc)
+	n, err := t.current()
+	if err != nil {
+		return failingListenConfig{err}
 	}
-	return lc
+	return n.CreateListenConfig(lc)
+}
+
+type failingDialer struct{ err error }
+
+func (f failingDialer) Dial(string, string) (net.Conn, error) { return nil, f.err }
+
+type failingListenConfig struct{ err error }
+
+func (f failingListenConfig) Listen(context.Context, string, string) (net.Listener, error) {
+	return nil, f.err
+}
+
+func (f failingListenConfig) ListenPacket(context.Context, string, string) (net.PacketConn, error) {
+	return nil, f.err
 }

@@ -3,6 +3,7 @@ package unbounded
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/pion/transport/v5"
@@ -75,5 +76,20 @@ func TestTunnelNetPassesErrorsOn(t *testing.T) {
 	tn := newTunnelNet(func() context.Context { return context.Background() })
 	tn.newProtected = func(context.Context) (transport.Net, error) { return nil, boom }
 	_, err := tn.Interfaces()
+	assert.ErrorIs(t, err, boom)
+}
+
+func TestTunnelNetDialerAndListenConfigFailWithoutAProtectedNet(t *testing.T) {
+	boom := errors.New("boom")
+	tn := newTunnelNet(func() context.Context { return context.Background() })
+	tn.newProtected = func(context.Context) (transport.Net, error) { return nil, boom }
+
+	_, err := tn.CreateDialer(&net.Dialer{}).Dial("tcp", "127.0.0.1:1")
+	assert.ErrorIs(t, err, boom, "no falling back to the host stack, whose routes go into the tunnel")
+
+	lc := tn.CreateListenConfig(&net.ListenConfig{})
+	_, err = lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	assert.ErrorIs(t, err, boom)
+	_, err = lc.ListenPacket(context.Background(), "udp", "127.0.0.1:0")
 	assert.ErrorIs(t, err, boom)
 }
