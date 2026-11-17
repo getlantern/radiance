@@ -478,8 +478,9 @@ type PersonalProxyStatus struct {
 	// counts.
 	RoomsPath string `json:"rooms_path,omitempty"`
 	// RoomsPathSince is when RoomsPath's connection last changed, in Unix
-	// seconds: the path connecting, or dropping. It is 0 while
-	// RoomsPathConnecting.
+	// seconds: the path connecting or dropping or, while no path has
+	// connected since the consumer started, the consumer starting. Selecting
+	// a friend restarts the consumers, so the clock starts over then.
 	RoomsPathSince int64 `json:"rooms_path_since,omitempty"`
 }
 
@@ -489,13 +490,15 @@ const (
 	// egress behind it may still fail.
 	RoomsPathConnected = "connected"
 	// RoomsPathConnecting: no data channel has opened since the consumer
-	// started. Nothing was lost, but nothing is carried either.
+	// started, less than lbA.HelperPathGrace ago. Nothing is carried yet.
 	RoomsPathConnecting = "connecting"
 	// RoomsPathReconnecting: the last data channel closed less than
 	// lbA.HelperPathGrace ago, which a channel that reopens at once does.
 	RoomsPathReconnecting = "reconnecting"
 	// RoomsPathUnavailable: the path has been down for lbA.HelperPathGrace,
-	// and the consumer fails its flows and dials until it reconnects.
+	// or none has connected that long since the consumer started (the
+	// friend's helper is offline or unreachable), and the consumer fails its
+	// flows and dials until one connects.
 	RoomsPathUnavailable = "unavailable"
 )
 

@@ -341,7 +341,8 @@ func TestPersonalProxyStatusSetRoomsPath(t *testing.T) {
 		sinceUnix int64
 	}{
 		{lbA.HelperPathStatus{Connected: true, Since: since, Available: true}, RoomsPathConnected, since.Unix()},
-		{lbA.HelperPathStatus{Connecting: true, Available: true}, RoomsPathConnecting, 0},
+		{lbA.HelperPathStatus{Connecting: true, NeverConnected: true, Since: since, Available: true}, RoomsPathConnecting, since.Unix()},
+		{lbA.HelperPathStatus{NeverConnected: true, Since: since}, RoomsPathUnavailable, since.Unix()},
 		{lbA.HelperPathStatus{Since: since, Available: true}, RoomsPathReconnecting, since.Unix()},
 		{lbA.HelperPathStatus{Since: since}, RoomsPathUnavailable, since.Unix()},
 	} {
@@ -352,6 +353,23 @@ func TestPersonalProxyStatusSetRoomsPath(t *testing.T) {
 			assert.Equal(t, tc.sinceUnix, s.RoomsPathSince)
 		})
 	}
+}
+
+// A friend whose helper is offline when the consumer (re)starts, as when
+// selecting the friend restarts it, is connecting for lbA.HelperPathGrace and
+// then unavailable, with the consumer's start as its since.
+func TestRoomsPathOfAHelperOfflineAtStart(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-time.Second)
+	var s PersonalProxyStatus
+	s.SetRoomsPath(lbA.NewHelperPathStatus(false, time.Time{}, started, now))
+	assert.Equal(t, RoomsPathConnecting, s.RoomsPath)
+	assert.Equal(t, started.Unix(), s.RoomsPathSince)
+
+	started = now.Add(-lbA.HelperPathGrace - time.Second)
+	s.SetRoomsPath(lbA.NewHelperPathStatus(false, time.Time{}, started, now))
+	assert.Equal(t, RoomsPathUnavailable, s.RoomsPath)
+	assert.Equal(t, started.Unix(), s.RoomsPathSince)
 }
 
 func TestRoomsPathRankPrefersTheMostUsable(t *testing.T) {
