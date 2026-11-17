@@ -99,6 +99,10 @@ type VPNClient struct {
 	reverseMasquerade string
 	reverseTags       atomic.Pointer[[]string]
 
+	// staleSource is the stale source restart state, shared across tunnels
+	// so a restart's rate limit and outcome outlive the tunnel it replaced.
+	staleSource staleSourceGuard
+
 	mu sync.RWMutex
 }
 
@@ -126,14 +130,16 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 // newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
 func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel {
 	t := &tunnel{
-		dataPath:             boxOptions.BasePath,
-		selectionHistorySeed: boxOptions.SelectionHistorySeed,
-		initialLanternTags:   boxOptions.LanternServerTags,
-		initialNonSelectable: boxOptions.NonSelectableOutbounds,
-		initialMode:          initialMode,
-		portalMasquerade:     boxOptions.reverseMasquerade,
-		connObserver:         c.connObserver,
-		inviterTickets:       c.inviterTickets,
+		dataPath:              boxOptions.BasePath,
+		selectionHistorySeed:  boxOptions.SelectionHistorySeed,
+		initialLanternTags:    boxOptions.LanternServerTags,
+		initialNonSelectable:  boxOptions.NonSelectableOutbounds,
+		initialMode:           initialMode,
+		portalMasquerade:      boxOptions.reverseMasquerade,
+		connObserver:          c.connObserver,
+		inviterTickets:        c.inviterTickets,
+		staleSource:           &c.staleSource,
+		restartForStaleSource: c.staleSourceRestart(),
 	}
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
 		t.personalProxy.Store(&friend)

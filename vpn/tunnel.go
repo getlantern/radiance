@@ -128,6 +128,12 @@ type tunnel struct {
 	// endPauseTimer force-wakes an iOS device pause; see devicePause. Guarded by pauseMu.
 	endPauseTimer *time.Timer
 	pauseMu       sync.Mutex
+
+	// staleSource is the stale source restart state the client's tunnels
+	// share, and restartForStaleSource starts a restart of this tunnel for
+	// one; nil when the client has no restart path.
+	staleSource           *staleSourceGuard
+	restartForStaleSource func()
 }
 
 func (t *tunnel) start(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface, isRestart bool) error {
@@ -441,6 +447,11 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 			events.Emit(NetworkEvent{EventType: NetworkEventWake})
 			return nil
 		}))
+	}
+
+	if checker := t.startStaleSourceChecker(); checker != nil {
+		// Prepend: it resets the box's network, so it stops before the box closes.
+		t.closers = append([]io.Closer{checker}, t.closers...)
 	}
 
 	if common.IsIOS() {
