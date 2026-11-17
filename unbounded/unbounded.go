@@ -126,8 +126,9 @@ type widget interface {
 }
 
 // bypassHTTPClient makes the widget's HTTP requests: its signaling with
-// freddie and its WebSocket handshake to the egress. With the VPN on, the
-// widget runs in the VPN's own process, whose sockets bypass the tunnel while
+// freddie, unless that path can't connect (see signalingTransport), and its
+// WebSocket handshake to the egress. With the VPN on, the widget runs in the
+// VPN's own process, whose sockets bypass the tunnel while
 // the system resolver points into it, so a default dial can't resolve either
 // host. The bypass proxy resolves and routes around the tunnel, and
 // bypass.DialContext dials directly when the VPN isn't running.
@@ -945,7 +946,7 @@ func (m *unboundedManager) startLocked() {
 		rtcOpt := clientcore.NewDefaultWebRTCOptions()
 		// A genesis POST carries this widget's room tickets; never let a
 		// redirect replay it to another origin.
-		rtcOpt.HTTPClient = sameorigin.Client(bypassHTTPClient, "unbounded: signaling")
+		rtcOpt.HTTPClient = sameorigin.Client(&http.Client{Transport: signalingTransport}, "unbounded: signaling")
 		rtcOpt.STUNBatch = donorSTUNBatch(nil)
 		rtcOpt.VPNStatus = vpnStatus
 		rtcOpt.Net = newTunnelNet(boxCtx)

@@ -1019,7 +1019,8 @@ func TestWidgetDialsAroundTheTunnel(t *testing.T) {
 	case c := <-received:
 		require.Same(t, bypassHTTPClient, c.egress)
 		require.NotNil(t, c.signaling)
-		require.Same(t, bypassHTTPClient.Transport, c.signaling.Transport)
+		require.Same(t, signalingTransport, c.signaling.Transport)
+		require.Same(t, bypassHTTPClient.Transport, signalingTransport.(*fallbackTransport).direct)
 		require.NotNil(t, c.signaling.CheckRedirect, "signaling still refuses cross-origin redirects")
 	case <-time.After(time.Second):
 		t.Fatal("donor startup blocked")
