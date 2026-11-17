@@ -470,17 +470,21 @@ type PersonalProxyStatus struct {
 	// running tunnel, or 0 if it has none.
 	DirectDelayMs uint16 `json:"direct_delay_ms,omitempty"`
 	// RoomsPath is the WebRTC path of the running tunnel's rooms consumer to
-	// the friend, one of the RoomsPath constants, while Rooms and the tunnel
-	// runs a consumer that may reach the friend; else it is empty, and
-	// unknown. Rooms only says a consumer and a ticket exist: a consumer whose
-	// path is RoomsPathUnavailable carries nothing. While no friend is
+	// the friend, one of the RoomsPath constants, whenever Rooms is true. It
+	// is RoomsPathUnknown when the path can't be measured: no tunnel is
+	// running, or another friend is selected and the consumers are narrowed
+	// to that friend. It is empty only when Rooms is false, or from a radiance
+	// that predates it. Rooms only says a consumer and a ticket exist: a
+	// consumer whose path is RoomsPathUnavailable carries nothing, and one
+	// whose path is RoomsPathUnknown may carry nothing. While no friend is
 	// selected one consumer serves every friend, and a path to any of them
 	// counts.
 	RoomsPath string `json:"rooms_path,omitempty"`
 	// RoomsPathSince is when RoomsPath's connection last changed, in Unix
 	// seconds: the path connecting or dropping or, while no path has
 	// connected since the consumer started, the consumer starting. Selecting
-	// a friend restarts the consumers, so the clock starts over then.
+	// a friend restarts the consumers, so the clock starts over then. It is
+	// omitted while RoomsPath is RoomsPathUnknown.
 	RoomsPathSince int64 `json:"rooms_path_since,omitempty"`
 }
 
@@ -500,6 +504,14 @@ const (
 	// friend's helper is offline or unreachable), and the consumer fails its
 	// flows and dials until one connects.
 	RoomsPathUnavailable = "unavailable"
+	// RoomsPathUnknown: the friend has a rooms route, but its path can't be
+	// measured now, because no tunnel is running or the rooms consumers are
+	// narrowed to another, selected friend. The app must not claim the
+	// friend is usable over rooms: it may offer the friend as selectable,
+	// with no live indicator, and selecting it measures the path. Unlike a
+	// missing RoomsPath, which only a radiance that predates it sends and
+	// which the app reads as usable, unknown is not assumed usable.
+	RoomsPathUnknown = "unknown"
 )
 
 // roomsPathState returns s's PersonalProxyStatus.RoomsPath.

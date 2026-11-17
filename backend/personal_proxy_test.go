@@ -313,9 +313,9 @@ func TestPersonalProxyStatus(t *testing.T) {
 
 	require.NoError(t, r.srvManager.AddServers(consumerServers(), false))
 	assert.Equal(t, []vpn.PersonalProxyStatus{
-		{Tag: ppFriendA, Direct: true, Rooms: true},
-		{Tag: ppFriendB, Rooms: true},
-	}, r.PersonalProxyStatus())
+		{Tag: ppFriendA, Direct: true, Rooms: true, RoomsPath: vpn.RoomsPathUnknown},
+		{Tag: ppFriendB, Rooms: true, RoomsPath: vpn.RoomsPathUnknown},
+	}, r.PersonalProxyStatus(), "with no tunnel running the rooms path can't be measured")
 }
 
 // A friend's reverse outbound is part of that friend, never a friend of its

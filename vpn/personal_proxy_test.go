@@ -382,8 +382,8 @@ func TestRoomsPathRankPrefersTheMostUsable(t *testing.T) {
 	assert.Greater(t, roomsPathRank(connecting), roomsPathRank(unavailable))
 }
 
-// The status's JSON stays as before while the rooms path is unknown, so an
-// app that predates it reads the same answer.
+// The status's JSON only gains fields: an app that predates the rooms path
+// reads the same answer, and an unknown path carries no since.
 func TestPersonalProxyStatusJSONIsAdditive(t *testing.T) {
 	b, err := stdjson.Marshal(PersonalProxyStatus{Tag: friendA, Rooms: true})
 	require.NoError(t, err)
@@ -394,6 +394,11 @@ func TestPersonalProxyStatusJSONIsAdditive(t *testing.T) {
 	b, err = stdjson.Marshal(s)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"tag":"`+friendA+`","direct":false,"reverse":false,"rooms":true,"rooms_path":"unavailable","rooms_path_since":1700000000}`, string(b))
+
+	b, err = stdjson.Marshal(PersonalProxyStatus{Tag: friendA, Rooms: true, RoomsPath: RoomsPathUnknown})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"tag":"`+friendA+`","direct":false,"reverse":false,"rooms":true,"rooms_path":"unknown"}`, string(b),
+		"an unmeasurable path is unknown, with no since")
 }
 
 func TestBuildOptions_PersonalProxy(t *testing.T) {
