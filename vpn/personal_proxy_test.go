@@ -3,6 +3,7 @@ package vpn
 import (
 	"bufio"
 	"context"
+	stdjson "encoding/json"
 	"errors"
 	"io"
 	"maps"
@@ -290,6 +291,114 @@ func TestPersonalProxyMemberReportsTheDirectOutbound(t *testing.T) {
 	assert.Equal(t, PersonalProxyMember{}, tun.personalProxyMember(friendB))
 	service.PtrFromContext[urltest.HistoryStorage](tun.ctx).StoreURLTestHistory(friendA, &adapter.URLTestHistory{Delay: 42})
 	assert.Equal(t, PersonalProxyMember{Direct: true, DirectDelay: 42}, tun.personalProxyMember(friendA))
+}
+
+// standInHelperPath has every outbound report path for the rest of the test.
+func standInHelperPath(t *testing.T, path *lbA.HelperPathStatus) {
+	t.Helper()
+	prev := helperPathOf
+	helperPathOf = func(out adapter.Outbound) (lbA.HelperPathStatus, bool) {
+		if path == nil || out.Type() != roomsConsumerType {
+			return lbA.HelperPathStatus{}, false
+		}
+		return *path, true
+	}
+	t.Cleanup(func() { helperPathOf = prev })
+}
+
+func TestPersonalProxyMemberReportsTheRoomsPath(t *testing.T) {
+	tun, tickets := startPersonalProxyTestTunnel(t, friendA, friendB)
+	path := lbA.HelperPathStatus{Connected: true, Since: time.Unix(1000, 0), Available: true}
+	standInHelperPath(t, &path)
+
+	assert.Equal(t, PersonalProxyMember{Direct: true, Rooms: true, RoomsPath: path}, tun.personalProxyMember(friendA))
+	assert.Equal(t, PersonalProxyMember{Direct: true, Rooms: true, RoomsPath: path}, tun.personalProxyMember(friendB),
+		"while nothing is selected the consumer serves every friend")
+
+	tickets.set(friendB)
+	assert.Equal(t, PersonalProxyMember{Direct: true}, tun.personalProxyMember(friendB), "no ticket for the friend")
+	tickets.set(friendC, "ticket-"+friendC)
+	assert.Equal(t, PersonalProxyMember{Rooms: true, RoomsPath: path}, tun.personalProxyMember(friendC), "rooms only")
+
+	require.NoError(t, tun.selectOutbound(PersonalProxySelection(friendA)))
+	tickets.set(friendB, "ticket-"+friendB)
+	assert.True(t, tun.personalProxyMember(friendA).Rooms)
+	assert.Equal(t, PersonalProxyMember{Direct: true}, tun.personalProxyMember(friendB),
+		"the consumer is narrowed to the selected friend")
+
+	path = lbA.HelperPathStatus{Since: time.Unix(2000, 0)}
+	assert.Equal(t, PersonalProxyMember{Direct: true, Rooms: true, RoomsPath: path}, tun.personalProxyMember(friendA))
+
+	standInHelperPath(t, nil)
+	assert.Equal(t, PersonalProxyMember{Direct: true}, tun.personalProxyMember(friendA), "a consumer that reports no path")
+}
+
+func TestPersonalProxyStatusSetRoomsPath(t *testing.T) {
+	since := time.Unix(1700000000, 0)
+	for _, tc := range []struct {
+		path      lbA.HelperPathStatus
+		state     string
+		sinceUnix int64
+	}{
+		{lbA.HelperPathStatus{Connected: true, Since: since, Available: true}, RoomsPathConnected, since.Unix()},
+		{lbA.HelperPathStatus{Connecting: true, NeverConnected: true, Since: since, Available: true}, RoomsPathConnecting, since.Unix()},
+		{lbA.HelperPathStatus{NeverConnected: true, Since: since}, RoomsPathUnavailable, since.Unix()},
+		{lbA.HelperPathStatus{Since: since, Available: true}, RoomsPathReconnecting, since.Unix()},
+		{lbA.HelperPathStatus{Since: since}, RoomsPathUnavailable, since.Unix()},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			var s PersonalProxyStatus
+			s.SetRoomsPath(tc.path)
+			assert.Equal(t, tc.state, s.RoomsPath)
+			assert.Equal(t, tc.sinceUnix, s.RoomsPathSince)
+		})
+	}
+}
+
+// A friend whose helper is offline when the consumer (re)starts, as when
+// selecting the friend restarts it, is connecting for lbA.HelperPathGrace and
+// then unavailable, with the consumer's start as its since.
+func TestRoomsPathOfAHelperOfflineAtStart(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-time.Second)
+	var s PersonalProxyStatus
+	s.SetRoomsPath(lbA.NewHelperPathStatus(false, time.Time{}, started, now))
+	assert.Equal(t, RoomsPathConnecting, s.RoomsPath)
+	assert.Equal(t, started.Unix(), s.RoomsPathSince)
+
+	started = now.Add(-lbA.HelperPathGrace - time.Second)
+	s.SetRoomsPath(lbA.NewHelperPathStatus(false, time.Time{}, started, now))
+	assert.Equal(t, RoomsPathUnavailable, s.RoomsPath)
+	assert.Equal(t, started.Unix(), s.RoomsPathSince)
+}
+
+func TestRoomsPathRankPrefersTheMostUsable(t *testing.T) {
+	connected := lbA.HelperPathStatus{Connected: true, Available: true}
+	reconnecting := lbA.HelperPathStatus{Since: time.Now(), Available: true}
+	connecting := lbA.HelperPathStatus{Connecting: true, Available: true}
+	unavailable := lbA.HelperPathStatus{Since: time.Now()}
+	assert.Greater(t, roomsPathRank(connected), roomsPathRank(reconnecting))
+	assert.Greater(t, roomsPathRank(reconnecting), roomsPathRank(connecting))
+	assert.Greater(t, roomsPathRank(connecting), roomsPathRank(unavailable))
+}
+
+// The status's JSON only gains fields: an app that predates the rooms path
+// reads the same answer, and an unknown path carries no since.
+func TestPersonalProxyStatusJSONIsAdditive(t *testing.T) {
+	b, err := stdjson.Marshal(PersonalProxyStatus{Tag: friendA, Rooms: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"tag":"`+friendA+`","direct":false,"reverse":false,"rooms":true}`, string(b))
+
+	s := PersonalProxyStatus{Tag: friendA, Rooms: true}
+	s.SetRoomsPath(lbA.HelperPathStatus{Since: time.Unix(1700000000, 0)})
+	b, err = stdjson.Marshal(s)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"tag":"`+friendA+`","direct":false,"reverse":false,"rooms":true,"rooms_path":"unavailable","rooms_path_since":1700000000}`, string(b))
+
+	b, err = stdjson.Marshal(PersonalProxyStatus{Tag: friendA, Rooms: true, RoomsPath: RoomsPathUnknown})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"tag":"`+friendA+`","direct":false,"reverse":false,"rooms":true,"rooms_path":"unknown"}`, string(b),
+		"an unmeasurable path is unknown, with no since")
 }
 
 func TestBuildOptions_PersonalProxy(t *testing.T) {

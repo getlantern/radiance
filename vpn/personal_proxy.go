@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
@@ -468,6 +469,73 @@ type PersonalProxyStatus struct {
 	// DirectDelayMs is the direct outbound's last URL-test delay in the
 	// running tunnel, or 0 if it has none.
 	DirectDelayMs uint16 `json:"direct_delay_ms,omitempty"`
+	// RoomsPath is the WebRTC path of the running tunnel's rooms consumer to
+	// the friend, one of the RoomsPath constants, whenever Rooms is true. It
+	// is RoomsPathUnknown when the path can't be measured: no tunnel is
+	// running, or another friend is selected and the consumers are narrowed
+	// to that friend. It is empty only when Rooms is false, or from a radiance
+	// that predates it. Rooms only says a consumer and a ticket exist: a
+	// consumer whose path is RoomsPathUnavailable carries nothing, and one
+	// whose path is RoomsPathUnknown may carry nothing. While no friend is
+	// selected one consumer serves every friend, and a path to any of them
+	// counts.
+	RoomsPath string `json:"rooms_path,omitempty"`
+	// RoomsPathSince is when RoomsPath's connection last changed, in Unix
+	// seconds: the path connecting or dropping or, while no path has
+	// connected since the consumer started, the consumer starting. Selecting
+	// a friend restarts the consumers, so the clock starts over then. It is
+	// omitted while RoomsPath is RoomsPathUnknown.
+	RoomsPathSince int64 `json:"rooms_path_since,omitempty"`
+}
+
+// PersonalProxyStatus.RoomsPath values.
+const (
+	// RoomsPathConnected: a WebRTC data channel to a helper is open. The
+	// egress behind it may still fail.
+	RoomsPathConnected = "connected"
+	// RoomsPathConnecting: no data channel has opened since the consumer
+	// started, less than lbA.HelperPathGrace ago. Nothing is carried yet.
+	RoomsPathConnecting = "connecting"
+	// RoomsPathReconnecting: the last data channel closed less than
+	// lbA.HelperPathGrace ago, which a channel that reopens at once does.
+	RoomsPathReconnecting = "reconnecting"
+	// RoomsPathUnavailable: the path has been down for lbA.HelperPathGrace,
+	// or none has connected that long since the consumer started (the
+	// friend's helper is offline or unreachable), and the consumer fails its
+	// flows and dials until one connects.
+	RoomsPathUnavailable = "unavailable"
+	// RoomsPathUnknown: the friend has a rooms route, but its path can't be
+	// measured now, because no tunnel is running or the rooms consumers are
+	// narrowed to another, selected friend. The path may be down.
+	RoomsPathUnknown = "unknown"
+)
+
+// roomsPathState returns s's PersonalProxyStatus.RoomsPath.
+func roomsPathState(s lbA.HelperPathStatus) string {
+	switch {
+	case s.Connected:
+		return RoomsPathConnected
+	case s.Connecting:
+		return RoomsPathConnecting
+	case s.Available:
+		return RoomsPathReconnecting
+	default:
+		return RoomsPathUnavailable
+	}
+}
+
+// roomsPathRank orders paths from the least to the most usable.
+func roomsPathRank(s lbA.HelperPathStatus) int {
+	switch {
+	case s.Connected:
+		return 3
+	case s.Available && !s.Connecting:
+		return 2
+	case s.Connecting:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // PersonalProxyMember is what a running tunnel holds for one friend.
@@ -477,6 +545,20 @@ type PersonalProxyMember struct {
 	// DirectDelay is the direct outbound's last URL-test delay in
 	// milliseconds, or 0 if it has none.
 	DirectDelay uint16
+	// Rooms reports whether the tunnel holds a rooms consumer that may reach
+	// the friend now and reports its path, which is then RoomsPath.
+	Rooms     bool
+	RoomsPath lbA.HelperPathStatus
+}
+
+// helperPathOf reads out's path to its helper (lbA.HelperPathReporter). A
+// variable so tests can stand one in for consumers that are not Unbounded.
+var helperPathOf = func(out adapter.Outbound) (lbA.HelperPathStatus, bool) {
+	r, ok := out.(lbA.HelperPathReporter)
+	if !ok {
+		return lbA.HelperPathStatus{}, false
+	}
+	return r.HelperPath()
 }
 
 func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
@@ -487,7 +569,11 @@ func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
 		return m
 	}
 	selector, ok := t.mutGrpMgr.OutboundGroup(ManualSelectTag)
-	if !ok || !slices.Contains(selector.All(), friend) {
+	if !ok {
+		return m
+	}
+	m.RoomsPath, m.Rooms = t.roomsPathLocked(selector, friend)
+	if !slices.Contains(selector.All(), friend) {
 		return m
 	}
 	out := t.liveOutbound(friend)
@@ -503,4 +589,44 @@ func (t *tunnel) personalProxyMember(friend string) PersonalProxyMember {
 		}
 	}
 	return m
+}
+
+// roomsPathLocked returns the most usable path of the rooms consumers that
+// may reach friend now, and false if none reports one. While another friend
+// is selected the consumers are narrowed to that friend's tickets, so none
+// may. The caller must hold t.outboundMu.
+func (t *tunnel) roomsPathLocked(selector lbA.MutableOutboundGroup, friend string) (lbA.HelperPathStatus, bool) {
+	if selected := t.selectedFriend(); selected != "" && selected != friend {
+		return lbA.HelperPathStatus{}, false
+	}
+	if !roomsReachable(t.inviterTickets, friend) {
+		return lbA.HelperPathStatus{}, false
+	}
+	var best lbA.HelperPathStatus
+	found := false
+	for _, tag := range t.roomsConsumersLocked(selector) {
+		out := t.liveOutbound(tag)
+		if out == nil {
+			continue
+		}
+		s, ok := helperPathOf(out)
+		if ok && (!found || roomsPathRank(s) > roomsPathRank(best)) {
+			best, found = s, true
+		}
+	}
+	return best, found
+}
+
+// unixOrZero returns ts in Unix seconds, or 0 for the zero time.
+func unixOrZero(ts time.Time) int64 {
+	if ts.IsZero() {
+		return 0
+	}
+	return ts.Unix()
+}
+
+// SetRoomsPath sets s's RoomsPath and RoomsPathSince from path.
+func (s *PersonalProxyStatus) SetRoomsPath(path lbA.HelperPathStatus) {
+	s.RoomsPath = roomsPathState(path)
+	s.RoomsPathSince = unixOrZero(path.Since)
 }
