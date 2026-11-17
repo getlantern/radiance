@@ -218,8 +218,10 @@ type staleSourceMachine struct {
 	// outcome.
 	pendingUnknowns int
 	// generation counts update and reset signals as they arrive, ahead of
-	// update, so tick can tell a check one overtook.
+	// update, and appliedGen is the generation the last update took in, so
+	// tick can tell a signal is waiting or overtook its check.
 	generation atomic.Uint64
+	appliedGen uint64
 }
 
 // update starts the schedule over for a default interface update, or stops
@@ -227,6 +229,7 @@ type staleSourceMachine struct {
 // restart ignores it: the restarted tunnel's checker owns the outcome, and
 // this one checking again could take it before the restart has happened.
 func (m *staleSourceMachine) update(now time.Time, hasIface bool) {
+	m.appliedGen = m.generation.Load()
 	if m.step == stepRestart {
 		return
 	}
@@ -268,6 +271,12 @@ func (m *staleSourceMachine) tick(now time.Time) {
 	if !m.active {
 		return
 	}
+	if m.generation.Load() != m.appliedGen {
+		// A signal is waiting, and its update comes next and starts the
+		// schedule over. Checking now could act on the state before it, and
+		// a restart would leave that update ignored.
+		return
+	}
 	if !m.recheckAt.IsZero() && !now.Before(m.recheckAt) {
 		m.recheckAt = time.Time{}
 	}
@@ -279,9 +288,8 @@ func (m *staleSourceMachine) tick(now time.Time) {
 		m.active = false
 		return
 	}
-	gen := m.generation.Load()
 	res := m.check(iface)
-	if m.generation.Load() != gen {
+	if m.generation.Load() != m.appliedGen {
 		// An update or reset arrived during the check, and its update will
 		// start the schedule over; this result predates it, so acting on it
 		// could reset or restart again for a state the reset just cleared.

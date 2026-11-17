@@ -670,7 +670,7 @@ func TestStaleSourcePendingRestartWindowRunsOut(t *testing.T) {
 // An update or reset that arrives while a check runs supersedes its result:
 // a stale result from before an external reset doesn't escalate.
 func TestStaleSourceCheckOvertakenBySignal(t *testing.T) {
-	h := newStaleHarness(&staleSourceGuard{}, sourceStale, sourceStale, sourceStale, sourceStale)
+	h := newStaleHarness(&staleSourceGuard{}, sourceStale, sourceStale, sourceStale, sourceStale, sourceStale)
 	check := h.m.check
 	var signalDuring int
 	h.m.check = func(iface *control.Interface) sourceCheckResult {
@@ -690,7 +690,33 @@ func TestStaleSourceCheckOvertakenBySignal(t *testing.T) {
 	assert.Zero(t, h.restarts, "the overtaken result doesn't escalate")
 	assert.Empty(t, h.outcomes)
 
-	// Without a signal, the next stale check escalates as before.
+	// The signal's update starts the episode over: two more stale checks
+	// reset again, rather than the next one restarting.
+	h.m.update(h.t0.Add(9*time.Second), true)
+	h.runChecks(2)
+	assert.Equal(t, 2, h.resets)
+	assert.Zero(t, h.restarts)
+}
+
+// A signal queued before a due tick, its generation already bumped, holds
+// the tick off: the goroutine's select can pick the timer first.
+func TestStaleSourceTickWaitsForQueuedSignal(t *testing.T) {
+	h := newStaleHarness(&staleSourceGuard{}, sourceStale, sourceStale, sourceStale, sourceStale)
+	h.m.update(h.t0, true)
+	h.runChecks(2)
+	require.Equal(t, 1, h.resets)
+
+	h.m.generation.Add(1)
+	due, ok := h.m.nextDue()
+	require.True(t, ok)
+	h.m.tick(due)
+	assert.Equal(t, 2, h.calls, "no check while a signal waits")
+	assert.Zero(t, h.restarts)
+	assert.Empty(t, h.outcomes)
+
+	// Once the update is applied, checks run again from a fresh episode.
+	h.m.update(due, true)
 	h.runChecks(1)
-	assert.Equal(t, 1, h.restarts)
+	assert.Equal(t, 3, h.calls)
+	assert.Zero(t, h.restarts)
 }
