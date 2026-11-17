@@ -99,6 +99,10 @@ type VPNClient struct {
 	reverseMasquerade string
 	reverseTags       atomic.Pointer[[]string]
 
+	// staleSource is the stale source restart state, shared across tunnels
+	// so a restart's rate limit and outcome outlive the tunnel it replaced.
+	staleSource staleSourceGuard
+
 	mu sync.RWMutex
 }
 
@@ -134,7 +138,9 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel
 		portalMasquerade:     boxOptions.reverseMasquerade,
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
+		staleSource:          &c.staleSource,
 	}
+	t.restartForStaleSource = c.staleSourceRestart(t)
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
 		t.personalProxy.Store(&friend)
 	}
@@ -323,11 +329,17 @@ func (c *VPNClient) close() error {
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
 func (c *VPNClient) Restart(boxOptions BoxOptions) error {
+	return c.restart(boxOptions, nil)
+}
+
+// restart is Restart, limited to only when only is non-nil: a restart asked for by a tunnel that
+// has since been replaced must not take down its replacement.
+func (c *VPNClient) restart(boxOptions BoxOptions, only *tunnel) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "VPNClient.Restart")
 	defer span.End()
 
 	c.mu.Lock()
-	if c.tunnel == nil || c.Status() != Connected {
+	if c.tunnel == nil || c.Status() != Connected || only != nil && c.tunnel != only {
 		c.mu.Unlock()
 		return ErrTunnelNotConnected
 	}
@@ -369,17 +381,20 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 }
 
 // ResetNetwork drops the tunnel's connections and re-seeds its interface state,
-// for a platform to call on a network change. No-op if the tunnel is not running.
+// for a platform to call on a network change, and starts the tunnel's stale
+// source checks over. No-op if the tunnel is not running.
 func (c *VPNClient) ResetNetwork() {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel != nil {
 		c.tunnel.resetNetwork()
+		c.tunnel.restartStaleSourceSchedule()
 	}
 }
 
-// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
-// Nil or stale listeners are ignored.
+// ResetNetworkForMonitor resets connections, and starts the stale source checks
+// over, only if listener belongs to the current tunnel. Nil or stale listeners
+// are ignored.
 func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -392,6 +407,7 @@ func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListen
 		return
 	}
 	network.ResetNetwork(c.tunnel.ctx)
+	c.tunnel.restartStaleSourceSchedule()
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.
