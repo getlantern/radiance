@@ -506,11 +506,7 @@ const (
 	RoomsPathUnavailable = "unavailable"
 	// RoomsPathUnknown: the friend has a rooms route, but its path can't be
 	// measured now, because no tunnel is running or the rooms consumers are
-	// narrowed to another, selected friend. The app must not claim the
-	// friend is usable over rooms: it may offer the friend as selectable,
-	// with no live indicator, and selecting it measures the path. Unlike a
-	// missing RoomsPath, which only a radiance that predates it sends and
-	// which the app reads as usable, unknown is not assumed usable.
+	// narrowed to another, selected friend. The path may be down.
 	RoomsPathUnknown = "unknown"
 )
 
