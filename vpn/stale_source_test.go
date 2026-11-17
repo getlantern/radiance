@@ -3,6 +3,7 @@ package vpn
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -30,7 +31,7 @@ type staleHarness struct {
 	resets   int
 	restarts int
 	// failRestart reports the last restart as failed.
-	failRestart func()
+	failRestart func(started bool)
 	outcomes    []staleOutcome
 	t0          time.Time
 	logs        *bytes.Buffer
@@ -58,7 +59,7 @@ func newStaleHarness(guard *staleSourceGuard, results ...sourceStatus) *staleHar
 			return res
 		},
 		reset:   func() { h.resets++ },
-		restart: func(failed func()) { h.restarts++; h.failRestart = failed },
+		restart: func(failed func(bool)) { h.restarts++; h.failRestart = failed },
 		guard:   guard,
 		record:  func(o string, b bool) { h.outcomes = append(h.outcomes, staleOutcome{o, b}) },
 		logger:  slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -421,6 +422,52 @@ func TestStaleSourceOwnResetKeepsSchedule(t *testing.T) {
 	assert.EqualValues(t, 3, router.resets.Load(), "the external reset, then the checker's own")
 }
 
+// TestStaleSourceRestartErrors checks which Restart errors count as a
+// restart that never started.
+func TestStaleSourceRestartErrors(t *testing.T) {
+	run := func(c *VPNClient) bool {
+		got := make(chan bool, 1)
+		c.staleSourceRestart()(func(started bool) { got <- started })
+		select {
+		case started := <-got:
+			return started
+		case <-time.After(3 * time.Second):
+			t.Fatal("no failure reported")
+			return false
+		}
+	}
+
+	// No tunnel connected: Restart returns ErrTunnelNotConnected untouched.
+	c := NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), &stubPlatform{})
+	assert.False(t, run(c))
+
+	// RestartService fails after the platform may have torn the tunnel down.
+	c = NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), &stubPlatform{restartErr: errors.New("start failed")})
+	c.status.Store(Connected)
+	c.tunnel = &tunnel{}
+	assert.True(t, run(c))
+}
+
+func TestStaleSourceFailedRestartAfterTeardownKeepsRateLimit(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
+	h.m.update(h.t0, true)
+	h.runChecks(3)
+	require.Equal(t, 1, h.restarts)
+
+	h.failRestart(true)
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, h.outcomes)
+	pending, _ := guard.takePending(h.t0.Add(9 * time.Second))
+	assert.False(t, pending, "a restart that failed awaits no outcome")
+
+	next := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
+	next.t0 = h.t0.Add(time.Minute)
+	next.m.update(next.t0, true)
+	next.runChecks(3)
+	assert.Zero(t, next.restarts)
+	assert.Equal(t, []staleOutcome{{staleOutcomeRestartRateLimited, true}}, next.outcomes)
+}
+
 func TestStaleSourceFailedRestartRollsBack(t *testing.T) {
 	guard := &staleSourceGuard{}
 	h := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
@@ -428,7 +475,8 @@ func TestStaleSourceFailedRestartRollsBack(t *testing.T) {
 	h.runChecks(3)
 	require.Equal(t, 1, h.restarts)
 
-	h.failRestart()
+	// Restart returned ErrTunnelNotConnected: it never started.
+	h.failRestart(false)
 	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, h.outcomes)
 	assert.Contains(t, h.logs.String(), "tunnel restart failed")
 	pending, _ := guard.takePending(h.t0.Add(9 * time.Second))
@@ -444,7 +492,7 @@ func TestStaleSourceFailedRestartRollsBack(t *testing.T) {
 
 	// Reporting a failure once the outcome is taken changes nothing.
 	guard.takePending(next.t0.Add(9 * time.Second))
-	next.failRestart()
+	next.failRestart(false)
 	assert.Empty(t, next.outcomes)
 }
 

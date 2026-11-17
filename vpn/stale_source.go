@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
@@ -140,17 +141,21 @@ func (g *staleSourceGuard) claimRestart(now time.Time, boundOK bool) (prev time.
 	return prev, true
 }
 
-// rollback undoes a claimed restart that never ran, so it neither holds
-// the rate limit nor awaits an outcome. It reports whether the restart was
-// still pending.
-func (g *staleSourceGuard) rollback(prev time.Time) bool {
+// fail ends a claimed restart that returned an error, so it awaits no
+// outcome. Only one that never started (started false) gives back the rate
+// limit: one that failed after tearing the tunnel down still counts, or a
+// broken network could restart without limit. It reports whether the
+// restart was still pending.
+func (g *staleSourceGuard) fail(prev time.Time, started bool) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.pending {
 		return false
 	}
 	g.pending = false
-	g.lastRestart = prev
+	if !started {
+		g.lastRestart = prev
+	}
 	return true
 }
 
@@ -174,9 +179,9 @@ type staleSourceMachine struct {
 	check        sourceCheckFunc
 	reset        func()
 	// restart starts a tunnel restart without waiting for it, calling
-	// failed, from another goroutine, if it doesn't happen; nil when the
-	// client has no restart path.
-	restart func(failed func())
+	// failed from another goroutine if it returns an error, with started
+	// false when it never began; nil when the client has no restart path.
+	restart func(failed func(started bool))
 	guard   *staleSourceGuard
 	record  func(outcome string, boundOK bool)
 	logger  *slog.Logger
@@ -330,9 +335,9 @@ func (m *staleSourceMachine) escalate(now time.Time, res sourceCheckResult) {
 	attrs := m.attrs(now, res)
 	m.logger.Warn("Stale source address recovery: restarting tunnel", attrs...)
 	guard, record, logger, boundOK := m.guard, m.record, m.logger, res.boundOK
-	m.restart(func() {
-		if guard.rollback(prev) {
-			logger.Warn("Stale source address recovery failed: tunnel restart failed", attrs...)
+	m.restart(func(started bool) {
+		if guard.fail(prev, started) {
+			logger.Warn("Stale source address recovery failed: tunnel restart failed", append(attrs, "restart_started", started)...)
 			record(staleOutcomeNotRecovered, boundOK)
 		}
 	})
@@ -508,17 +513,19 @@ func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
 // address, or nil without a platform interface: the direct restart path
 // rebuilds from BoxOptions only the backend has, while the platform's path
 // reconnects through the backend.
-func (c *VPNClient) staleSourceRestart() func(failed func()) {
+func (c *VPNClient) staleSourceRestart() func(failed func(started bool)) {
 	if c.platformIfce == nil {
 		return nil
 	}
-	return func(failed func()) {
+	return func(failed func(started bool)) {
 		// Detached: the restart closes the tunnel, and closing it waits for
 		// the checker that calls this.
 		go func() {
 			if err := c.Restart(BoxOptions{}); err != nil {
 				c.logger.Warn("Tunnel restart for stale source address failed", "error", err)
-				failed()
+				// ErrTunnelNotConnected is the one error Restart returns
+				// before it touches the tunnel.
+				failed(!errors.Is(err, ErrTunnelNotConnected))
 			}
 		}()
 	}

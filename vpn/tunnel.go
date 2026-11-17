@@ -133,7 +133,7 @@ type tunnel struct {
 	// share, and restartForStaleSource starts a restart of this tunnel for
 	// one; nil when the client has no restart path.
 	staleSource           *staleSourceGuard
-	restartForStaleSource func(failed func())
+	restartForStaleSource func(failed func(started bool))
 	// staleSourceUpdate starts the stale source check schedule over; nil
 	// without a checker. Set before the tunnel is published.
 	staleSourceUpdate func()
