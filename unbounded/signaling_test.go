@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -261,4 +262,35 @@ func TestSignalingWebSocketHandshakeStillWorks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "offer", string(msg))
 	assert.Zero(t, fallback.calls())
+}
+
+// connectedThenFails reports a connection, as a request that reached Freddie
+// does, and then fails, as a long-poll does when the network changes under it.
+type connectedThenFails struct{}
+
+func (connectedThenFails) RoundTrip(req *http.Request) (*http.Response, error) {
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{})
+	}
+	return nil, errors.New("connection reset")
+}
+
+// A direct request that connected and then failed doesn't end the period: it
+// says nothing about whether direct works now.
+func TestSignalingConnectedFailureKeepsSticking(t *testing.T) {
+	fallback := &recordingRT{status: http.StatusOK}
+	ft, _ := newTestFallback(connectedThenFails{}, fallback)
+	ft.stick(errSOCKSRejected)
+	require.True(t, ft.sticking())
+
+	// An upgrade goes direct even while sticking, so it stands in for any
+	// direct request that was already in flight.
+	req, err := http.NewRequest(http.MethodGet, "https://freddie.invalid/v1/volunteer", nil)
+	require.NoError(t, err)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	_, err = ft.RoundTrip(req)
+	require.Error(t, err)
+	assert.True(t, ft.sticking(), "a connected failure ended the period")
+	assert.Zero(t, fallback.calls(), "a request that reached Freddie was resent")
 }

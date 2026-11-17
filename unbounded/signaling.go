@@ -59,8 +59,15 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		return t.fallback.RoundTrip(streaming(req.Clone(req.Context())))
 	}
 	resp, connected, err := t.roundTripDirect(req)
-	if err == nil || connected {
+	if err == nil {
 		t.directConnected()
+		return resp, nil
+	}
+	if connected {
+		// It reached Freddie, so it isn't resent, but its failure isn't proof
+		// that direct works either: after an address change, long-polls opened
+		// before it die like this, and treating them as recoveries would end
+		// the period early and send the next requests back to a broken path.
 		return resp, err
 	}
 	if req.Context().Err() != nil {
