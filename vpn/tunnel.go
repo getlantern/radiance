@@ -134,6 +134,9 @@ type tunnel struct {
 	// one; nil when the client has no restart path.
 	staleSource           *staleSourceGuard
 	restartForStaleSource func()
+	// staleSourceUpdate starts the stale source check schedule over; nil
+	// without a checker. Set before the tunnel is published.
+	staleSourceUpdate func()
 }
 
 func (t *tunnel) start(ctx context.Context, options O.Options, platformIfce libbox.PlatformInterface, isRestart bool) error {

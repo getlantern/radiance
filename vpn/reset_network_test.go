@@ -12,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/common/x/list"
 	"github.com/sagernet/sing/service"
@@ -21,7 +22,11 @@ import (
 type resetMonitor struct {
 	tun.DefaultInterfaceMonitor
 	closed func()
+	iface  *control.Interface
 }
+
+func (m *resetMonitor) DefaultInterface() *control.Interface                               { return m.iface }
+func (*resetMonitor) UnregisterCallback(*list.Element[tun.DefaultInterfaceUpdateCallback]) {}
 
 func (*resetMonitor) Start() error { return nil }
 func (m *resetMonitor) Close() error {

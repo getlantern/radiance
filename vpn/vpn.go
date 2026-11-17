@@ -375,17 +375,20 @@ func (c *VPNClient) Restart(boxOptions BoxOptions) error {
 }
 
 // ResetNetwork drops the tunnel's connections and re-seeds its interface state,
-// for a platform to call on a network change. No-op if the tunnel is not running.
+// for a platform to call on a network change, and starts the tunnel's stale
+// source checks over. No-op if the tunnel is not running.
 func (c *VPNClient) ResetNetwork() {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel != nil {
 		c.tunnel.resetNetwork()
+		c.tunnel.restartStaleSourceSchedule()
 	}
 }
 
-// ResetNetworkForMonitor resets connections only if listener belongs to the current tunnel.
-// Nil or stale listeners are ignored.
+// ResetNetworkForMonitor resets connections, and starts the stale source checks
+// over, only if listener belongs to the current tunnel. Nil or stale listeners
+// are ignored.
 func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListener) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -398,6 +401,7 @@ func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListen
 		return
 	}
 	network.ResetNetwork(c.tunnel.ctx)
+	c.tunnel.restartStaleSourceSchedule()
 }
 
 // Pause pauses the tunnel for a device sleep. No-op if the tunnel is not running.

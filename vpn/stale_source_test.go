@@ -293,7 +293,7 @@ func TestStaleSourceCheckerLifecycle(t *testing.T) {
 		record: func(string, bool) {},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	closer := startStaleSourceChecker(context.Background(), monitor, m)
+	closer, _ := startStaleSourceChecker(context.Background(), monitor, m)
 	require.Equal(t, 1, monitor.registered())
 
 	time.Sleep(50 * time.Millisecond)
@@ -331,7 +331,7 @@ func TestStaleSourceCheckerStartsWithDefaultInterface(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	closer := startStaleSourceChecker(ctx, monitor, m)
+	closer, _ := startStaleSourceChecker(ctx, monitor, m)
 	require.Eventually(t, func() bool { return checks.Load() == 1 }, time.Second, time.Millisecond)
 	// Canceling the tunnel's context ends the goroutine too; Close then returns at once.
 	cancel()
@@ -343,4 +343,64 @@ func TestStaleSourceRestartNeedsPlatform(t *testing.T) {
 	assert.Nil(t, c.staleSourceRestart(), "the direct restart path needs the backend's BoxOptions")
 	tn := c.newTunnel(BoxOptions{}, "")
 	assert.Same(t, &c.staleSource, tn.staleSource)
+}
+
+func TestExternalResetRestartsStaleSourceSchedule(t *testing.T) {
+	tn, router := resetTestTunnel(t)
+	var kicks atomic.Int32
+	tn.staleSourceUpdate = func() { kicks.Add(1) }
+	client := &VPNClient{tunnel: tn}
+
+	client.ResetNetworkForMonitor(nil)
+	client.ResetNetworkForMonitor(&resetMonitor{})
+	assert.Zero(t, kicks.Load(), "a stale listener starts nothing")
+
+	client.ResetNetworkForMonitor(router.monitor)
+	assert.EqualValues(t, 1, kicks.Load())
+	client.ResetNetwork()
+	assert.EqualValues(t, 2, kicks.Load())
+
+	client.tunnel = nil
+	client.ResetNetworkForMonitor(router.monitor)
+	client.ResetNetwork()
+	assert.EqualValues(t, 2, kicks.Load(), "nothing starts with no tunnel running")
+}
+
+// TestStaleSourceOwnResetKeepsSchedule runs a tunnel's real checker wiring
+// with a fake check: the checker's own reset doesn't start the schedule
+// over, and an external reset does.
+func TestStaleSourceOwnResetKeepsSchedule(t *testing.T) {
+	prevCheck, prevSchedule, prevRecheck := checkSource, staleSourceSchedule, staleSourceRecheckDelay
+	t.Cleanup(func() {
+		checkSource, staleSourceSchedule, staleSourceRecheckDelay = prevCheck, prevSchedule, prevRecheck
+	})
+	var checks atomic.Int32
+	checkSource = func(iface *control.Interface) sourceCheckResult {
+		checks.Add(1)
+		return sourceCheckResult{status: sourceStale, iface: iface.Name, index: iface.Index}
+	}
+	staleSourceSchedule = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 50 * time.Millisecond}
+	staleSourceRecheckDelay = 5 * time.Millisecond
+
+	tn, router := resetTestTunnel(t)
+	router.monitor.iface = &control.Interface{Name: "en0", Index: 4}
+	tn.ctx = context.Background()
+	tn.staleSource = &staleSourceGuard{}
+	closer := tn.startStaleSourceChecker()
+	require.NotNil(t, closer)
+	t.Cleanup(func() { _ = closer.Close() })
+	client := &VPNClient{tunnel: tn}
+
+	// Stale at 10 and 20ms resets; the recheck at 25ms finds no restart path
+	// and gives up; 40 and 50ms finish the schedule.
+	require.Eventually(t, func() bool { return checks.Load() == 5 }, time.Second, time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.EqualValues(t, 5, checks.Load(), "the checker's own reset didn't start the schedule over")
+	assert.EqualValues(t, 1, router.resets.Load())
+
+	client.ResetNetwork()
+	require.Eventually(t, func() bool { return checks.Load() == 10 }, time.Second, time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	assert.EqualValues(t, 10, checks.Load())
+	assert.EqualValues(t, 3, router.resets.Load(), "the external reset, then the checker's own")
 }

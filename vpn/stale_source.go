@@ -25,13 +25,16 @@ import (
 // interface update, from this process, and escalates from a reset to a tunnel
 // restart.
 
-var staleSourceSchedule = []time.Duration{
-	2 * time.Second, 5 * time.Second, 10 * time.Second,
-	20 * time.Second, 40 * time.Second, 60 * time.Second,
-}
+// Vars so tests can shorten them.
+var (
+	staleSourceSchedule = []time.Duration{
+		2 * time.Second, 5 * time.Second, 10 * time.Second,
+		20 * time.Second, 40 * time.Second, 60 * time.Second,
+	}
+	staleSourceRecheckDelay = 3 * time.Second
+)
 
 const (
-	staleSourceRecheckDelay = 3 * time.Second
 	// staleSourceRestartInterval is the least time between restarts for a
 	// stale source, across the client's tunnels.
 	staleSourceRestartInterval = 10 * time.Minute
@@ -344,7 +347,9 @@ type defaultInterfaceMonitor interface {
 // startStaleSourceChecker runs m off monitor's updates until the returned
 // closer is closed. It starts a schedule at once when there already is a
 // default interface, since the tunnel's own first update came before it.
-func startStaleSourceChecker(ctx context.Context, monitor defaultInterfaceMonitor, m *staleSourceMachine) io.Closer {
+// Calling update starts the schedule over as a monitor update does; it never
+// blocks.
+func startStaleSourceChecker(ctx context.Context, monitor defaultInterfaceMonitor, m *staleSourceMachine) (closer io.Closer, update func()) {
 	updates := make(chan struct{}, 1)
 	signal := func() {
 		select {
@@ -361,7 +366,7 @@ func startStaleSourceChecker(ctx context.Context, monitor defaultInterfaceMonito
 	if monitor.DefaultInterface() != nil {
 		signal()
 	}
-	closer := runUntilClosed(ctx, func(ctx context.Context) {
+	run := runUntilClosed(ctx, func(ctx context.Context) {
 		for {
 			var (
 				fire  <-chan time.Time
@@ -388,8 +393,8 @@ func startStaleSourceChecker(ctx context.Context, monitor defaultInterfaceMonito
 	})
 	return closerFunc(func() error {
 		monitor.UnregisterCallback(elem)
-		return closer.Close()
-	})
+		return run.Close()
+	}), signal
 }
 
 func lastOctet(a netip.Addr) string {
@@ -402,13 +407,29 @@ func lastOctet(a netip.Addr) string {
 // startStaleSourceChecker starts the tunnel's stale source checker, or
 // returns nil where there is none.
 func (t *tunnel) startStaleSourceChecker() io.Closer {
+	closer, update := t.newStaleSourceChecker()
+	t.staleSourceUpdate = update
+	return closer
+}
+
+// restartStaleSourceSchedule starts the stale source check schedule over, as
+// a default interface update does. The platform resets the network when the
+// default interface keeps its name and index but changes address, which the
+// monitor doesn't report. No-op without a checker.
+func (t *tunnel) restartStaleSourceSchedule() {
+	if t.staleSourceUpdate != nil {
+		t.staleSourceUpdate()
+	}
+}
+
+func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
 	if checkSource == nil || t.boxInstance == nil {
-		return nil
+		return nil, nil
 	}
 	network := t.boxInstance.Network()
 	monitor := network.InterfaceMonitor()
 	if monitor == nil {
-		return nil
+		return nil, nil
 	}
 	guard := t.staleSource
 	if guard == nil {
@@ -421,7 +442,8 @@ func (t *tunnel) startStaleSourceChecker() io.Closer {
 		defaultIface: monitor.DefaultInterface,
 		check:        checkSource,
 		// What tunnel.resetNetwork does, without reading boxInstance, which
-		// close clears off c.mu's hold.
+		// close clears off c.mu's hold. Not VPNClient.ResetNetwork, which
+		// would start the schedule over.
 		reset:   func() { network.ResetNetwork(ctx) },
 		restart: t.restartForStaleSource,
 		guard:   guard,
