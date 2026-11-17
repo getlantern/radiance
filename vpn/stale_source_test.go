@@ -596,3 +596,73 @@ func TestStaleSourceRestartThroughPlatform(t *testing.T) {
 	mu.Unlock()
 	require.NoError(t, c.Disconnect())
 }
+
+// escalated returns a harness on guard whose machine has asked for a restart.
+func escalated(t *testing.T, guard *staleSourceGuard) *staleHarness {
+	h := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
+	h.m.update(h.t0, true)
+	h.runChecks(3)
+	require.Equal(t, 1, h.restarts)
+	return h
+}
+
+func TestStaleSourceUpdateAfterRestartIgnored(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := escalated(t, guard)
+
+	// An interface update or an external reset before the restart happens.
+	h.results = []sourceStatus{sourceHealthy}
+	h.m.update(h.t0.Add(9*time.Second), true)
+	_, ok := h.m.nextDue()
+	assert.False(t, ok, "the machine that asked for a restart stays stopped")
+	h.m.tick(h.t0.Add(11 * time.Second))
+	assert.Equal(t, 3, h.calls)
+	assert.Empty(t, h.outcomes)
+	pending, _ := guard.awaiting(h.t0.Add(11 * time.Second))
+	assert.True(t, pending, "the outcome is left to the restarted tunnel")
+
+	// So a restart that then never starts still gives back the rate limit.
+	h.failRestart(false)
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, h.outcomes)
+	next := escalated(t, guard)
+	assert.Empty(t, next.outcomes)
+}
+
+func TestStaleSourcePendingRestartInconclusive(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := escalated(t, guard)
+
+	next := newStaleHarness(guard, sourceUnknown, sourceUnknown, sourceUnknown, sourceUnknown, sourceUnknown, sourceUnknown)
+	next.t0 = h.t0.Add(10 * time.Second)
+	next.m.update(next.t0, true)
+	next.runChecks(100)
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, next.outcomes, "bounded, and recorded once")
+	assert.Contains(t, next.logs.String(), "checks inconclusive after tunnel restart")
+	pending, _ := guard.awaiting(next.t0.Add(time.Minute))
+	assert.False(t, pending)
+}
+
+func TestStaleSourcePendingRestartScheduleEnds(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := escalated(t, guard)
+
+	next := newStaleHarness(guard, sourceUnknown, sourceUnknown)
+	next.m.schedule = secs(2, 5)
+	next.t0 = h.t0.Add(10 * time.Second)
+	next.m.update(next.t0, true)
+	next.runChecks(100)
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, next.outcomes)
+	assert.Contains(t, next.logs.String(), "no conclusive check after tunnel restart")
+}
+
+func TestStaleSourcePendingRestartWindowRunsOut(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := escalated(t, guard)
+
+	next := newStaleHarness(guard)
+	next.t0 = h.t0.Add(3 * time.Minute)
+	next.m.update(next.t0, true)
+	next.runChecks(100)
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, next.outcomes, "not recovered_by_restart")
+	assert.Contains(t, next.logs.String(), "restart outcome window ran out")
+}

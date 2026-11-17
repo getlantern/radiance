@@ -159,6 +159,24 @@ func (g *staleSourceGuard) fail(prev time.Time, started bool) bool {
 	return true
 }
 
+// awaiting reports whether a restart awaits its outcome, and whether its
+// window has run out.
+func (g *staleSourceGuard) awaiting(now time.Time) (pending, expired bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pending, g.pending && now.Sub(g.lastRestart) >= staleSourceRestartWindow
+}
+
+// expire ends a pending restart that got no conclusive check. It reports
+// whether one was pending, and its bound socket result.
+func (g *staleSourceGuard) expire() (pending, boundOK bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	pending = g.pending
+	g.pending = false
+	return pending, g.pendingBoundOK
+}
+
 // takePending reports whether a restart is awaiting its outcome, clearing
 // it. A restart older than staleSourceRestartWindow has none.
 func (g *staleSourceGuard) takePending(now time.Time) (pending, boundOK bool) {
@@ -195,11 +213,19 @@ type staleSourceMachine struct {
 	boundOK   bool
 	// unknownRechecks counts inconclusive checks since the reset.
 	unknownRechecks int
+	// pendingUnknowns counts inconclusive checks while a restart awaits its
+	// outcome.
+	pendingUnknowns int
 }
 
 // update starts the schedule over for a default interface update, or stops
-// it while there is no default interface.
+// it while there is no default interface. A machine that has asked for a
+// restart ignores it: the restarted tunnel's checker owns the outcome, and
+// this one checking again could take it before the restart has happened.
 func (m *staleSourceMachine) update(now time.Time, hasIface bool) {
+	if m.step == stepRestart {
+		return
+	}
 	m.active = hasIface
 	m.updateAt = now
 	m.next = 0
@@ -208,6 +234,7 @@ func (m *staleSourceMachine) update(now time.Time, hasIface bool) {
 	m.step = stepNone
 	m.boundOK = false
 	m.unknownRechecks = 0
+	m.pendingUnknowns = 0
 }
 
 // stop ends the schedule until the next update.
@@ -248,13 +275,40 @@ func (m *staleSourceMachine) tick(now time.Time) {
 		m.active = false
 		return
 	}
-	m.conclude(now, m.check(iface))
+	res := m.check(iface)
+	m.conclude(now, res)
 	if _, ok := m.nextDue(); !ok {
 		m.active = false
+		// The schedule ran out with no conclusive check for the restart.
+		if m.step == stepNone {
+			if pending, _ := m.guard.awaiting(now); pending {
+				m.expirePending(now, res, "no conclusive check after tunnel restart")
+			}
+		}
+	}
+}
+
+// expirePending records a pending restart that got no conclusive check as
+// not recovered.
+func (m *staleSourceMachine) expirePending(now time.Time, res sourceCheckResult, why string) {
+	if pending, boundOK := m.guard.expire(); pending {
+		m.logger.Warn("Stale source address recovery failed: "+why, m.attrs(now, res)...)
+		m.record(staleOutcomeNotRecovered, boundOK)
 	}
 }
 
 func (m *staleSourceMachine) conclude(now time.Time, res sourceCheckResult) {
+	if m.step == stepNone {
+		switch pending, expired := m.guard.awaiting(now); {
+		case expired:
+			m.expirePending(now, res, "restart outcome window ran out")
+		case pending && res.status == sourceUnknown:
+			m.pendingUnknowns++
+			if m.pendingUnknowns > staleSourceUnknownRechecks {
+				m.expirePending(now, res, "checks inconclusive after tunnel restart")
+			}
+		}
+	}
 	if res.status == sourceUnknown {
 		m.logger.Debug("Source address check inconclusive", m.attrs(now, res)...)
 		if m.step != stepReset {

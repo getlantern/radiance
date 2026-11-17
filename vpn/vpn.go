@@ -130,15 +130,15 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 // newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
 func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel {
 	t := &tunnel{
-		dataPath:              boxOptions.BasePath,
-		selectionHistorySeed:  boxOptions.SelectionHistorySeed,
-		initialLanternTags:    boxOptions.LanternServerTags,
-		initialNonSelectable:  boxOptions.NonSelectableOutbounds,
-		initialMode:           initialMode,
-		portalMasquerade:      boxOptions.reverseMasquerade,
-		connObserver:          c.connObserver,
-		inviterTickets:        c.inviterTickets,
-		staleSource:           &c.staleSource,
+		dataPath:             boxOptions.BasePath,
+		selectionHistorySeed: boxOptions.SelectionHistorySeed,
+		initialLanternTags:   boxOptions.LanternServerTags,
+		initialNonSelectable: boxOptions.NonSelectableOutbounds,
+		initialMode:          initialMode,
+		portalMasquerade:     boxOptions.reverseMasquerade,
+		connObserver:         c.connObserver,
+		inviterTickets:       c.inviterTickets,
+		staleSource:          &c.staleSource,
 	}
 	t.restartForStaleSource = c.staleSourceRestart(t)
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
