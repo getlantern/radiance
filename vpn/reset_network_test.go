@@ -27,6 +27,7 @@ type resetMonitor struct {
 
 func (m *resetMonitor) DefaultInterface() *control.Interface                               { return m.iface }
 func (*resetMonitor) UnregisterCallback(*list.Element[tun.DefaultInterfaceUpdateCallback]) {}
+func (*resetMonitor) MyInterfaces() []string                                               { return nil }
 
 func (*resetMonitor) Start() error { return nil }
 func (m *resetMonitor) Close() error {

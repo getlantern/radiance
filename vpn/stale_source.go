@@ -41,6 +41,9 @@ const (
 	// staleSourceRestartWindow bounds how long after a restart the next
 	// conclusive check is taken as its outcome.
 	staleSourceRestartWindow = 2 * time.Minute
+	// staleSourceUnknownRechecks bounds the rechecks after a reset that
+	// come back inconclusive, so the episode still ends with an outcome.
+	staleSourceUnknownRechecks = 3
 )
 
 type sourceStatus int
@@ -79,7 +82,7 @@ type sourceCheckResult struct {
 }
 
 // sourceCheckFunc checks the source address the kernel picks for a new
-// socket scoped to iface.
+// socket sing-box would open on iface.
 type sourceCheckFunc func(iface *control.Interface) sourceCheckResult
 
 type recoveryStep int
@@ -123,16 +126,31 @@ type staleSourceGuard struct {
 }
 
 // claimRestart reports whether a restart may run at now, and if so records
-// it as pending.
-func (g *staleSourceGuard) claimRestart(now time.Time, boundOK bool) bool {
+// it as pending. prev is the restart it replaces, for rollback.
+func (g *staleSourceGuard) claimRestart(now time.Time, boundOK bool) (prev time.Time, ok bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.lastRestart.IsZero() && now.Sub(g.lastRestart) < staleSourceRestartInterval {
-		return false
+		return time.Time{}, false
 	}
+	prev = g.lastRestart
 	g.lastRestart = now
 	g.pending = true
 	g.pendingBoundOK = boundOK
+	return prev, true
+}
+
+// rollback undoes a claimed restart that never ran, so it neither holds
+// the rate limit nor awaits an outcome. It reports whether the restart was
+// still pending.
+func (g *staleSourceGuard) rollback(prev time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.pending {
+		return false
+	}
+	g.pending = false
+	g.lastRestart = prev
 	return true
 }
 
@@ -155,9 +173,10 @@ type staleSourceMachine struct {
 	defaultIface func() *control.Interface
 	check        sourceCheckFunc
 	reset        func()
-	// restart starts a tunnel restart without waiting for it; nil when the
+	// restart starts a tunnel restart without waiting for it, calling
+	// failed, from another goroutine, if it doesn't happen; nil when the
 	// client has no restart path.
-	restart func()
+	restart func(failed func())
 	guard   *staleSourceGuard
 	record  func(outcome string, boundOK bool)
 	logger  *slog.Logger
@@ -169,6 +188,8 @@ type staleSourceMachine struct {
 	stale     int
 	step      recoveryStep
 	boundOK   bool
+	// unknownRechecks counts inconclusive checks since the reset.
+	unknownRechecks int
 }
 
 // update starts the schedule over for a default interface update, or stops
@@ -181,6 +202,14 @@ func (m *staleSourceMachine) update(now time.Time, hasIface bool) {
 	m.stale = 0
 	m.step = stepNone
 	m.boundOK = false
+	m.unknownRechecks = 0
+}
+
+// stop ends the schedule until the next update.
+func (m *staleSourceMachine) stop() {
+	m.active = false
+	m.next = len(m.schedule)
+	m.recheckAt = time.Time{}
 }
 
 // nextDue returns when the next check is due, if one is.
@@ -223,12 +252,25 @@ func (m *staleSourceMachine) tick(now time.Time) {
 func (m *staleSourceMachine) conclude(now time.Time, res sourceCheckResult) {
 	if res.status == sourceUnknown {
 		m.logger.Debug("Source address check inconclusive", m.attrs(now, res)...)
+		if m.step != stepReset {
+			return
+		}
+		if m.unknownRechecks < staleSourceUnknownRechecks {
+			m.unknownRechecks++
+			m.recheckAt = now.Add(m.recheckDelay)
+			return
+		}
+		m.step = stepGaveUp
+		m.logger.Warn("Stale source address recovery failed: checks inconclusive after network reset", m.attrs(now, res)...)
+		m.record(staleOutcomeNotRecovered, m.boundOK)
 		return
 	}
-	// A conclusive check after a restart is that restart's outcome, whichever
-	// tunnel runs it.
+	m.unknownRechecks = 0
+	// A conclusive check after a restart is that restart's outcome. The
+	// tunnel that asked for the restart stops checking, so this is the
+	// restarted tunnel's.
 	var restarted, restartBoundOK bool
-	if m.step == stepNone || m.step == stepRestart {
+	if m.step == stepNone {
 		restarted, restartBoundOK = m.guard.takePending(now)
 	}
 	if res.status == sourceHealthy {
@@ -268,12 +310,6 @@ func (m *staleSourceMachine) conclude(now time.Time, res sourceCheckResult) {
 		m.reset()
 	case stepReset:
 		m.escalate(now, res)
-	case stepRestart:
-		// The restart didn't take this tunnel down and its outcome is no
-		// longer awaited.
-		m.step = stepGaveUp
-		m.logger.Warn("Stale source address recovery failed: tunnel restart did not take effect", m.attrs(now, res)...)
-		m.record(staleOutcomeNotRecovered, res.boundOK)
 	}
 }
 
@@ -284,14 +320,25 @@ func (m *staleSourceMachine) escalate(now time.Time, res sourceCheckResult) {
 		m.record(staleOutcomeNotRecovered, res.boundOK)
 		return
 	}
-	if !m.guard.claimRestart(now, res.boundOK) {
+	prev, ok := m.guard.claimRestart(now, res.boundOK)
+	if !ok {
 		m.logger.Warn("Stale source address recovery failed: still stale after network reset, and a tunnel restart ran within the last 10 minutes", m.attrs(now, res)...)
 		m.record(staleOutcomeRestartRateLimited, res.boundOK)
 		return
 	}
 	m.step = stepRestart
-	m.logger.Warn("Stale source address recovery: restarting tunnel", m.attrs(now, res)...)
-	m.restart()
+	attrs := m.attrs(now, res)
+	m.logger.Warn("Stale source address recovery: restarting tunnel", attrs...)
+	guard, record, logger, boundOK := m.guard, m.record, m.logger, res.boundOK
+	m.restart(func() {
+		if guard.rollback(prev) {
+			logger.Warn("Stale source address recovery failed: tunnel restart failed", attrs...)
+			record(staleOutcomeNotRecovered, boundOK)
+		}
+	})
+	// The restarted tunnel's checker takes the outcome. Left running, this
+	// one could take it first, before the restart has happened.
+	m.stop()
 }
 
 func (m *staleSourceMachine) attrs(now time.Time, res sourceCheckResult) []any {
@@ -314,6 +361,9 @@ var (
 	staleSourceCounterOnce sync.Once
 	staleSourceCounter     metric.Int64Counter
 )
+
+// staleSourceRecord records an episode's outcome; a var so tests can watch it.
+var staleSourceRecord = recordStaleSourceOutcome
 
 func recordStaleSourceOutcome(outcome string, boundOK bool) {
 	staleSourceCounterOnce.Do(func() {
@@ -340,6 +390,7 @@ func recordStaleSourceOutcome(outcome string, boundOK bool) {
 // checker uses.
 type defaultInterfaceMonitor interface {
 	DefaultInterface() *control.Interface
+	MyInterfaces() []string
 	RegisterCallback(callback tun.DefaultInterfaceUpdateCallback) *list.Element[tun.DefaultInterfaceUpdateCallback]
 	UnregisterCallback(element *list.Element[tun.DefaultInterfaceUpdateCallback])
 }
@@ -423,7 +474,7 @@ func (t *tunnel) restartStaleSourceSchedule() {
 }
 
 func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
-	if checkSource == nil || t.boxInstance == nil {
+	if newSourceCheck == nil || t.boxInstance == nil {
 		return nil, nil
 	}
 	network := t.boxInstance.Network()
@@ -440,14 +491,14 @@ func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
 		schedule:     staleSourceSchedule,
 		recheckDelay: staleSourceRecheckDelay,
 		defaultIface: monitor.DefaultInterface,
-		check:        checkSource,
+		check:        newSourceCheck(ctx, monitor),
 		// What tunnel.resetNetwork does, without reading boxInstance, which
 		// close clears off c.mu's hold. Not VPNClient.ResetNetwork, which
 		// would start the schedule over.
 		reset:   func() { network.ResetNetwork(ctx) },
 		restart: t.restartForStaleSource,
 		guard:   guard,
-		record:  recordStaleSourceOutcome,
+		record:  staleSourceRecord,
 		logger:  slog.Default(),
 	}
 	return startStaleSourceChecker(ctx, monitor, m)
@@ -457,16 +508,17 @@ func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
 // address, or nil without a platform interface: the direct restart path
 // rebuilds from BoxOptions only the backend has, while the platform's path
 // reconnects through the backend.
-func (c *VPNClient) staleSourceRestart() func() {
+func (c *VPNClient) staleSourceRestart() func(failed func()) {
 	if c.platformIfce == nil {
 		return nil
 	}
-	return func() {
+	return func(failed func()) {
 		// Detached: the restart closes the tunnel, and closing it waits for
 		// the checker that calls this.
 		go func() {
 			if err := c.Restart(BoxOptions{}); err != nil {
 				c.logger.Warn("Tunnel restart for stale source address failed", "error", err)
+				failed()
 			}
 		}()
 	}

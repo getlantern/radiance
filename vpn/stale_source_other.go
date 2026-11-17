@@ -2,5 +2,7 @@
 
 package vpn
 
-// checkSource is nil where there is no stale source checker.
-var checkSource sourceCheckFunc
+import "context"
+
+// newSourceCheck is nil where there is no stale source checker.
+var newSourceCheck func(ctx context.Context, monitor defaultInterfaceMonitor) sourceCheckFunc

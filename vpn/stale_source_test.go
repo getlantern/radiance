@@ -26,11 +26,14 @@ type staleHarness struct {
 	m        *staleSourceMachine
 	results  []sourceStatus
 	checks   []time.Duration
+	calls    int
 	resets   int
 	restarts int
-	outcomes []staleOutcome
-	t0       time.Time
-	logs     *bytes.Buffer
+	// failRestart reports the last restart as failed.
+	failRestart func()
+	outcomes    []staleOutcome
+	t0          time.Time
+	logs        *bytes.Buffer
 }
 
 // newStaleHarness returns a machine whose checks report results in turn,
@@ -43,6 +46,7 @@ func newStaleHarness(guard *staleSourceGuard, results ...sourceStatus) *staleHar
 		recheckDelay: staleSourceRecheckDelay,
 		defaultIface: func() *control.Interface { return iface },
 		check: func(iface *control.Interface) sourceCheckResult {
+			h.calls++
 			status := sourceHealthy
 			if len(h.results) > 0 {
 				status, h.results = h.results[0], h.results[1:]
@@ -54,7 +58,7 @@ func newStaleHarness(guard *staleSourceGuard, results ...sourceStatus) *staleHar
 			return res
 		},
 		reset:   func() { h.resets++ },
-		restart: func() { h.restarts++ },
+		restart: func(failed func()) { h.restarts++; h.failRestart = failed },
 		guard:   guard,
 		record:  func(o string, b bool) { h.outcomes = append(h.outcomes, staleOutcome{o, b}) },
 		logger:  slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -151,6 +155,14 @@ func TestStaleSourceEscalatesToRestart(t *testing.T) {
 	assert.Equal(t, 1, h.restarts)
 	assert.Empty(t, h.outcomes, "the outcome is the next check's")
 
+	// The old tunnel stops checking, so it can't take the restart's outcome
+	// before the restart happens.
+	_, ok := h.m.nextDue()
+	assert.False(t, ok)
+	h.m.tick(h.t0.Add(10 * time.Second))
+	assert.Equal(t, 3, h.calls)
+	assert.Empty(t, h.outcomes)
+
 	// The restarted tunnel's checker, healthy.
 	next := newStaleHarness(guard)
 	next.t0 = h.t0.Add(10 * time.Second)
@@ -242,6 +254,8 @@ type fakeInterfaceMonitor struct {
 	iface     *control.Interface
 	callbacks list.List[tun.DefaultInterfaceUpdateCallback]
 }
+
+func (*fakeInterfaceMonitor) MyInterfaces() []string { return nil }
 
 func (f *fakeInterfaceMonitor) DefaultInterface() *control.Interface {
 	f.mu.Lock()
@@ -370,14 +384,16 @@ func TestExternalResetRestartsStaleSourceSchedule(t *testing.T) {
 // with a fake check: the checker's own reset doesn't start the schedule
 // over, and an external reset does.
 func TestStaleSourceOwnResetKeepsSchedule(t *testing.T) {
-	prevCheck, prevSchedule, prevRecheck := checkSource, staleSourceSchedule, staleSourceRecheckDelay
+	prevCheck, prevSchedule, prevRecheck := newSourceCheck, staleSourceSchedule, staleSourceRecheckDelay
 	t.Cleanup(func() {
-		checkSource, staleSourceSchedule, staleSourceRecheckDelay = prevCheck, prevSchedule, prevRecheck
+		newSourceCheck, staleSourceSchedule, staleSourceRecheckDelay = prevCheck, prevSchedule, prevRecheck
 	})
 	var checks atomic.Int32
-	checkSource = func(iface *control.Interface) sourceCheckResult {
-		checks.Add(1)
-		return sourceCheckResult{status: sourceStale, iface: iface.Name, index: iface.Index}
+	newSourceCheck = func(context.Context, defaultInterfaceMonitor) sourceCheckFunc {
+		return func(iface *control.Interface) sourceCheckResult {
+			checks.Add(1)
+			return sourceCheckResult{status: sourceStale, iface: iface.Name, index: iface.Index}
+		}
 	}
 	staleSourceSchedule = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 50 * time.Millisecond}
 	staleSourceRecheckDelay = 5 * time.Millisecond
@@ -403,4 +419,122 @@ func TestStaleSourceOwnResetKeepsSchedule(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	assert.EqualValues(t, 10, checks.Load())
 	assert.EqualValues(t, 3, router.resets.Load(), "the external reset, then the checker's own")
+}
+
+func TestStaleSourceFailedRestartRollsBack(t *testing.T) {
+	guard := &staleSourceGuard{}
+	h := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
+	h.m.update(h.t0, true)
+	h.runChecks(3)
+	require.Equal(t, 1, h.restarts)
+
+	h.failRestart()
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, h.outcomes)
+	assert.Contains(t, h.logs.String(), "tunnel restart failed")
+	pending, _ := guard.takePending(h.t0.Add(9 * time.Second))
+	assert.False(t, pending, "a restart that failed awaits no outcome")
+
+	// The rate limit doesn't hold for a restart that never ran.
+	next := newStaleHarness(guard, sourceStale, sourceStale, sourceStale)
+	next.t0 = h.t0.Add(time.Minute)
+	next.m.update(next.t0, true)
+	next.runChecks(3)
+	assert.Equal(t, 1, next.restarts)
+	assert.Empty(t, next.outcomes)
+
+	// Reporting a failure once the outcome is taken changes nothing.
+	guard.takePending(next.t0.Add(9 * time.Second))
+	next.failRestart()
+	assert.Empty(t, next.outcomes)
+}
+
+func TestStaleSourceInconclusiveAfterResetIsBounded(t *testing.T) {
+	h := newStaleHarness(&staleSourceGuard{},
+		sourceHealthy, sourceHealthy, sourceHealthy, sourceHealthy, sourceStale, sourceStale,
+		sourceUnknown, sourceUnknown, sourceUnknown, sourceUnknown)
+	h.m.update(h.t0, true)
+	h.runChecks(100)
+	assert.Equal(t, 1, h.resets)
+	assert.Equal(t, secs(2, 5, 10, 20, 40, 60, 63, 66, 69, 72), h.checks, "3 more rechecks after the first")
+	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, h.outcomes)
+	assert.Contains(t, h.logs.String(), "checks inconclusive after network reset")
+}
+
+// TestStaleSourceRestartThroughPlatform drives a tunnel's checker to a restart
+// through a platform interface that, like the extension, closes the tunnel
+// and starts a new one. A restart called on the checker's goroutine would
+// deadlock: closing the tunnel waits for that goroutine.
+func TestStaleSourceRestartThroughPlatform(t *testing.T) {
+	prevCheck, prevSchedule, prevRecheck, prevRecord := newSourceCheck, staleSourceSchedule, staleSourceRecheckDelay, staleSourceRecord
+	t.Cleanup(func() {
+		newSourceCheck, staleSourceSchedule, staleSourceRecheckDelay, staleSourceRecord = prevCheck, prevSchedule, prevRecheck, prevRecord
+	})
+	// The old tunnel's default interface is stale, the new one's healthy.
+	newSourceCheck = func(context.Context, defaultInterfaceMonitor) sourceCheckFunc {
+		return func(iface *control.Interface) sourceCheckResult {
+			if iface.Index == 4 {
+				return sourceCheckResult{status: sourceStale, iface: iface.Name, index: iface.Index}
+			}
+			return sourceCheckResult{status: sourceHealthy, iface: iface.Name, index: iface.Index}
+		}
+	}
+	staleSourceSchedule = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 50 * time.Millisecond}
+	staleSourceRecheckDelay = 5 * time.Millisecond
+	var (
+		mu       sync.Mutex
+		outcomes []staleOutcome
+	)
+	staleSourceRecord = func(o string, b bool) {
+		mu.Lock()
+		outcomes = append(outcomes, staleOutcome{o, b})
+		mu.Unlock()
+	}
+
+	p := &stubPlatform{}
+	c := NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), p)
+	startTunnel := func(index int) *tunnel {
+		tn, router := resetTestTunnel(t)
+		router.monitor.iface = &control.Interface{Name: "en0", Index: index}
+		tn.ctx, tn.cancel = context.WithCancel(context.Background())
+		tn.staleSource = &c.staleSource
+		tn.restartForStaleSource = c.staleSourceRestart()
+		tn.closeTimeout = 5 * time.Second
+		if closer := tn.startStaleSourceChecker(); closer != nil {
+			tn.closers = append(tn.closers, closer)
+		}
+		return tn
+	}
+	restarted := make(chan error, 1)
+	p.restartFn = func() error {
+		err := c.Disconnect()
+		if err == nil {
+			c.mu.Lock()
+			c.setTunnelLocked(startTunnel(5))
+			c.setStatus(Connected, nil)
+			c.mu.Unlock()
+		}
+		restarted <- err
+		return err
+	}
+	c.mu.Lock()
+	c.setTunnelLocked(startTunnel(4))
+	c.status.Store(Connected)
+	c.mu.Unlock()
+
+	select {
+	case err := <-restarted:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the restart didn't complete")
+	}
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(outcomes) > 0
+	}, time.Second, time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, []staleOutcome{{staleOutcomeRecoveredByRestart, false}}, outcomes, "only the new tunnel records")
+	mu.Unlock()
+	require.NoError(t, c.Disconnect())
 }
