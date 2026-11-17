@@ -666,3 +666,31 @@ func TestStaleSourcePendingRestartWindowRunsOut(t *testing.T) {
 	assert.Equal(t, []staleOutcome{{staleOutcomeNotRecovered, true}}, next.outcomes, "not recovered_by_restart")
 	assert.Contains(t, next.logs.String(), "restart outcome window ran out")
 }
+
+// An update or reset that arrives while a check runs supersedes its result:
+// a stale result from before an external reset doesn't escalate.
+func TestStaleSourceCheckOvertakenBySignal(t *testing.T) {
+	h := newStaleHarness(&staleSourceGuard{}, sourceStale, sourceStale, sourceStale, sourceStale)
+	check := h.m.check
+	var signalDuring int
+	h.m.check = func(iface *control.Interface) sourceCheckResult {
+		if h.calls+1 == signalDuring {
+			h.m.generation.Add(1)
+		}
+		return check(iface)
+	}
+	h.m.update(h.t0, true)
+	h.runChecks(2)
+	require.Equal(t, 1, h.resets)
+
+	// The recheck after the reset is stale, but a reset signal arrives during it.
+	signalDuring = 3
+	h.runChecks(1)
+	assert.Equal(t, 3, h.calls)
+	assert.Zero(t, h.restarts, "the overtaken result doesn't escalate")
+	assert.Empty(t, h.outcomes)
+
+	// Without a signal, the next stale check escalates as before.
+	h.runChecks(1)
+	assert.Equal(t, 1, h.restarts)
+}

@@ -65,7 +65,11 @@ func checkSourceAddr(iface *control.Interface, dial func(context.Context) (net.C
 		res.source = "iface_gone"
 		return res
 	}
-	addrs := interfaceIPv4s(ni)
+	addrs, err := interfaceIPv4s(ni)
+	if err != nil {
+		res.source = "addrs_error"
+		return res
+	}
 	for _, a := range addrs {
 		res.addrs = append(res.addrs, lastOctet(a))
 	}
@@ -81,7 +85,12 @@ func checkSourceAddr(iface *control.Interface, dial func(context.Context) (net.C
 			res.status = sourceHealthy
 			return res
 		}
-		switch owner := interfaceHolding(src); {
+		switch owner, err := interfaceHolding(src); {
+		case err != nil:
+			// Without every interface's addresses, a source missing from
+			// them is no evidence it was removed.
+			res.source += " lookup_error"
+			return res
 		case owner == "":
 			res.status = sourceStale
 		case slices.Contains(myInterfaces, owner):
@@ -153,24 +162,35 @@ func connectBound(local netip.Addr) (netip.Addr, error) {
 	return netip.AddrFrom4(sa4.Addr), nil
 }
 
-// interfaceHolding returns the name of the interface holding addr, or "".
-func interfaceHolding(addr netip.Addr) string {
-	ifaces, err := net.Interfaces()
+// Vars so tests can fail the lookups.
+var (
+	listInterfaces = net.Interfaces
+	interfaceAddrs = (*net.Interface).Addrs
+)
+
+// interfaceHolding returns the name of the interface holding addr, or ""
+// when every interface's addresses were read and none holds it.
+func interfaceHolding(addr netip.Addr) (string, error) {
+	ifaces, err := listInterfaces()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	for i := range ifaces {
-		if slices.Contains(interfaceIPv4s(&ifaces[i]), addr) {
-			return ifaces[i].Name
+		addrs, err := interfaceIPv4s(&ifaces[i])
+		if err != nil {
+			return "", err
+		}
+		if slices.Contains(addrs, addr) {
+			return ifaces[i].Name, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
-func interfaceIPv4s(ni *net.Interface) []netip.Addr {
-	ifAddrs, err := ni.Addrs()
+func interfaceIPv4s(ni *net.Interface) ([]netip.Addr, error) {
+	ifAddrs, err := interfaceAddrs(ni)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var addrs []netip.Addr
 	for _, a := range ifAddrs {
@@ -182,7 +202,7 @@ func interfaceIPv4s(ni *net.Interface) []netip.Addr {
 			addrs = append(addrs, addr.Unmap())
 		}
 	}
-	return addrs
+	return addrs, nil
 }
 
 // errnoClass names err's errno, so a log line carries no address.

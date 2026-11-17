@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tun "github.com/sagernet/sing-tun"
@@ -216,6 +217,9 @@ type staleSourceMachine struct {
 	// pendingUnknowns counts inconclusive checks while a restart awaits its
 	// outcome.
 	pendingUnknowns int
+	// generation counts update and reset signals as they arrive, ahead of
+	// update, so tick can tell a check one overtook.
+	generation atomic.Uint64
 }
 
 // update starts the schedule over for a default interface update, or stops
@@ -275,7 +279,14 @@ func (m *staleSourceMachine) tick(now time.Time) {
 		m.active = false
 		return
 	}
+	gen := m.generation.Load()
 	res := m.check(iface)
+	if m.generation.Load() != gen {
+		// An update or reset arrived during the check, and its update will
+		// start the schedule over; this result predates it, so acting on it
+		// could reset or restart again for a state the reset just cleared.
+		return
+	}
 	m.conclude(now, res)
 	if _, ok := m.nextDue(); !ok {
 		m.active = false
@@ -462,6 +473,7 @@ type defaultInterfaceMonitor interface {
 func startStaleSourceChecker(ctx context.Context, monitor defaultInterfaceMonitor, m *staleSourceMachine) (closer io.Closer, update func()) {
 	updates := make(chan struct{}, 1)
 	signal := func() {
+		m.generation.Add(1)
 		select {
 		case updates <- struct{}{}:
 		default:

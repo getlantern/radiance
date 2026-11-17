@@ -4,6 +4,7 @@ package vpn
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -25,7 +26,9 @@ func defaultIPv4Interface(t *testing.T) *control.Interface {
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
 	for _, ni := range ifaces {
-		for _, a := range interfaceIPv4s(&ni) {
+		addrs, err := interfaceIPv4s(&ni)
+		require.NoError(t, err)
+		for _, a := range addrs {
 			if a == local {
 				return &control.Interface{Name: ni.Name, Index: ni.Index}
 			}
@@ -92,7 +95,8 @@ func TestCheckSourceAddrClassifiesSource(t *testing.T) {
 	// A source on the tunnel's own interface, or on another interface, is no
 	// evidence about this one.
 	loopback := netip.MustParseAddr("127.0.0.1")
-	lo := interfaceHolding(loopback)
+	lo, err := interfaceHolding(loopback)
+	require.NoError(t, err)
 	require.NotEmpty(t, lo)
 	res = checkSourceAddr(iface, dialWithSource(loopback), []string{lo})
 	assert.Equal(t, sourceUnknown, res.status)
@@ -100,4 +104,40 @@ func TestCheckSourceAddrClassifiesSource(t *testing.T) {
 	res = checkSourceAddr(iface, dialWithSource(loopback), nil)
 	assert.Equal(t, sourceUnknown, res.status)
 	assert.Equal(t, ".1 other_iface", res.source)
+}
+
+// A source no interface was seen to hold is stale only when every interface's
+// addresses could be read.
+func TestCheckSourceAddrLookupErrors(t *testing.T) {
+	iface := defaultIPv4Interface(t)
+	if iface == nil {
+		t.Skip("no default IPv4 interface")
+	}
+	prevList, prevAddrs := listInterfaces, interfaceAddrs
+	t.Cleanup(func() { listInterfaces, interfaceAddrs = prevList, prevAddrs })
+	removed := dialWithSource(netip.MustParseAddr("192.0.2.22"))
+
+	listInterfaces = func() ([]net.Interface, error) { return nil, errors.New("list failed") }
+	res := checkSourceAddr(iface, removed, nil)
+	assert.Equal(t, sourceUnknown, res.status)
+	assert.Equal(t, ".22 lookup_error", res.source)
+	assert.Empty(t, res.bound)
+
+	// Another interface's addresses can't be read.
+	listInterfaces = prevList
+	interfaceAddrs = func(ni *net.Interface) ([]net.Addr, error) {
+		if ni.Index != iface.Index {
+			return nil, errors.New("addrs failed")
+		}
+		return prevAddrs(ni)
+	}
+	res = checkSourceAddr(iface, removed, nil)
+	assert.Equal(t, sourceUnknown, res.status)
+	assert.Equal(t, ".22 lookup_error", res.source)
+
+	// The default interface's own addresses can't be read.
+	interfaceAddrs = func(*net.Interface) ([]net.Addr, error) { return nil, errors.New("addrs failed") }
+	res = checkSourceAddr(iface, removed, nil)
+	assert.Equal(t, sourceUnknown, res.status)
+	assert.Equal(t, "addrs_error", res.source)
 }
