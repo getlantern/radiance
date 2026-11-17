@@ -151,8 +151,14 @@ func (r *LocalBackend) PersonalProxyStatus() []vpn.PersonalProxyStatus {
 	for _, tag := range tags {
 		f := r.friendReach(tag)
 		status := vpn.PersonalProxyStatus{Tag: tag, Direct: f.direct, Reverse: f.reverse && r.reverseSessionLive(tag), Rooms: f.consumer && f.tickets}
-		if f.direct && r.vpnClient != nil {
-			status.DirectDelayMs = r.vpnClient.PersonalProxyMember(tag).DirectDelay
+		if (f.direct || status.Rooms) && r.vpnClient != nil {
+			m := r.vpnClient.PersonalProxyMember(tag)
+			if f.direct {
+				status.DirectDelayMs = m.DirectDelay
+			}
+			if status.Rooms && m.Rooms {
+				status.SetRoomsPath(m.RoomsPath)
+			}
 		}
 		statuses = append(statuses, status)
 	}
