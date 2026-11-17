@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/getlantern/semconv"
+
 	"github.com/getlantern/radiance/kindling"
 )
 
@@ -104,7 +106,7 @@ func (t *fallbackTransport) stick(err error) {
 	defer t.mu.Unlock()
 	if !t.fellBack {
 		slog.Info("Unbounded: direct signaling can't connect, signaling through kindling",
-			"for", t.stickFor, "error", err)
+			slog.String(string(semconv.ExceptionMessageKey), err.Error()))
 	}
 	t.fellBack = true
 	t.until = t.now().Add(t.stickFor)
