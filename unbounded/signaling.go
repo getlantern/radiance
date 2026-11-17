@@ -103,23 +103,25 @@ func (t *fallbackTransport) sticking() bool {
 
 func (t *fallbackTransport) stick(err error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.fellBack {
+	first := !t.fellBack
+	t.fellBack = true
+	t.until = t.now().Add(t.stickFor)
+	t.mu.Unlock()
+	if first {
 		slog.Info("Unbounded: direct signaling can't connect, signaling through kindling",
 			slog.String(string(semconv.ExceptionMessageKey), err.Error()))
 	}
-	t.fellBack = true
-	t.until = t.now().Add(t.stickFor)
 }
 
 func (t *fallbackTransport) directConnected() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.fellBack {
-		slog.Info("Unbounded: direct signaling connects again")
-	}
+	recovered := t.fellBack
 	t.fellBack = false
 	t.until = time.Time{}
+	t.mu.Unlock()
+	if recovered {
+		slog.Info("Unbounded: direct signaling connects again")
+	}
 }
 
 func isUpgrade(req *http.Request) bool {
