@@ -355,7 +355,7 @@ func TestStaleSourceCheckerStartsWithDefaultInterface(t *testing.T) {
 
 func TestStaleSourceRestartNeedsPlatform(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), nil)
-	assert.Nil(t, c.staleSourceRestart(), "the direct restart path needs the backend's BoxOptions")
+	assert.Nil(t, c.staleSourceRestart(&tunnel{}), "the direct restart path needs the backend's BoxOptions")
 	tn := c.newTunnel(BoxOptions{}, "")
 	assert.Same(t, &c.staleSource, tn.staleSource)
 }
@@ -425,9 +425,9 @@ func TestStaleSourceOwnResetKeepsSchedule(t *testing.T) {
 // TestStaleSourceRestartErrors checks which Restart errors count as a
 // restart that never started.
 func TestStaleSourceRestartErrors(t *testing.T) {
-	run := func(c *VPNClient) bool {
+	run := func(c *VPNClient, tn *tunnel) bool {
 		got := make(chan bool, 1)
-		c.staleSourceRestart()(func(started bool) { got <- started })
+		c.staleSourceRestart(tn)(func(started bool) { got <- started })
 		select {
 		case started := <-got:
 			return started
@@ -439,13 +439,23 @@ func TestStaleSourceRestartErrors(t *testing.T) {
 
 	// No tunnel connected: Restart returns ErrTunnelNotConnected untouched.
 	c := NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), &stubPlatform{})
-	assert.False(t, run(c))
+	assert.False(t, run(c, &tunnel{}))
+
+	// The tunnel that asked was replaced: its restart must not take down the new one.
+	p := &stubPlatform{}
+	c = NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), p)
+	c.status.Store(Connected)
+	c.tunnel = &tunnel{}
+	assert.False(t, run(c, &tunnel{}))
+	p.mu.Lock()
+	assert.False(t, p.restartCalled, "the replacement wasn't restarted")
+	p.mu.Unlock()
 
 	// RestartService fails after the platform may have torn the tunnel down.
 	c = NewVPNClient(t.TempDir(), slog.New(slog.DiscardHandler), &stubPlatform{restartErr: errors.New("start failed")})
 	c.status.Store(Connected)
 	c.tunnel = &tunnel{}
-	assert.True(t, run(c))
+	assert.True(t, run(c, c.tunnel))
 }
 
 func TestStaleSourceFailedRestartAfterTeardownKeepsRateLimit(t *testing.T) {
@@ -545,7 +555,7 @@ func TestStaleSourceRestartThroughPlatform(t *testing.T) {
 		router.monitor.iface = &control.Interface{Name: "en0", Index: index}
 		tn.ctx, tn.cancel = context.WithCancel(context.Background())
 		tn.staleSource = &c.staleSource
-		tn.restartForStaleSource = c.staleSourceRestart()
+		tn.restartForStaleSource = c.staleSourceRestart(tn)
 		tn.closeTimeout = 5 * time.Second
 		if closer := tn.startStaleSourceChecker(); closer != nil {
 			tn.closers = append(tn.closers, closer)

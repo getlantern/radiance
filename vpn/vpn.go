@@ -139,8 +139,8 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel
 		connObserver:          c.connObserver,
 		inviterTickets:        c.inviterTickets,
 		staleSource:           &c.staleSource,
-		restartForStaleSource: c.staleSourceRestart(),
 	}
+	t.restartForStaleSource = c.staleSourceRestart(t)
 	if friend, ok := ParsePersonalProxySelection(boxOptions.InitialServer); ok {
 		t.personalProxy.Store(&friend)
 	}
@@ -329,11 +329,17 @@ func (c *VPNClient) close() error {
 // Restart closes and restarts the tunnel if it is currently running. Returns an error if the tunnel
 // is not running or restart fails.
 func (c *VPNClient) Restart(boxOptions BoxOptions) error {
+	return c.restart(boxOptions, nil)
+}
+
+// restart is Restart, limited to only when only is non-nil: a restart asked for by a tunnel that
+// has since been replaced must not take down its replacement.
+func (c *VPNClient) restart(boxOptions BoxOptions, only *tunnel) error {
 	ctx, span := otel.Tracer(tracerName).Start(context.Background(), "VPNClient.Restart")
 	defer span.End()
 
 	c.mu.Lock()
-	if c.tunnel == nil || c.Status() != Connected {
+	if c.tunnel == nil || c.Status() != Connected || only != nil && c.tunnel != only {
 		c.mu.Unlock()
 		return ErrTunnelNotConnected
 	}

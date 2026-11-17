@@ -509,11 +509,11 @@ func (t *tunnel) newStaleSourceChecker() (io.Closer, func()) {
 	return startStaleSourceChecker(ctx, monitor, m)
 }
 
-// staleSourceRestart returns how c's tunnels restart for a stale source
-// address, or nil without a platform interface: the direct restart path
+// staleSourceRestart returns how c restarts t for a stale source address, and
+// only t, or nil without a platform interface: the direct restart path
 // rebuilds from BoxOptions only the backend has, while the platform's path
 // reconnects through the backend.
-func (c *VPNClient) staleSourceRestart() func(failed func(started bool)) {
+func (c *VPNClient) staleSourceRestart(t *tunnel) func(failed func(started bool)) {
 	if c.platformIfce == nil {
 		return nil
 	}
@@ -521,10 +521,10 @@ func (c *VPNClient) staleSourceRestart() func(failed func(started bool)) {
 		// Detached: the restart closes the tunnel, and closing it waits for
 		// the checker that calls this.
 		go func() {
-			if err := c.Restart(BoxOptions{}); err != nil {
+			if err := c.restart(BoxOptions{}, t); err != nil {
 				c.logger.Warn("Tunnel restart for stale source address failed", "error", err)
-				// ErrTunnelNotConnected is the one error Restart returns
-				// before it touches the tunnel.
+				// ErrTunnelNotConnected is the one error restart returns
+				// before it touches the tunnel, including when t was replaced.
 				failed(!errors.Is(err, ErrTunnelNotConnected))
 			}
 		}()
