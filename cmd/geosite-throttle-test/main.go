@@ -30,9 +30,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/transport/split"
-	"github.com/Jigsaw-Code/outline-sdk/transport/tlsfrag"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/split"
+	"golang.getoutline.org/sdk/transport/tlsfrag"
 )
 
 const (

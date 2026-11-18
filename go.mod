@@ -24,6 +24,12 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 // replace github.com/sagernet/wireguard-go => ../wireguard-go
 
+// x/v0.3.0 plus a one-line fix so x/httpconnect builds against quic-go >= v0.53
+// (quic.EarlyConnection became *quic.Conn). lantern-box and kindling carry the
+// same replace, but a replace only applies in the main module. Drop once an
+// upstream x release includes OutlineFoundation/outline-sdk#657.
+replace golang.getoutline.org/sdk/x => github.com/getlantern/outline-sdk/x v0.3.0-lantern.1
+
 // sing-box/sing-tun/tailscale need gvisor's v0.0.0-20260727.0-sing-box-mod.1
 // API (WritePacketDirect, the new udp.NewForwarder signature). That tag's first
 // pre-release identifier is purely numeric, which semver ranks below the
@@ -33,16 +39,14 @@ replace github.com/sagernet/gvisor => github.com/sagernet/gvisor v0.0.0-20260727
 
 require (
 	github.com/1Password/srp v0.2.0
-	github.com/Jigsaw-Code/outline-sdk v0.0.19
-	github.com/Jigsaw-Code/outline-sdk/x v0.0.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20261117033427-62a624d1b849
 	github.com/getlantern/common v1.2.1-0.20261110195018-962f63413c3f
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
-	github.com/getlantern/kindling v0.0.0-20261111193957-924b15fffbf0
-	github.com/getlantern/lantern-box v0.0.236
+	github.com/getlantern/kindling v0.0.0-20261118035036-ffab9e8f70a3
+	github.com/getlantern/lantern-box v0.0.237-0.20261118035529-55e8445f612e
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/samizdat v0.0.3-0.20261117205503-f66a0285afd9
@@ -66,6 +70,8 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
+	golang.getoutline.org/sdk v0.1.0
+	golang.getoutline.org/sdk/x v0.3.0
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
@@ -281,8 +287,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
-	golang.getoutline.org/sdk v0.0.21 // indirect
-	golang.getoutline.org/sdk/x v0.1.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
