@@ -101,6 +101,10 @@ type VPNClient struct {
 	// proxyless is the last state SetProxylessEnabled asked for, applied to
 	// each tunnel as it starts; nil until the backend first sets it.
 	proxyless atomic.Pointer[bool]
+	// proxylessApplyMu orders applying the proxyless state to the tunnel.
+	// Callers hold mu only for reading, which doesn't order them, so a
+	// stale apply could otherwise land after a newer one.
+	proxylessApplyMu sync.Mutex
 
 	// staleSource is the stale source restart state, shared across tunnels
 	// so a restart's rate limit and outcome outlive the tunnel it replaced.

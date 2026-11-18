@@ -292,3 +292,28 @@ func TestSetProxylessEnabledDoesNotWaitOnTunnelStart(t *testing.T) {
 		return hedge.enabled.Load()
 	}, 2*time.Second, 5*time.Millisecond, "the switch is applied once the start is done")
 }
+
+// A background apply of an older state can't land after a newer one: a
+// switch on made while the tunnel starts, then a switch off once it's up,
+// always ends off.
+func TestSetProxylessEnabledLatestWins(t *testing.T) {
+	for range 500 {
+		c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+		hedge := &switchStub{}
+		tun := newModeTestTunnel(t)
+		tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
+		c.mu.Lock() // a starting tunnel
+		require.NoError(t, c.SetProxylessEnabled(true))
+		c.setTunnelLocked(tun)
+		c.mu.Unlock()
+		require.NoError(t, c.SetProxylessEnabled(false))
+		// Let the background apply finish, then check the final state.
+		c.mu.Lock()
+		c.mu.Unlock()
+		c.proxylessApplyMu.Lock()
+		c.proxylessApplyMu.Unlock()
+		require.Eventually(t, func() bool { return !hedge.enabled.Load() }, time.Second, time.Millisecond)
+		time.Sleep(time.Millisecond)
+		require.False(t, hedge.enabled.Load(), "the older switch on landed after the switch off")
+	}
+}

@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -113,22 +114,31 @@ func (c *VPNClient) SetProxylessEnabled(enabled bool) error {
 		go func() {
 			c.mu.RLock()
 			defer c.mu.RUnlock()
-			if c.tunnel == nil {
-				return
-			}
-			if latest := c.proxyless.Load(); latest != nil {
-				if err := c.tunnel.setProxylessEnabled(*latest); err != nil {
-					c.logger.Warn("Failed to apply the proxyless state", "error", err)
-				}
+			if err := c.applyLatestProxylessRLocked(); err != nil && !errors.Is(err, ErrTunnelNotConnected) {
+				c.logger.Warn("Failed to apply the proxyless state", "error", err)
 			}
 		}()
 		return nil
 	}
 	defer c.mu.RUnlock()
+	return c.applyLatestProxylessRLocked()
+}
+
+// applyLatestProxylessRLocked applies the latest requested proxyless state,
+// not the caller's, under proxylessApplyMu: applies run in some order, so
+// whichever runs last must apply the newest state. Caller holds mu for
+// reading.
+func (c *VPNClient) applyLatestProxylessRLocked() error {
+	c.proxylessApplyMu.Lock()
+	defer c.proxylessApplyMu.Unlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected
 	}
-	return c.tunnel.setProxylessEnabled(enabled)
+	latest := c.proxyless.Load()
+	if latest == nil {
+		return nil
+	}
+	return c.tunnel.setProxylessEnabled(*latest)
 }
 
 // ProxylessEnabled reports the proxyless state last set with
