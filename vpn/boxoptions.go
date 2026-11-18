@@ -58,7 +58,7 @@ var (
 	personalProxiesProbeInterval = urlTestInterval
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block", ProxylessHedgeTag}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -74,6 +74,10 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// Proxyless, when set, routes auto mode through a hedge that tries the
+	// server's proxyless outbound before the auto group. Only smart routing
+	// sets it: full tunnel sends everything through the proxy.
+	Proxyless *ProxylessOptions `json:"proxyless,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
 	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box
 	// config so references resolve, but excluded from the selectable proxy groups.
@@ -373,6 +377,17 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	// The proxyless outbound gets its UDP default whether or not the hedge
+	// is built, matching how a config update replaces it, so a full-tunnel
+	// update doesn't rebuild it for nothing.
+	for i := range opts.Outbounds {
+		opts.Outbounds[i] = WithProxylessUDP(opts.Outbounds[i])
+	}
+	// After the merge, so the hedge is never among the selectable tags.
+	hedged := bOptions.Proxyless != nil && addProxylessHedge(&opts)
+	if hedged {
+		slog.Info("Adding proxyless hedge", "enabled", bOptions.Proxyless.Enabled)
+	}
 	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, systemDNSServers())
 	// Private system-resolver answers must be returned before AAAA suppression drops them.
 	opts.DNS.Rules = slices.Concat(splitTunnelDNSRules(), localNameDNSRules(), opts.DNS.Rules)
@@ -408,6 +423,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	if initial == PersonalProxiesTag && len(helpers) == 0 {
 		initial = AutoSelectTag
 	}
+	// A user server saved under proxyless-hedge, before that tag was
+	// reserved, isn't selectable any more, so a saved selection of it
+	// starts on auto-select rather than failing to connect.
+	if initial == ProxylessHedgeTag {
+		initial = AutoSelectTag
+	}
 	mode := modeForServer(initial)
 	if mode == ManualSelectTag {
 		// The manual selector defaults to its first tag, so place initial at index 0.
@@ -431,7 +452,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 		opts.Outbounds = append(opts.Outbounds, personalProxyOutbound(friendMembers))
 	}
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
-	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
+	// Manual mode never goes proxyless: picking a location asks for that
+	// exit.
+	opts.Route.Rules = append(opts.Route.Rules, autoModeRules(hedged)...)
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
 	// catch-all rule to ensure no fallthrough
@@ -639,6 +662,11 @@ func personalProxiesOutbound(helpers []string) O.Outbound {
 }
 
 func selectModeRule(mode string) O.Rule {
+	return modeRule(mode, mode)
+}
+
+// modeRule routes the traffic of clash mode mode to outbound.
+func modeRule(mode, outbound string) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
@@ -648,7 +676,7 @@ func selectModeRule(mode string) O.Rule {
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeRoute,
 				RouteOptions: O.RouteActionOptions{
-					Outbound: mode,
+					Outbound: outbound,
 				},
 			},
 		},

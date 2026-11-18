@@ -579,7 +579,11 @@ func (t *tunnel) selectMode(mode string) error {
 	}
 	if prev != mode {
 		// Flows matched to the outgoing mode keep its server until closed.
+		// Auto mode routes to the proxyless hedge when it's built.
 		t.connTracker.closeMatchedTo(prev)
+		if prev == AutoSelectTag {
+			t.connTracker.closeMatchedTo(ProxylessHedgeTag)
+		}
 		go func() {
 			time.Sleep(time.Second)
 			runtimeDebug.FreeOSMemory()

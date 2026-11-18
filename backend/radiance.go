@@ -61,8 +61,11 @@ const tracerName = "github.com/getlantern/radiance/backend"
 //
 // A nil LocalBackend is valid for reporting issues.
 type LocalBackend struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	// proxylessMu orders applyProxyless calls from config updates and
+	// settings changes.
+	proxylessMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	confHandler   *config.ConfigHandler
 	issueReporter *issue.IssueReporter
@@ -513,7 +516,8 @@ func (r *LocalBackend) prewarmOfflineURLTests(source string) {
 	}
 }
 
-// applyConfig updates the runtime server state from a config snapshot.
+// applyConfig updates the runtime server state from a config snapshot. The
+// proxyless switch follows the handler's current config, not cfg.
 func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if cfg == nil {
 		return
@@ -538,6 +542,37 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if err := r.vpnClient.UpdateNonSelectableOutbounds(nonSelectableOutboundsFromConfig(cfg)); err != nil &&
 		!errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("updating non-selectable outbounds", "error", err)
+	}
+	r.applyProxyless()
+}
+
+// proxylessFeature is the server-side flag for proxyless access. It is the
+// kill switch: off, no tunnel goes proxyless whatever the user's setting.
+const proxylessFeature = "proxyless"
+
+// proxylessOn reports whether the proxyless hedge should take new
+// connections: smart routing is on, the server's flag is on, and the user
+// hasn't turned the setting off. Only smart routing builds the hedge, but a
+// tunnel that was connecting when smart routing went off isn't restarted, so
+// it can have one; checking smart routing here keeps that hedge off.
+func proxylessOn(cfg *config.Config) bool {
+	return cfg != nil && cfg.Features[proxylessFeature] &&
+		settings.GetBool(settings.SmartRoutingKey) && settings.ProxylessEnabled()
+}
+
+// applyProxyless switches the running tunnel's proxyless hedge to match the
+// current config's flag and the setting, without a restart. A tunnel without
+// a hedge has nothing to switch.
+func (r *LocalBackend) applyProxyless() {
+	// A config update and a settings change can both get here. Each reads
+	// the current config and setting under the lock, never a copy taken
+	// before it, so whichever applies last applies the newest of both.
+	r.proxylessMu.Lock()
+	defer r.proxylessMu.Unlock()
+	cfg, _ := r.confHandler.GetConfig()
+	if err := r.vpnClient.SetProxylessEnabled(proxylessOn(cfg)); err != nil &&
+		!errors.Is(err, vpn.ErrTunnelNotConnected) {
+		slog.Error("switching proxyless", "error", err)
 	}
 }
 
@@ -618,6 +653,9 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 		if _, ok := nonSelectable[out.Tag]; !ok {
 			continue
 		}
+		// The proxyless outbound keeps the UDP default the tunnel was built
+		// with, or replacing it would turn off proxyless QUIC.
+		out = vpn.WithProxylessUDP(out)
 		srvs = append(srvs, &servers.Server{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out})
 	}
 	return servers.ServerList{Servers: srvs}
@@ -912,9 +950,17 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) > 0 {
 		patchErr = settings.Patch(diff)
 	}
-	// A failed save still applies the live value, which the route follows.
+	// A failed save still applies the live value, so the country route and
+	// the proxyless hedge follow it before the error returns: a retry would
+	// be an empty diff.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
+	}
+	// The proxyless and smart routing settings switch the running hedge,
+	// without a restart.
+	_, proxylessChanged := diff[settings.ProxylessKey]
+	if _, smartChanged := diff[settings.SmartRoutingKey]; proxylessChanged || smartChanged {
+		r.applyProxyless()
 	}
 	if peerRequested {
 		registered, err := r.applyPeerShareRegistered(peerOn)
@@ -1955,6 +2001,10 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
+			// Full tunnel sends everything through the proxy, so only smart
+			// routing builds the proxyless hedge; the flag and the setting
+			// switch it.
+			bOptions.Proxyless = &vpn.ProxylessOptions{Enabled: proxylessOn(cfg)}
 		}
 		if settings.GetBool(settings.AdBlockKey) {
 			bOptions.AdBlock = cfg.AdBlock

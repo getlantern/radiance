@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/getlantern/radiance/account"
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal"
 	"github.com/getlantern/radiance/log"
 )
@@ -355,4 +357,34 @@ func TestInitialAccountEventDoesNotLoopConfigCreation(t *testing.T) {
 	require.Eventually(t, func() bool { return fetched.Load() > 0 }, 3*time.Second, time.Millisecond)
 	require.Never(t, func() bool { return created.Load() > 1 || fetched.Load() > 2 }, 100*time.Millisecond, time.Millisecond)
 	require.EqualValues(t, 1, created.Load())
+}
+
+// TestSetConfig_EmitsWhenSaveFails checks that a config published but not
+// saved still reaches subscribers: it is live, and a retry of the same config
+// would emit nothing.
+func TestSetConfig_EmitsWhenSaveFails(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ch := NewConfigHandler(ctx, Options{DataPath: dataDir, Logger: log.NoOpLogger()})
+	got := make(chan *Config, 1)
+	sub := events.Subscribe(func(evt NewConfigEvent) { got <- evt.New })
+	t.Cleanup(sub.Unsubscribe)
+
+	require.NoError(t, os.Chmod(dataDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
+	cfg := &Config{Country: "IR"}
+	require.Error(t, ch.setConfig(cfg), "the save fails")
+	live, err := ch.GetConfig()
+	require.NoError(t, err)
+	assert.Same(t, cfg, live)
+	select {
+	case evt := <-got:
+		assert.Same(t, cfg, evt)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no NewConfigEvent for a config published but not saved")
+	}
 }

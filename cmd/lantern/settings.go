@@ -25,7 +25,7 @@ func runFeatures(ctx context.Context, c *ipc.Client) error {
 }
 
 var settingNames = []string{
-	"smart-routing", "ad-block", "telemetry", "split-tunnel", "split-tunnel-policy",
+	"smart-routing", "proxyless", "ad-block", "telemetry", "split-tunnel", "split-tunnel-policy",
 	"fetch-config", "log-level", "feature-overrides", "country",
 }
 
@@ -33,6 +33,12 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 	switch name {
 	case "smart-routing":
 		return orBool(s[settings.SmartRoutingKey]), true
+	case "proxyless":
+		// Unset means on.
+		if v, ok := s[settings.ProxylessKey]; ok && v != nil {
+			return orBool(v), true
+		}
+		return true, true
 	case "ad-block":
 		return orBool(s[settings.AdBlockKey]), true
 	case "telemetry":
@@ -59,6 +65,7 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 
 type SetCmd struct {
 	SmartRouting      *bool   `arg:"--smart-routing" help:"enable or disable smart routing (true|false)"`
+	Proxyless         *bool   `arg:"--proxyless" help:"with smart routing, reach unblocked sites directly, without a proxy (true|false)"`
 	AdBlock           *bool   `arg:"--ad-block" help:"enable or disable ad blocking (true|false)"`
 	Telemetry         *bool   `arg:"--telemetry" help:"enable or disable telemetry (true|false)"`
 	SplitTunnel       *bool   `arg:"--split-tunnel" help:"enable or disable split tunneling (true|false)"`
@@ -73,6 +80,9 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 	updates := settings.Settings{}
 	if cmd.SmartRouting != nil {
 		updates[settings.SmartRoutingKey] = *cmd.SmartRouting
+	}
+	if cmd.Proxyless != nil {
+		updates[settings.ProxylessKey] = *cmd.Proxyless
 	}
 	if cmd.AdBlock != nil {
 		updates[settings.AdBlockKey] = *cmd.AdBlock

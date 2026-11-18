@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/x/configurl"
 	"gopkg.in/yaml.v3"
 
 	"github.com/getlantern/radiance/bypass"

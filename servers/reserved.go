@@ -18,7 +18,7 @@ var ErrReservedTag = errors.New("tag is reserved")
 // reservedTags are the tags the tunnel reserves: its selection groups, the
 // personal proxy groups and the built-in outbounds. vpn.ReservedTags must
 // match it.
-var reservedTags = []string{"auto", "manual", redact.PersonalProxiesTag, redact.PersonalProxyTag, "direct", "block"}
+var reservedTags = []string{"auto", "manual", redact.PersonalProxiesTag, redact.PersonalProxyTag, "direct", "block", "proxyless-hedge"}
 
 // reservedPrefix starts the tags that select one friend's personal proxy
 // (vpn.PersonalProxySelection), which a user server's tag would shadow.

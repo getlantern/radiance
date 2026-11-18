@@ -65,8 +65,12 @@ const (
 	SplitTunnelKey       _key = "split_tunnel"        // bool
 	SplitTunnelPolicyKey _key = "split_tunnel_policy" // string ("exclude"|"include")
 	AdBlockKey           _key = "ad_block"            // bool
-	AutoConnectKey       _key = "auto_connect"        // bool
-	PeerShareEnabledKey  _key = "peer_share_enabled"  // bool
+	// ProxylessKey lets smart routing reach sites directly, without a proxy,
+	// when they aren't blocked. Unset means true. It applies only with
+	// smart routing and the server's proxyless feature flag.
+	ProxylessKey        _key = "proxyless"          // bool (unset = true)
+	AutoConnectKey      _key = "auto_connect"       // bool
+	PeerShareEnabledKey _key = "peer_share_enabled" // bool
 	// PeerManualPortKey is the TCP port number the user has manually
 	// forwarded on their router for the peer-proxy inbound (single-
 	// port 1:1 NAT). Valid range is 1..65535; 0 means unset.
@@ -370,6 +374,12 @@ func GetString(key _key) string {
 
 func GetBool(key _key) bool {
 	return snapshot().Bool(key.String())
+}
+
+// ProxylessEnabled reports the proxyless setting (ProxylessKey), which is on
+// until the user turns it off.
+func ProxylessEnabled() bool {
+	return Get(ProxylessKey) == nil || GetBool(ProxylessKey)
 }
 
 // PeerServesPool reports the "help others too" setting (PeerServePoolKey):

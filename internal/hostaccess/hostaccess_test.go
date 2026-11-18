@@ -46,6 +46,7 @@ func TestCheckOutboundDenied(t *testing.T) {
 		{"twiddle hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolPath: "/etc/shadow"}}},
 		{"twiddle device hello pool", option.Outbound{Type: lbC.TypeTwiddle, Options: &lbO.TwiddleOutboundOptions{HelloPoolDevicePath: "/etc/shadow"}}},
 		{"bandit probe proxy environment", option.Outbound{Type: lbC.TypeBanditProbe, Options: &lbO.BanditProbeOutboundOptions{UseProxyEnvironment: true}}},
+		{"outline strategy cache path", option.Outbound{Type: lbC.TypeOutline, Options: &lbO.OutboundOutlineOptions{StrategyCachePath: "/etc/cron.d/x"}}},
 		{"dialer protect path", option.Outbound{Type: C.TypeShadowsocks, Options: &option.ShadowsocksOutboundOptions{
 			DialerOptions: option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{ProtectPath: "/run/protect.sock"}},
 		}}},
@@ -67,6 +68,10 @@ func TestCheckOutboundAllowed(t *testing.T) {
 		out  option.Outbound
 	}{
 		{"nil options", option.Outbound{Type: C.TypeDirect}},
+		{"outline with a udp transport", option.Outbound{Type: lbC.TypeOutline, Options: &lbO.OutboundOutlineOptions{
+			Domains: []string{"cdn.jsdelivr.net"}, UDP: new("quicprelude:count=1"),
+		}}},
+		{"hedge", option.Outbound{Type: lbC.TypeHedge, Options: &lbO.HedgeOutboundOptions{First: "proxyless", Then: "auto"}}},
 		{"shadowsocks", option.Outbound{Type: C.TypeShadowsocks, Options: &option.ShadowsocksOutboundOptions{
 			ServerOptions: option.ServerOptions{Server: "192.0.2.1", ServerPort: 443},
 			Method:        "chacha20-ietf-poly1305",

@@ -1016,7 +1016,7 @@ func (s *localapi) settingsHandler(w http.ResponseWriter, r *http.Request) {
 				switch key {
 				case settings.LocaleKey, settings.TimeZoneKey, settings.TelemetryKey,
 					settings.SmartRoutingKey, settings.SplitTunnelKey, settings.SplitTunnelPolicyKey,
-					settings.AdBlockKey, settings.AutoConnectKey, settings.PeerShareEnabledKey,
+					settings.AdBlockKey, settings.ProxylessKey, settings.AutoConnectKey, settings.PeerShareEnabledKey,
 					settings.PeerManualPortKey, settings.PeerServePoolKey, settings.UnboundedKey,
 					settings.LogLevelKey:
 				default:

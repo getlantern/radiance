@@ -347,6 +347,17 @@ func (m *connTracker) resolveChain(matchOutbound A.Outbound) (outbound, outbound
 
 		group, isGroup := detour.(A.OutboundGroup)
 		if !isGroup {
+			// The proxyless hedge isn't a group, and which way it sends a
+			// connection is decided only when it dials. Follow its fallback,
+			// the auto group, so auto-mode traffic stays attributed to the
+			// selected server as before. A connection the hedge serves
+			// proxyless is attributed to that server too, and nothing here
+			// tells the two apart; per-path accounting needs the hedge to
+			// report the path it took.
+			if detour.Tag() == ProxylessHedgeTag {
+				next = AutoSelectTag
+				continue
+			}
 			break
 		}
 		next = group.Now()
