@@ -47,8 +47,8 @@ func snapshotInterfaces() ([]ifaceSnapshot, error) {
 }
 
 // HasGlobalIPv6 reports whether the device has an up, non-loopback interface
-// carrying a global unicast IPv6 address (not just ULA). It does not verify
-// routing or internet connectivity.
+// carrying an IPv6 address in 2000::/3. It does not verify routing or internet
+// connectivity.
 func HasGlobalIPv6() bool {
 	return hasGlobalIPv6Using(snapshotInterfaces)
 }
