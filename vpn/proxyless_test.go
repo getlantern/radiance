@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -293,27 +294,41 @@ func TestSetProxylessEnabledDoesNotWaitOnTunnelStart(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond, "the switch is applied once the start is done")
 }
 
-// A background apply of an older state can't land after a newer one: a
-// switch on made while the tunnel starts, then a switch off once it's up,
-// always ends off.
-func TestSetProxylessEnabledLatestWins(t *testing.T) {
-	for range 500 {
-		c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
-		hedge := &switchStub{}
-		tun := newModeTestTunnel(t)
-		tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
-		c.mu.Lock() // a starting tunnel
-		require.NoError(t, c.SetProxylessEnabled(true))
-		c.setTunnelLocked(tun)
-		c.mu.Unlock()
-		require.NoError(t, c.SetProxylessEnabled(false))
-		// Let the background apply finish, then check the final state.
-		c.mu.Lock()
-		c.mu.Unlock()
-		c.proxylessApplyMu.Lock()
-		c.proxylessApplyMu.Unlock()
-		require.Eventually(t, func() bool { return !hedge.enabled.Load() }, time.Second, time.Millisecond)
-		time.Sleep(time.Millisecond)
-		require.False(t, hedge.enabled.Load(), "the older switch on landed after the switch off")
+// gatedSwitch is a hedge whose first SetEnabled blocks until released, so a
+// test can hold an apply partway.
+type gatedSwitch struct {
+	switchStub
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (g *gatedSwitch) SetEnabled(enabled bool) {
+	first := false
+	g.once.Do(func() { first = true })
+	if first {
+		close(g.entered)
+		<-g.release
 	}
+	g.switchStub.SetEnabled(enabled)
+}
+
+// An older apply held partway can't land after a newer one: a switch on
+// deferred while the tunnel starts, then a switch off once it's up, ends
+// off.
+func TestSetProxylessEnabledLatestWins(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	hedge := &gatedSwitch{entered: make(chan struct{}), release: make(chan struct{})}
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
+	c.mu.Lock() // a starting tunnel
+	require.NoError(t, c.SetProxylessEnabled(true))
+	c.setTunnelLocked(tun)
+	c.mu.Unlock()
+	<-hedge.entered // the deferred apply of "on" is partway
+	off := make(chan error, 1)
+	go func() { off <- c.SetProxylessEnabled(false) }()
+	time.Sleep(50 * time.Millisecond) // give "off" its chance to land first
+	close(hedge.release)
+	require.NoError(t, <-off)
+	require.False(t, hedge.enabled.Load(), "the older switch on landed after the switch off")
 }
