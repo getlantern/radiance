@@ -560,6 +560,19 @@ func proxylessOn(cfg *config.Config) bool {
 		settings.GetBool(settings.SmartRoutingKey) && settings.ProxylessEnabled()
 }
 
+// proxylessOptions builds the tunnel's proxyless hedge options from the
+// flag, the setting and the server's measurement settings for this client.
+func proxylessOptions(cfg *config.Config) *vpn.ProxylessOptions {
+	p := &vpn.ProxylessOptions{Enabled: proxylessOn(cfg)}
+	if cfg != nil {
+		if s := cfg.Proxyless.Sanitize(); s != nil {
+			p.ExploreRate = s.ExploreRate
+			p.TelemetrySites = s.TelemetrySites
+		}
+	}
+	return p
+}
+
 // applyProxyless switches the running tunnel's proxyless hedge to match the
 // current config's flag and the setting, without a restart. A tunnel without
 // a hedge has nothing to switch.
@@ -2004,7 +2017,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 			// Full tunnel sends everything through the proxy, so only smart
 			// routing builds the proxyless hedge; the flag and the setting
 			// switch it.
-			bOptions.Proxyless = &vpn.ProxylessOptions{Enabled: proxylessOn(cfg)}
+			bOptions.Proxyless = proxylessOptions(cfg)
 		}
 		if settings.GetBool(settings.AdBlockKey) {
 			bOptions.AdBlock = cfg.AdBlock

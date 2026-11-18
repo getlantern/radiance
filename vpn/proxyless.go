@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/getlantern/common"
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
@@ -33,8 +34,44 @@ const (
 // off and is switched on, after the tunnel starts, to the state last given to
 // [VPNClient.SetProxylessEnabled], or to Enabled when none was. A switch made
 // while the tunnel starts therefore can't be overtaken by a stale Enabled.
+//
+// ExploreRate and TelemetrySites tune how the hedge is measured; the server
+// sets them per country. They apply when the hedge is built, so a change
+// takes effect at the next tunnel start.
 type ProxylessOptions struct {
 	Enabled bool `json:"enabled"`
+	// ExploreRate is the fraction, from 0 to 1, of connections the hedge
+	// could send directly that it sends through the proxy instead, so the
+	// two paths can be compared on the same sites.
+	ExploreRate float64 `json:"explore_rate,omitempty"`
+	// TelemetrySites are the registered domains the hedge's telemetry may
+	// name; every other site is reported as "other".
+	TelemetrySites []string `json:"telemetry_sites,omitempty"`
+}
+
+// proxylessMaxTelemetrySites bounds the sites a server can have named, which
+// bounds the telemetry's cardinality.
+const proxylessMaxTelemetrySites = common.MaxProxylessTelemetrySites
+
+// hedgeTelemetryOptions returns p's measurement settings in the range the
+// hedge accepts. The hedge refuses to build with an explore_rate outside
+// [0, 1], which would stop the tunnel starting, so a value that isn't in it
+// is dropped rather than passed on. The backend already sends the server's
+// values through common.ProxylessConfig.Sanitize; this is a deliberate
+// second guard, since the tunnel not starting is the cost of a miss.
+func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites []string) {
+	if p.ExploreRate > 0 && p.ExploreRate <= 1 {
+		exploreRate = p.ExploreRate
+	}
+	for _, site := range p.TelemetrySites {
+		if len(sites) == proxylessMaxTelemetrySites {
+			break
+		}
+		if site != "" {
+			sites = append(sites, site)
+		}
+	}
+	return exploreRate, sites
 }
 
 // WithProxylessUDP returns out with proxylessUDP as its UDP transport when out
@@ -61,7 +98,7 @@ func WithProxylessUDP(out O.Outbound) O.Outbound {
 // outbound, or when an outbound or endpoint already has the hedge's tag (a
 // user server saved before the tag was reserved), which would otherwise stop
 // the tunnel from starting.
-func addProxylessHedge(opts *O.Options) bool {
+func addProxylessHedge(opts *O.Options, p *ProxylessOptions) bool {
 	i := slices.IndexFunc(opts.Outbounds, func(o O.Outbound) bool {
 		return o.Tag == ProxylessTag && o.Type == lbC.TypeOutline
 	})
@@ -72,13 +109,16 @@ func addProxylessHedge(opts *O.Options) bool {
 		slices.ContainsFunc(opts.Endpoints, func(e O.Endpoint) bool { return e.Tag == ProxylessHedgeTag }) {
 		return false
 	}
+	exploreRate, sites := p.hedgeTelemetryOptions()
 	opts.Outbounds = append(opts.Outbounds, O.Outbound{
 		Type: lbC.TypeHedge,
 		Tag:  ProxylessHedgeTag,
 		Options: &lbO.HedgeOutboundOptions{
-			First:    ProxylessTag,
-			Then:     AutoSelectTag,
-			Disabled: true,
+			First:          ProxylessTag,
+			Then:           AutoSelectTag,
+			Disabled:       true,
+			ExploreRate:    exploreRate,
+			TelemetrySites: sites,
 		},
 	})
 	return true

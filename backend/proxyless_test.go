@@ -15,6 +15,7 @@ import (
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
@@ -54,6 +55,7 @@ func TestGetBoxOptionsProxyless(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := cachedConfig()
 	cfg.Features = map[string]bool{proxylessFeature: true}
+	cfg.Proxyless = &common.ProxylessConfig{ExploreRate: 0.05, TelemetrySites: []string{"youtube.com"}}
 	buf, err := singjson.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
@@ -76,6 +78,8 @@ func TestGetBoxOptionsProxyless(t *testing.T) {
 	require.NoError(t, settings.Set(settings.SmartRoutingKey, true))
 	p := r.getBoxOptions().Proxyless
 	require.NotNil(t, p, "smart routing builds the proxyless hedge")
+	assert.Equal(t, 0.05, p.ExploreRate, "with the server's measurement settings")
+	assert.Equal(t, []string{"youtube.com"}, p.TelemetrySites)
 	assert.True(t, p.Enabled)
 
 	require.NoError(t, settings.Set(settings.ProxylessKey, false))
@@ -180,4 +184,22 @@ func TestProxylessSwitchesWhenTheSaveFails(t *testing.T) {
 	require.Error(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: false}), "the save fails")
 	require.False(t, settings.ProxylessEnabled(), "the live value changed anyway")
 	assert.False(t, r.vpnClient.ProxylessEnabled(), "so proxyless follows it")
+}
+
+// The server's measurement settings for this client are passed to the hedge.
+func TestProxylessOptionsFromConfig(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	cfg := &config.Config{
+		Features:  map[string]bool{proxylessFeature: true},
+		Proxyless: &common.ProxylessConfig{ExploreRate: 0.05, TelemetrySites: []string{"youtube.com"}},
+	}
+	p := proxylessOptions(cfg)
+	assert.Equal(t, 0.05, p.ExploreRate)
+	assert.Equal(t, []string{"youtube.com"}, p.TelemetrySites)
+
+	p = proxylessOptions(&config.Config{})
+	assert.Zero(t, p.ExploreRate, "no settings from the server leave the hedge's defaults")
+	assert.Empty(t, p.TelemetrySites)
 }
