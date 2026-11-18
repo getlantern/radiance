@@ -516,7 +516,8 @@ func (r *LocalBackend) prewarmOfflineURLTests(source string) {
 	}
 }
 
-// applyConfig updates the runtime server state from a config snapshot.
+// applyConfig updates the runtime server state from a config snapshot. The
+// proxyless switch follows the handler's current config, not cfg.
 func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 	if cfg == nil {
 		return
@@ -946,11 +947,13 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) > 0 {
 		patchErr = settings.Patch(diff)
 	}
-	// A failed save still applies the live value, which the route follows.
+	// A failed save still applies the live value, so the country route and
+	// the proxyless hedge follow it before the error returns: a retry would
+	// be an empty diff.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
 	}
-	// The proxyless setting switches the running hedge; no restart.
+	// The proxyless setting switches the running hedge, without a restart.
 	if _, ok := diff[settings.ProxylessKey]; ok {
 		r.applyProxyless()
 	}
