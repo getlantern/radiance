@@ -423,6 +423,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	if initial == PersonalProxiesTag && len(helpers) == 0 {
 		initial = AutoSelectTag
 	}
+	// A user server saved under proxyless-hedge, before that tag was
+	// reserved, isn't selectable any more, so a saved selection of it
+	// starts on auto-select rather than failing to connect.
+	if initial == ProxylessHedgeTag {
+		initial = AutoSelectTag
+	}
 	mode := modeForServer(initial)
 	if mode == ManualSelectTag {
 		// The manual selector defaults to its first tag, so place initial at index 0.

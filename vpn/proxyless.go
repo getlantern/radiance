@@ -102,9 +102,28 @@ func autoModeRules(hedged bool) []O.Rule {
 // while one is starting isn't lost. With no hedge, because the tunnel isn't
 // in smart routing or the server sent no proxyless outbound, there is nothing
 // to switch and it returns nil.
+//
+// It doesn't wait for a tunnel that is starting or stopping, which holds mu
+// for its whole start: the state is stored first, and applied once mu is
+// free, by restoreProxylessLocked as the tunnel starts or by a background
+// apply of the latest stored state.
 func (c *VPNClient) SetProxylessEnabled(enabled bool) error {
 	c.proxyless.Store(&enabled)
-	c.mu.RLock()
+	if !c.mu.TryRLock() {
+		go func() {
+			c.mu.RLock()
+			defer c.mu.RUnlock()
+			if c.tunnel == nil {
+				return
+			}
+			if latest := c.proxyless.Load(); latest != nil {
+				if err := c.tunnel.setProxylessEnabled(*latest); err != nil {
+					c.logger.Warn("Failed to apply the proxyless state", "error", err)
+				}
+			}
+		}()
+		return nil
+	}
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected

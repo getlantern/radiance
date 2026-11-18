@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,11 +143,11 @@ func TestWithProxylessUDP(t *testing.T) {
 // switchStub is an outbound with the hedge's runtime switch.
 type switchStub struct {
 	adapter.Outbound
-	enabled bool
+	enabled atomic.Bool
 }
 
-func (s *switchStub) SetEnabled(enabled bool) { s.enabled = enabled }
-func (s *switchStub) Enabled() bool           { return s.enabled }
+func (s *switchStub) SetEnabled(enabled bool) { s.enabled.Store(enabled) }
+func (s *switchStub) Enabled() bool           { return s.enabled.Load() }
 
 func TestSetProxylessEnabled(t *testing.T) {
 	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
@@ -160,9 +161,9 @@ func TestSetProxylessEnabled(t *testing.T) {
 	hedge := &switchStub{}
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
 	require.NoError(t, c.SetProxylessEnabled(true))
-	assert.True(t, hedge.enabled)
+	assert.True(t, hedge.enabled.Load())
 	require.NoError(t, c.SetProxylessEnabled(false))
-	assert.False(t, hedge.enabled)
+	assert.False(t, hedge.enabled.Load())
 
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: stubGroup{}}}
 	assert.Error(t, c.SetProxylessEnabled(true), "an outbound under the hedge's tag without a switch is an error")
@@ -226,7 +227,7 @@ func TestProxylessStateAppliedToANewTunnel(t *testing.T) {
 	c.setTunnelLocked(tun)
 	require.NoError(t, c.restoreProxylessLocked(&ProxylessOptions{Enabled: false}))
 	c.mu.Unlock()
-	assert.True(t, hedge.enabled, "a tunnel that starts gets the last requested state, not its build options'")
+	assert.True(t, hedge.enabled.Load(), "a tunnel that starts gets the last requested state, not its build options'")
 }
 
 func TestProxylessBuildStateAppliedWhenNoneRequested(t *testing.T) {
@@ -238,7 +239,7 @@ func TestProxylessBuildStateAppliedWhenNoneRequested(t *testing.T) {
 	defer c.mu.Unlock()
 	c.setTunnelLocked(tun)
 	require.NoError(t, c.restoreProxylessLocked(&ProxylessOptions{Enabled: true}))
-	assert.True(t, hedge.enabled, "with no requested state, the build options' state applies")
+	assert.True(t, hedge.enabled.Load(), "with no requested state, the build options' state applies")
 	require.NoError(t, c.restoreProxylessLocked(nil))
 }
 
@@ -256,4 +257,38 @@ func TestBuildOptions_NoHedgeWhenItsTagIsTaken(t *testing.T) {
 	}
 	assert.Equal(t, 1, n, "a saved outbound with the hedge's tag isn't duplicated")
 	assert.Equal(t, AutoSelectTag, modeRoute(t, opts, AutoSelectTag), "and auto mode doesn't route to it")
+}
+
+// A saved selection of a user server tagged proxyless-hedge, from before the
+// tag was reserved, starts on auto-select instead of failing to build.
+func TestBuildOptions_SavedSelectionOfTheReservedHedgeTag(t *testing.T) {
+	bOptions := withProxyless(t, nil)
+	bOptions.Proxyless = &ProxylessOptions{Enabled: true}
+	bOptions.InitialServer = ProxylessHedgeTag
+	_, _, err := buildOptions(bOptions)
+	require.NoError(t, err)
+}
+
+// A switch made while a tunnel is starting, which holds mu for the whole
+// start, doesn't wait for it, and is applied once it's done.
+func TestSetProxylessEnabledDoesNotWaitOnTunnelStart(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	hedge := &switchStub{}
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
+	c.mu.Lock() // as start does
+	done := make(chan error, 1)
+	go func() { done <- c.SetProxylessEnabled(true) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		c.mu.Unlock()
+		t.Fatal("SetProxylessEnabled waited on the tunnel's start")
+	}
+	c.setTunnelLocked(tun)
+	c.mu.Unlock()
+	require.Eventually(t, func() bool {
+		return hedge.enabled.Load()
+	}, 2*time.Second, 5*time.Millisecond, "the switch is applied once the start is done")
 }
