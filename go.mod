@@ -43,7 +43,7 @@ require (
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
 	github.com/getlantern/broflake v0.0.0-20261117033427-62a624d1b849
-	github.com/getlantern/common v1.2.1-0.20261118195322-e2cdbc4718e6
+	github.com/getlantern/common v1.2.1-0.20261118200432-1495a50e0d7e
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261118170249-97dd2fc5eff5
 	github.com/getlantern/lantern-box v0.0.238
