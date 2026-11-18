@@ -542,7 +542,7 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 		!errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("updating non-selectable outbounds", "error", err)
 	}
-	r.applyProxyless(cfg)
+	r.applyProxyless()
 }
 
 // proxylessFeature is the server-side flag for proxyless access. It is the
@@ -557,14 +557,15 @@ func proxylessOn(cfg *config.Config) bool {
 }
 
 // applyProxyless switches the running tunnel's proxyless hedge to match the
-// flag and the setting, without a restart. A tunnel without a hedge has
-// nothing to switch.
-func (r *LocalBackend) applyProxyless(cfg *config.Config) {
-	// A config update and a settings change can both get here; holding the
-	// lock across reading the state and applying it keeps the older of the
-	// two from undoing the newer.
+// current config's flag and the setting, without a restart. A tunnel without
+// a hedge has nothing to switch.
+func (r *LocalBackend) applyProxyless() {
+	// A config update and a settings change can both get here. Each reads
+	// the current config and setting under the lock, never a copy taken
+	// before it, so whichever applies last applies the newest of both.
 	r.proxylessMu.Lock()
 	defer r.proxylessMu.Unlock()
+	cfg, _ := r.confHandler.GetConfig()
 	if err := r.vpnClient.SetProxylessEnabled(proxylessOn(cfg)); err != nil &&
 		!errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("switching proxyless", "error", err)
@@ -949,6 +950,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
 	}
+	// The proxyless setting switches the running hedge; no restart.
+	if _, ok := diff[settings.ProxylessKey]; ok {
+		r.applyProxyless()
+	}
 	if peerRequested {
 		registered, err := r.applyPeerShareRegistered(peerOn)
 		if err != nil {
@@ -998,11 +1003,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
-	}
-	// The proxyless setting switches the running hedge; no restart.
-	if _, ok := diff[settings.ProxylessKey]; ok {
-		cfg, _ := r.confHandler.GetConfig()
-		r.applyProxyless(cfg)
 	}
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.

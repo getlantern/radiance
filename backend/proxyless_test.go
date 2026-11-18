@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/sagernet/sing-box/option"
@@ -91,12 +92,10 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	require.NotNil(t, opts.UDP, "a config update must not drop the UDP default the tunnel was built with")
 }
 
-// TestProxylessFollowsConfigAndSettings checks that a config update and a
-// settings change both switch proxyless, before any tunnel runs too.
-func TestProxylessFollowsConfigAndSettings(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := cachedConfig()
-	cfg.Features = map[string]bool{proxylessFeature: true}
+// proxylessBackend returns a backend whose config handler loaded cfg from
+// dataDir, with settings initialized there.
+func proxylessBackend(t *testing.T, dataDir string, cfg *config.Config) *LocalBackend {
+	t.Helper()
 	buf, err := singjson.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
@@ -107,14 +106,24 @@ func TestProxylessFollowsConfigAndSettings(t *testing.T) {
 	t.Cleanup(cancel)
 	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
 	require.NoError(t, err)
-	r := &LocalBackend{
+	return &LocalBackend{
 		ctx:         ctx,
 		confHandler: config.NewConfigHandler(ctx, config.Options{DataPath: dataDir, Logger: log.NoOpLogger()}),
 		srvManager:  srvMgr,
 		vpnClient:   vpn.NewVPNClient(dataDir, log.NoOpLogger(), nil),
 	}
+}
 
-	r.applyConfig(cfg, false)
+// TestProxylessFollowsConfigAndSettings checks that a config update and a
+// settings change both switch proxyless, before any tunnel runs too.
+func TestProxylessFollowsConfigAndSettings(t *testing.T) {
+	cfg := cachedConfig()
+	cfg.Features = map[string]bool{proxylessFeature: true}
+	r := proxylessBackend(t, t.TempDir(), cfg)
+	live, err := r.confHandler.GetConfig()
+	require.NoError(t, err)
+
+	r.applyConfig(live, false)
 	assert.True(t, r.vpnClient.ProxylessEnabled(), "a config with the flag on switches proxyless on")
 
 	require.NoError(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: false}))
@@ -123,7 +132,42 @@ func TestProxylessFollowsConfigAndSettings(t *testing.T) {
 	require.NoError(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: true}))
 	assert.True(t, r.vpnClient.ProxylessEnabled())
 
-	cfg.Features = map[string]bool{}
-	r.applyConfig(cfg, false)
+	live.Features = map[string]bool{}
+	r.applyConfig(live, false)
 	assert.False(t, r.vpnClient.ProxylessEnabled(), "the server's flag turning off is the kill switch")
+}
+
+// TestProxylessAppliesTheCurrentConfig checks that applying a stale config,
+// as a config update racing a settings change can, still uses the current
+// one: a flag the server has since turned off stays off.
+func TestProxylessAppliesTheCurrentConfig(t *testing.T) {
+	cfg := cachedConfig()
+	cfg.Features = map[string]bool{}
+	r := proxylessBackend(t, t.TempDir(), cfg)
+
+	stale := cachedConfig()
+	stale.Features = map[string]bool{proxylessFeature: true}
+	r.applyConfig(stale, false)
+	assert.False(t, r.vpnClient.ProxylessEnabled(), "the current config's flag decides, not the one passed in")
+}
+
+// TestProxylessSwitchesWhenTheSaveFails checks that turning the setting off
+// switches proxyless off even when saving the settings file fails, since the
+// live value has already changed and a retry would be an empty diff.
+func TestProxylessSwitchesWhenTheSaveFails(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions don't block writes on Windows or as root")
+	}
+	dataDir := t.TempDir()
+	cfg := cachedConfig()
+	cfg.Features = map[string]bool{proxylessFeature: true}
+	r := proxylessBackend(t, dataDir, cfg)
+	r.applyProxyless()
+	require.True(t, r.vpnClient.ProxylessEnabled())
+
+	require.NoError(t, os.Chmod(dataDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
+	require.Error(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: false}), "the save fails")
+	require.False(t, settings.ProxylessEnabled(), "the live value changed anyway")
+	assert.False(t, r.vpnClient.ProxylessEnabled(), "so proxyless follows it")
 }
