@@ -25,12 +25,11 @@ func isGlobalIPv6(ip net.IP) bool {
 // ifaceSnapshot is the test seam: the data HasGlobalIPv6 reads per interface,
 // decoupled from net.Interface so tests can simulate any network config.
 type ifaceSnapshot struct {
-	name  string // logging only
+	name  string
 	flags net.Flags
 	addrs []net.Addr
 }
 
-// snapshotInterfaces is the production snapshot provider. Tests inject their own.
 func snapshotInterfaces() ([]ifaceSnapshot, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -40,7 +39,6 @@ func snapshotInterfaces() ([]ifaceSnapshot, error) {
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
-			// Per-interface failure → empty addrs, keep going.
 			addrs = nil
 		}
 		out = append(out, ifaceSnapshot{name: iface.Name, flags: iface.Flags, addrs: addrs})
@@ -48,22 +46,15 @@ func snapshotInterfaces() ([]ifaceSnapshot, error) {
 	return out, nil
 }
 
-// HasGlobalIPv6 reports whether the device has a real route to the v6
-// internet: at least one up, non-loopback interface carrying a global
-// unicast IPv6 address (not just ULA). Called per tunnel start; not cached.
-//
-// Two callers rely on this, for related but distinct reasons:
-//   - vpn gates whether the TUN gets its own IPv6 ULA — enabling it on a
-//     v4-only network has been observed to break things we haven't narrowed
-//     down.
-//   - config.fetcher gates whether to advertise common.CapabilityIPv6 to the
-//     server, which decides whether an IPv6-only proxy route (no v4
-//     fallback) is safe to assign.
+// HasGlobalIPv6 reports whether the device has an up, non-loopback interface
+// carrying a global unicast IPv6 address (not just ULA). It does not verify
+// routing or internet connectivity.
 func HasGlobalIPv6() bool {
 	return hasGlobalIPv6Using(snapshotInterfaces)
 }
 
-// hasGlobalIPv6Using is the testable core; production wraps via snapshotInterfaces.
+// hasGlobalIPv6Using is HasGlobalIPv6 with an injectable interface source; it
+// returns false if getSnapshots fails.
 func hasGlobalIPv6Using(getSnapshots func() ([]ifaceSnapshot, error)) bool {
 	snaps, err := getSnapshots()
 	if err != nil {
