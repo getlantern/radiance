@@ -7,8 +7,9 @@ import (
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
-	C "github.com/sagernet/sing-box/constant"
 	O "github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json/badoption"
+	N "github.com/sagernet/sing/common/network"
 )
 
 const (
@@ -82,23 +83,17 @@ func addProxylessHedge(opts *O.Options) bool {
 	return true
 }
 
-// autoModeRule routes auto mode to target: the auto group, or the hedge in
-// front of it.
-func autoModeRule(target string) O.Rule {
-	return O.Rule{
-		Type: C.RuleTypeDefault,
-		DefaultOptions: O.DefaultRule{
-			RawDefaultRule: O.RawDefaultRule{
-				ClashMode: AutoSelectTag,
-			},
-			RuleAction: O.RuleAction{
-				Action: C.RuleActionTypeRoute,
-				RouteOptions: O.RouteActionOptions{
-					Outbound: target,
-				},
-			},
-		},
+// autoModeRules route auto mode to the auto group, or through the hedge in
+// front of it. The hedge carries only TCP and UDP, and sing-box finds an
+// ICMP-capable outbound only through groups, which the hedge isn't, so ICMP
+// skips the hedge and goes to the auto group directly.
+func autoModeRules(hedged bool) []O.Rule {
+	if !hedged {
+		return []O.Rule{modeRule(AutoSelectTag, AutoSelectTag)}
 	}
+	viaHedge := modeRule(AutoSelectTag, ProxylessHedgeTag)
+	viaHedge.DefaultOptions.RawDefaultRule.Network = badoption.Listable[string]{N.NetworkTCP, N.NetworkUDP}
+	return []O.Rule{viaHedge, modeRule(AutoSelectTag, AutoSelectTag)}
 }
 
 // SetProxylessEnabled switches the running tunnel's proxyless hedge on or

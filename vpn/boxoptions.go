@@ -464,10 +464,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 		opts.Outbounds[i] = WithProxylessUDP(opts.Outbounds[i])
 	}
 	// After the merge, so the hedge is never among the selectable tags.
-	autoTarget := AutoSelectTag
-	if bOptions.Proxyless != nil && addProxylessHedge(&opts) {
+	hedged := bOptions.Proxyless != nil && addProxylessHedge(&opts)
+	if hedged {
 		slog.Info("Adding proxyless hedge", "enabled", bOptions.Proxyless.Enabled)
-		autoTarget = ProxylessHedgeTag
 	}
 	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, systemDNSServers())
 	// Private system-resolver answers must be returned before AAAA suppression drops them.
@@ -529,7 +528,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
 	// Manual mode never goes proxyless: picking a location asks for that
 	// exit.
-	opts.Route.Rules = append(opts.Route.Rules, autoModeRule(autoTarget))
+	opts.Route.Rules = append(opts.Route.Rules, autoModeRules(hedged)...)
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
 	// catch-all rule to ensure no fallthrough
@@ -737,6 +736,11 @@ func personalProxiesOutbound(helpers []string) O.Outbound {
 }
 
 func selectModeRule(mode string) O.Rule {
+	return modeRule(mode, mode)
+}
+
+// modeRule routes the traffic of clash mode mode to outbound.
+func modeRule(mode, outbound string) O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeDefault,
 		DefaultOptions: O.DefaultRule{
@@ -746,7 +750,7 @@ func selectModeRule(mode string) O.Rule {
 			RuleAction: O.RuleAction{
 				Action: C.RuleActionTypeRoute,
 				RouteOptions: O.RouteActionOptions{
-					Outbound: mode,
+					Outbound: outbound,
 				},
 			},
 		},

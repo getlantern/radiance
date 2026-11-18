@@ -1,11 +1,13 @@
 package vpn
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	O "github.com/sagernet/sing-box/option"
+	N "github.com/sagernet/sing/common/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -42,15 +44,21 @@ func withProxyless(t *testing.T, udp *string) BoxOptions {
 	}
 }
 
-// modeRoute returns the outbound the clash-mode rule for mode routes to.
-func modeRoute(t *testing.T, opts O.Options, mode string) string {
+// modeRoute returns the outbound the first clash-mode rule for mode routes
+// network's traffic to.
+func modeRoute(t *testing.T, opts O.Options, mode string, network ...string) string {
 	t.Helper()
+	net := N.NetworkTCP
+	if len(network) > 0 {
+		net = network[0]
+	}
 	for _, r := range opts.Route.Rules {
-		if r.DefaultOptions.RawDefaultRule.ClashMode == mode {
+		raw := r.DefaultOptions.RawDefaultRule
+		if raw.ClashMode == mode && (len(raw.Network) == 0 || slices.Contains(raw.Network, net)) {
 			return r.DefaultOptions.RuleAction.RouteOptions.Outbound
 		}
 	}
-	t.Fatalf("no rule for clash mode %q", mode)
+	t.Fatalf("no rule for clash mode %q and network %s", mode, net)
 	return ""
 }
 
@@ -69,6 +77,8 @@ func TestBuildOptions_ProxylessHedge(t *testing.T) {
 		assert.True(t, hedgeOpts.Disabled, "the hedge starts off, and is switched once the tunnel runs")
 
 		assert.Equal(t, ProxylessHedgeTag, modeRoute(t, opts, AutoSelectTag), "auto mode goes through the hedge")
+		assert.Equal(t, ProxylessHedgeTag, modeRoute(t, opts, AutoSelectTag, N.NetworkUDP))
+		assert.Equal(t, AutoSelectTag, modeRoute(t, opts, AutoSelectTag, N.NetworkICMP), "ICMP, which the hedge can't carry, goes to auto")
 		assert.Equal(t, ManualSelectTag, modeRoute(t, opts, ManualSelectTag), "manual mode never goes proxyless")
 
 		out := findOutbound(opts.Outbounds, ProxylessTag)
