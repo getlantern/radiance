@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	O "github.com/sagernet/sing-box/option"
@@ -102,6 +103,8 @@ func TestBuildOptions_NoProxylessHedge(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, findOutbound(opts.Outbounds, ProxylessHedgeTag), "full tunnel never builds the hedge")
 		assert.Equal(t, AutoSelectTag, modeRoute(t, opts, AutoSelectTag))
+		udp := findOutbound(opts.Outbounds, ProxylessTag).Options.(*lbO.OutboundOutlineOptions).UDP
+		require.NotNil(t, udp, "the UDP default applies in every mode, matching a config update's replacement")
 	})
 	t.Run("no proxyless outbound from the server", func(t *testing.T) {
 		cfg := testConfig(t)
@@ -153,4 +156,65 @@ func TestSetProxylessEnabled(t *testing.T) {
 
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: stubGroup{}}}
 	assert.Error(t, c.SetProxylessEnabled(true), "an outbound under the hedge's tag without a switch is an error")
+}
+
+// namedOutbound is an outbound that only has a tag and a type.
+type namedOutbound struct {
+	adapter.Outbound
+	tag, typ string
+}
+
+func (o namedOutbound) Tag() string  { return o.tag }
+func (o namedOutbound) Type() string { return o.typ }
+
+// namedGroup is a group with a tag and a current member.
+type namedGroup struct {
+	adapter.OutboundGroup
+	tag, now string
+}
+
+func (g namedGroup) Tag() string  { return g.tag }
+func (g namedGroup) Type() string { return "group" }
+func (g namedGroup) Now() string  { return g.now }
+
+func TestResolveChainFollowsTheHedgeToAuto(t *testing.T) {
+	ct := newConnTracker()
+	hedge := namedOutbound{tag: ProxylessHedgeTag, typ: lbC.TypeHedge}
+	ct.outbound = stubOutboundManager{outbounds: map[string]adapter.Outbound{
+		ProxylessHedgeTag: hedge,
+		AutoSelectTag:     namedGroup{tag: AutoSelectTag, now: "srv-a"},
+		"srv-a":           namedOutbound{tag: "srv-a", typ: "socks"},
+	}}
+	outbound, _, chain := ct.resolveChain(hedge)
+	assert.Equal(t, "srv-a", outbound, "auto-mode traffic stays attributed to the selected server")
+	assert.Equal(t, []string{"srv-a", AutoSelectTag, ProxylessHedgeTag}, chain)
+}
+
+func TestSelectModeClosesFlowsMatchedToTheHedge(t *testing.T) {
+	tun := newModeTestTunnel(t)
+	ct := tun.connTracker
+	hedged := joinClosable(ct, "srv-a", time.Now(), "srv-a", AutoSelectTag, ProxylessHedgeTag)
+	manual := joinClosable(ct, "srv-b", time.Now(), "srv-b", ManualSelectTag)
+
+	require.NoError(t, tun.selectMode(AutoSelectTag))
+	assert.False(t, hedged.closed.Load())
+	require.NoError(t, tun.selectMode(ManualSelectTag))
+	assert.True(t, hedged.closed.Load(), "leaving auto mode closes the flows it routed through the hedge")
+	assert.False(t, manual.closed.Load())
+}
+
+func TestProxylessStateAppliedToANewTunnel(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	assert.False(t, c.ProxylessEnabled())
+	assert.ErrorIs(t, c.SetProxylessEnabled(true), ErrTunnelNotConnected, "set while no tunnel runs")
+	assert.True(t, c.ProxylessEnabled(), "the state is remembered")
+
+	hedge := &switchStub{}
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
+	c.mu.Lock()
+	c.setTunnelLocked(tun)
+	require.NoError(t, c.restoreProxylessLocked())
+	c.mu.Unlock()
+	assert.True(t, hedge.enabled, "a tunnel that starts gets the last requested state")
 }

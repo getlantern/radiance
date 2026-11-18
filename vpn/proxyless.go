@@ -53,9 +53,8 @@ func WithProxylessUDP(out O.Outbound) O.Outbound {
 	return out
 }
 
-// addProxylessHedge adds the hedge in front of the auto group and gives the
-// proxyless outbound its UDP default. It reports false, changing nothing,
-// when the server sent no proxyless outbound.
+// addProxylessHedge adds the hedge in front of the auto group. It reports
+// false, changing nothing, when the server sent no proxyless outbound.
 func addProxylessHedge(opts *O.Options, enabled bool) bool {
 	i := slices.IndexFunc(opts.Outbounds, func(o O.Outbound) bool {
 		return o.Tag == ProxylessTag && o.Type == lbC.TypeOutline
@@ -63,7 +62,6 @@ func addProxylessHedge(opts *O.Options, enabled bool) bool {
 	if i < 0 {
 		return false
 	}
-	opts.Outbounds[i] = WithProxylessUDP(opts.Outbounds[i])
 	opts.Outbounds = append(opts.Outbounds, O.Outbound{
 		Type: lbC.TypeHedge,
 		Tag:  ProxylessHedgeTag,
@@ -96,16 +94,40 @@ func autoModeRule(target string) O.Rule {
 }
 
 // SetProxylessEnabled switches the running tunnel's proxyless hedge on or
-// off for new connections, without restarting the tunnel. With no hedge,
-// because the tunnel isn't in smart routing or the server sent no proxyless
-// outbound, there is nothing to switch and it returns nil.
+// off for new connections, without restarting the tunnel. The state is also
+// remembered and applied to the next tunnel when it starts, so a switch made
+// while one is starting isn't lost. With no hedge, because the tunnel isn't
+// in smart routing or the server sent no proxyless outbound, there is nothing
+// to switch and it returns nil.
 func (c *VPNClient) SetProxylessEnabled(enabled bool) error {
+	c.proxyless.Store(&enabled)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
 		return ErrTunnelNotConnected
 	}
-	out := c.tunnel.liveOutbound(ProxylessHedgeTag)
+	return c.tunnel.setProxylessEnabled(enabled)
+}
+
+// ProxylessEnabled reports the proxyless state last set with
+// SetProxylessEnabled, false until it is first set.
+func (c *VPNClient) ProxylessEnabled() bool {
+	enabled := c.proxyless.Load()
+	return enabled != nil && *enabled
+}
+
+// restoreProxylessLocked applies the last requested proxyless state to a
+// tunnel that just started. Caller holds mu.
+func (c *VPNClient) restoreProxylessLocked() error {
+	enabled := c.proxyless.Load()
+	if enabled == nil || c.tunnel == nil {
+		return nil
+	}
+	return c.tunnel.setProxylessEnabled(*enabled)
+}
+
+func (t *tunnel) setProxylessEnabled(enabled bool) error {
+	out := t.liveOutbound(ProxylessHedgeTag)
 	if out == nil {
 		return nil
 	}

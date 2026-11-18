@@ -98,6 +98,9 @@ type VPNClient struct {
 	reversePortal     *samizdatreverse.PortalConfig
 	reverseMasquerade string
 	reverseTags       atomic.Pointer[[]string]
+	// proxyless is the last state SetProxylessEnabled asked for, applied to
+	// each tunnel as it starts; nil until the backend first sets it.
+	proxyless atomic.Pointer[bool]
 
 	// staleSource is the stale source restart state, shared across tunnels
 	// so a restart's rate limit and outcome outlive the tunnel it replaced.
@@ -286,6 +289,9 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 			if err := c.restoreReverseLocked(); err != nil {
 				// The error can name a reverse tag or the portal's port.
 				c.logger.Warn("Failed to restore reverse direct state on the new tunnel")
+			}
+			if err := c.restoreProxylessLocked(); err != nil {
+				c.logger.Warn("Failed to restore the proxyless state on the new tunnel", "error", err)
 			}
 			c.setStatus(Connected, nil)
 			c.logger.Debug("Tunnel started")

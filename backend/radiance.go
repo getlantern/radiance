@@ -61,8 +61,11 @@ const tracerName = "github.com/getlantern/radiance/backend"
 //
 // A nil LocalBackend is valid for reporting issues.
 type LocalBackend struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	// proxylessMu orders applyProxyless calls from config updates and
+	// settings changes.
+	proxylessMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	confHandler   *config.ConfigHandler
 	issueReporter *issue.IssueReporter
@@ -557,6 +560,11 @@ func proxylessOn(cfg *config.Config) bool {
 // flag and the setting, without a restart. A tunnel without a hedge has
 // nothing to switch.
 func (r *LocalBackend) applyProxyless(cfg *config.Config) {
+	// A config update and a settings change can both get here; holding the
+	// lock across reading the state and applying it keeps the older of the
+	// two from undoing the newer.
+	r.proxylessMu.Lock()
+	defer r.proxylessMu.Unlock()
 	if err := r.vpnClient.SetProxylessEnabled(proxylessOn(cfg)); err != nil &&
 		!errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("switching proxyless", "error", err)

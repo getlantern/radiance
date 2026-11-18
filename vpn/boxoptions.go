@@ -59,7 +59,7 @@ var (
 	personalProxiesProbeInterval = urlTestInterval
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block"}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block", ProxylessHedgeTag}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -457,6 +457,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	// The proxyless outbound gets its UDP default whether or not the hedge
+	// is built, matching how a config update replaces it, so a full-tunnel
+	// update doesn't rebuild it for nothing.
+	for i := range opts.Outbounds {
+		opts.Outbounds[i] = WithProxylessUDP(opts.Outbounds[i])
+	}
 	// After the merge, so the hedge is never among the selectable tags.
 	autoTarget := AutoSelectTag
 	if bOptions.Proxyless != nil && addProxylessHedge(&opts, bOptions.Proxyless.Enabled) {
