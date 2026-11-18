@@ -51,6 +51,8 @@ type fetcher struct {
 	baseURL      string
 	apiClient    *account.Client
 	httpClient   *http.Client
+
+	hasGlobalIPv6 func() bool
 }
 
 // newFetcher creates a new fetcher with the given http client.
@@ -64,6 +66,8 @@ func newFetcher(locale string, apiClient *account.Client, httpClient *http.Clien
 		baseURL:      common.GetBaseURL(),
 		apiClient:    apiClient,
 		httpClient:   httpClient,
+
+		hasGlobalIPv6: common.HasGlobalIPv6,
 	}
 }
 
@@ -74,6 +78,18 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	// If we don't have a user ID or token, create a new user.
 	if err := f.ensureUser(ctx); err != nil {
 		return nil, fmt.Errorf("error creating user: %w", err)
+	}
+	// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
+	// outbounds but keep them out of the proxy-selection groups) so the server can
+	// gate such outbounds on the capability rather than the client version.
+	// Advertise UnboundedTuning because our lantern-box's Unbounded outbound
+	// accepts a "tuning" option, which the server withholds from older clients.
+	// Advertise OutlineSmartDialer only with lantern-box v0.0.219 or later,
+	// whose outline outbound accepts the server's smart-dialer config and
+	// dials a rule-set download's host.
+	capabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer}
+	if f.hasGlobalIPv6() {
+		capabilities = append(capabilities, C.CapabilityIPv6)
 	}
 	confReq := C.ConfigRequest{
 		SingboxVersion: singVersion(),
@@ -86,15 +102,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 		Backend:        C.SINGBOX,
 		Locale:         f.locale,
 		Protocols:      supportedProtocols(),
-		// Advertise that we honor NonSelectableOutbounds (merge server-declared infra
-		// outbounds but keep them out of the proxy-selection groups) so the server can
-		// gate such outbounds on the capability rather than the client version.
-		// Advertise UnboundedTuning because our lantern-box's Unbounded outbound
-		// accepts a "tuning" option, which the server withholds from older clients.
-		// Advertise OutlineSmartDialer only with lantern-box v0.0.219 or later,
-		// whose outline outbound accepts the server's smart-dialer config and
-		// dials a rule-set download's host.
-		Capabilities: []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer},
+		Capabilities:   capabilities,
 	}
 	if preferred.Country != "" {
 		confReq.PreferredLocation = &preferred

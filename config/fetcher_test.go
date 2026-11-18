@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	C "github.com/getlantern/common"
@@ -28,6 +29,7 @@ func TestFetchConfig(t *testing.T) {
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
 
+	baseCapabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer}
 	tests := []struct {
 		name               string
 		preferredServerLoc *C.ServerLocation
@@ -35,23 +37,38 @@ func TestFetchConfig(t *testing.T) {
 		serverBody         string
 		expectedConfig     []byte
 		expectError        bool
+		globalIPv6         bool
+		wantCapabilities   []string
 	}{
 		{
 			name: "successful fetch",
 			preferredServerLoc: &C.ServerLocation{
 				Country: "US",
 			},
-			serverStatus:   http.StatusOK,
-			serverBody:     `{"key":"value"}`,
-			expectedConfig: []byte(`{"key":"value"}`),
+			serverStatus:     http.StatusOK,
+			serverBody:       `{"key":"value"}`,
+			expectedConfig:   []byte(`{"key":"value"}`),
+			wantCapabilities: baseCapabilities,
+		},
+		{
+			name: "global IPv6 advertises CapabilityIPv6",
+			preferredServerLoc: &C.ServerLocation{
+				Country: "US",
+			},
+			serverStatus:     http.StatusOK,
+			serverBody:       `{"key":"value"}`,
+			expectedConfig:   []byte(`{"key":"value"}`),
+			globalIPv6:       true,
+			wantCapabilities: append(slices.Clone(baseCapabilities), C.CapabilityIPv6),
 		},
 		{
 			name: "no new config available",
 			preferredServerLoc: &C.ServerLocation{
 				Country: "US",
 			},
-			serverStatus:   http.StatusNotModified,
-			expectedConfig: nil,
+			serverStatus:     http.StatusNotModified,
+			expectedConfig:   nil,
+			wantCapabilities: baseCapabilities,
 		},
 	}
 
@@ -73,6 +90,7 @@ func TestFetchConfig(t *testing.T) {
 
 			f := newFetcher("en-US", nil, srv.Client()).(*fetcher)
 			f.baseURL = srv.URL
+			f.hasGlobalIPv6 = func() bool { return tt.globalIPv6 }
 
 			gotConfig, err := f.fetchConfig(t.Context(), *tt.preferredServerLoc, privateKey.PublicKey().String())
 
@@ -97,8 +115,7 @@ func TestFetchConfig(t *testing.T) {
 			assert.Equal(t, "1234567890", confReq.UserID,
 				"UserID must serialize as a base-10 decimal string matching main's format")
 			assert.Equal(t, privateKey.PublicKey().String(), confReq.WGPublicKey)
-			assert.Contains(t, confReq.Capabilities, C.CapabilityNonSelectableOutbounds,
-				"server-side infra-outbound gating depends on this advertisement")
+			assert.Equal(t, tt.wantCapabilities, confReq.Capabilities)
 			assert.Contains(t, confReq.Capabilities, C.CapabilityUnboundedTuning,
 				"the server sends Unbounded tuning only to clients advertising this")
 			assert.Equal(t, "outline_smart_dialer", C.CapabilityOutlineSmartDialer,
