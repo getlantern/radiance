@@ -539,6 +539,28 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 		!errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Error("updating non-selectable outbounds", "error", err)
 	}
+	r.applyProxyless(cfg)
+}
+
+// proxylessFeature is the server-side flag for proxyless access. It is the
+// kill switch: off, no tunnel goes proxyless whatever the user's setting.
+const proxylessFeature = "proxyless"
+
+// proxylessOn reports whether the proxyless hedge should take new
+// connections: the server's flag is on and the user hasn't turned the
+// setting off. Smart routing is checked where the hedge is built.
+func proxylessOn(cfg *config.Config) bool {
+	return cfg != nil && cfg.Features[proxylessFeature] && settings.ProxylessEnabled()
+}
+
+// applyProxyless switches the running tunnel's proxyless hedge to match the
+// flag and the setting, without a restart. A tunnel without a hedge has
+// nothing to switch.
+func (r *LocalBackend) applyProxyless(cfg *config.Config) {
+	if err := r.vpnClient.SetProxylessEnabled(proxylessOn(cfg)); err != nil &&
+		!errors.Is(err, vpn.ErrTunnelNotConnected) {
+		slog.Error("switching proxyless", "error", err)
+	}
 }
 
 // setCountryCodeFromConfig records the API-assigned country for issue reports
@@ -618,6 +640,9 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 		if _, ok := nonSelectable[out.Tag]; !ok {
 			continue
 		}
+		// The proxyless outbound keeps the UDP default the tunnel was built
+		// with, or replacing it would turn off proxyless QUIC.
+		out = vpn.WithProxylessUDP(out)
 		srvs = append(srvs, &servers.Server{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out})
 	}
 	return servers.ServerList{Servers: srvs}
@@ -965,6 +990,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	}
 	if err := r.maybeRestartVPN(diff); err != nil {
 		errs = errors.Join(errs, err)
+	}
+	// The proxyless setting switches the running hedge; no restart.
+	if _, ok := diff[settings.ProxylessKey]; ok {
+		cfg, _ := r.confHandler.GetConfig()
+		r.applyProxyless(cfg)
 	}
 	// Drive the Unbounded widget proxy off the toggle change immediately
 	// rather than waiting for the next NewConfigEvent to re-evaluate.
@@ -1955,6 +1985,10 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
+			// Full tunnel sends everything through the proxy, so only smart
+			// routing builds the proxyless hedge; the flag and the setting
+			// switch it.
+			bOptions.Proxyless = &vpn.ProxylessOptions{Enabled: proxylessOn(cfg)}
 		}
 		if settings.GetBool(settings.AdBlockKey) {
 			bOptions.AdBlock = cfg.AdBlock

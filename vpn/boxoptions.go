@@ -75,6 +75,10 @@ type BoxOptions struct {
 	SmartRouting lcommon.SmartRoutingRules `json:"smart_routing,omitempty"`
 	// AdBlock contains ad block rules to merge into the final options.
 	AdBlock lcommon.AdBlockRules `json:"ad_block,omitempty"`
+	// Proxyless, when set, routes auto mode through a hedge that tries the
+	// server's proxyless outbound before the auto group. Only smart routing
+	// sets it: full tunnel sends everything through the proxy.
+	Proxyless *ProxylessOptions `json:"proxyless,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
 	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box
 	// config so references resolve, but excluded from the selectable proxy groups.
@@ -453,6 +457,12 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	tags := mergeAndCollectTags(&opts, &bOptions.Options, bOptions.NonSelectableOutbounds)
+	// After the merge, so the hedge is never among the selectable tags.
+	autoTarget := AutoSelectTag
+	if bOptions.Proxyless != nil && addProxylessHedge(&opts, bOptions.Proxyless.Enabled) {
+		slog.Info("Adding proxyless hedge", "enabled", bOptions.Proxyless.Enabled)
+		autoTarget = ProxylessHedgeTag
+	}
 	opts.DNS.Servers = appendMissingDNSServers(opts.DNS.Servers, systemDNSServers())
 	// Private system-resolver answers must be returned before AAAA suppression drops them.
 	opts.DNS.Rules = slices.Concat(splitTunnelDNSRules(), localNameDNSRules(), opts.DNS.Rules)
@@ -511,7 +521,9 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 		opts.Outbounds = append(opts.Outbounds, personalProxyOutbound(friendMembers))
 	}
 	opts.Outbounds = append(opts.Outbounds, selectorOutbound(ManualSelectTag, selectable))
-	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(AutoSelectTag))
+	// Manual mode never goes proxyless: picking a location asks for that
+	// exit.
+	opts.Route.Rules = append(opts.Route.Rules, autoModeRule(autoTarget))
 	opts.Route.Rules = append(opts.Route.Rules, selectModeRule(ManualSelectTag))
 
 	// catch-all rule to ensure no fallthrough

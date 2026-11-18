@@ -61,6 +61,9 @@ var deniedFields = map[reflect.Type][]string{
 	// Routes the callback through the host's HTTPS_PROXY, which can carry
 	// credentials; a server must not make a client use them.
 	reflect.TypeFor[lbO.BanditProbeOutboundOptions](): {"use_proxy_environment"},
+	// Writes the smart dialer's strategy cache to this path, creating its
+	// directory; a server must not choose where the client writes.
+	reflect.TypeFor[lbO.OutboundOutlineOptions](): {"strategy_cache_path"},
 }
 
 // TypeAllowed reports whether options of the given outbound or endpoint type
