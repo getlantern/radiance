@@ -15,6 +15,7 @@ import (
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 
+	"github.com/getlantern/common"
 	"github.com/getlantern/radiance/common/settings"
 	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/internal"
@@ -180,4 +181,22 @@ func TestProxylessSwitchesWhenTheSaveFails(t *testing.T) {
 	require.Error(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: false}), "the save fails")
 	require.False(t, settings.ProxylessEnabled(), "the live value changed anyway")
 	assert.False(t, r.vpnClient.ProxylessEnabled(), "so proxyless follows it")
+}
+
+// The server's measurement settings for this client are passed to the hedge.
+func TestProxylessOptionsFromConfig(t *testing.T) {
+	settings.Reset()
+	t.Cleanup(settings.Reset)
+	require.NoError(t, settings.InitSettings(t.TempDir()))
+	cfg := &config.Config{
+		Features:  map[string]bool{proxylessFeature: true},
+		Proxyless: &common.ProxylessConfig{ExploreRate: 0.05, TelemetrySites: []string{"youtube.com"}},
+	}
+	p := proxylessOptions(cfg)
+	assert.Equal(t, 0.05, p.ExploreRate)
+	assert.Equal(t, []string{"youtube.com"}, p.TelemetrySites)
+
+	p = proxylessOptions(&config.Config{})
+	assert.Zero(t, p.ExploreRate, "no settings from the server leave the hedge's defaults")
+	assert.Empty(t, p.TelemetrySites)
 }

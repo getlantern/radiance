@@ -1,6 +1,8 @@
 package vpn
 
 import (
+	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -331,4 +333,40 @@ func TestSetProxylessEnabledLatestWins(t *testing.T) {
 	close(hedge.release)
 	require.NoError(t, <-off)
 	require.False(t, hedge.enabled.Load(), "the older switch on landed after the switch off")
+}
+
+// The server's measurement settings reach the hedge.
+func TestBuildOptions_ProxylessHedgeMeasurementSettings(t *testing.T) {
+	bOptions := withProxyless(t, nil)
+	bOptions.Proxyless = &ProxylessOptions{Enabled: true, ExploreRate: 0.05, TelemetrySites: []string{"youtube.com", "", "instagram.com"}}
+	opts, _, err := buildOptions(bOptions)
+	require.NoError(t, err)
+	hedge := findOutbound(opts.Outbounds, ProxylessHedgeTag).Options.(*lbO.HedgeOutboundOptions)
+	assert.Equal(t, 0.05, hedge.ExploreRate)
+	assert.Equal(t, []string{"youtube.com", "instagram.com"}, hedge.TelemetrySites, "empty names are dropped")
+}
+
+// An explore rate the hedge would refuse, which would stop the tunnel
+// starting, is dropped instead, and the site list is bounded.
+func TestProxylessOptionsSanitizeServerValues(t *testing.T) {
+	for _, rate := range []float64{-0.1, 1.5, math.NaN(), math.Inf(1)} {
+		p := &ProxylessOptions{ExploreRate: rate}
+		got, _ := p.hedgeTelemetryOptions()
+		assert.Zero(t, got, "rate %v", rate)
+	}
+	p := &ProxylessOptions{ExploreRate: 1}
+	got, _ := p.hedgeTelemetryOptions()
+	assert.Equal(t, 1.0, got, "1 is in range")
+
+	many := make([]string, proxylessMaxTelemetrySites+10)
+	for i := range many {
+		many[i] = fmt.Sprintf("site%d.example", i)
+	}
+	_, sites := (&ProxylessOptions{TelemetrySites: many}).hedgeTelemetryOptions()
+	assert.Len(t, sites, proxylessMaxTelemetrySites)
+
+	bOptions := withProxyless(t, nil)
+	bOptions.Proxyless = &ProxylessOptions{Enabled: true, ExploreRate: math.NaN()}
+	_, _, err := buildOptions(bOptions)
+	require.NoError(t, err, "a bad rate from the server doesn't stop the tunnel building")
 }

@@ -384,7 +384,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 		opts.Outbounds[i] = WithProxylessUDP(opts.Outbounds[i])
 	}
 	// After the merge, so the hedge is never among the selectable tags.
-	hedged := bOptions.Proxyless != nil && addProxylessHedge(&opts)
+	hedged := bOptions.Proxyless != nil && addProxylessHedge(&opts, bOptions.Proxyless)
 	if hedged {
 		slog.Info("Adding proxyless hedge", "enabled", bOptions.Proxyless.Enabled)
 	}
