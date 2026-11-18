@@ -55,6 +55,7 @@ func TestGetBoxOptionsProxyless(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := cachedConfig()
 	cfg.Features = map[string]bool{proxylessFeature: true}
+	cfg.Proxyless = &common.ProxylessConfig{ExploreRate: 0.05, TelemetrySites: []string{"youtube.com"}}
 	buf, err := singjson.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, internal.ConfigFileName), buf, 0o600))
@@ -77,6 +78,8 @@ func TestGetBoxOptionsProxyless(t *testing.T) {
 	require.NoError(t, settings.Set(settings.SmartRoutingKey, true))
 	p := r.getBoxOptions().Proxyless
 	require.NotNil(t, p, "smart routing builds the proxyless hedge")
+	assert.Equal(t, 0.05, p.ExploreRate, "with the server's measurement settings")
+	assert.Equal(t, []string{"youtube.com"}, p.TelemetrySites)
 	assert.True(t, p.Enabled)
 
 	require.NoError(t, settings.Set(settings.ProxylessKey, false))

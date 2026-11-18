@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/getlantern/common"
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
@@ -50,12 +51,14 @@ type ProxylessOptions struct {
 
 // proxylessMaxTelemetrySites bounds the sites a server can have named, which
 // bounds the telemetry's cardinality.
-const proxylessMaxTelemetrySites = 64
+const proxylessMaxTelemetrySites = common.MaxProxylessTelemetrySites
 
 // hedgeTelemetryOptions returns p's measurement settings in the range the
 // hedge accepts. The hedge refuses to build with an explore_rate outside
-// [0, 1], which would stop the tunnel starting, so a value from the server
-// that isn't in it is dropped rather than passed on.
+// [0, 1], which would stop the tunnel starting, so a value that isn't in it
+// is dropped rather than passed on. The backend already sends the server's
+// values through common.ProxylessConfig.Sanitize; this is a deliberate
+// second guard, since the tunnel not starting is the cost of a miss.
 func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites []string) {
 	if p.ExploreRate > 0 && p.ExploreRate <= 1 {
 		exploreRate = p.ExploreRate
