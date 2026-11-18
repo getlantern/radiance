@@ -51,6 +51,8 @@ type fetcher struct {
 	baseURL      string
 	apiClient    *account.Client
 	httpClient   *http.Client
+
+	hasGlobalIPv6 func() bool
 }
 
 // newFetcher creates a new fetcher with the given http client.
@@ -64,6 +66,8 @@ func newFetcher(locale string, apiClient *account.Client, httpClient *http.Clien
 		baseURL:      common.GetBaseURL(),
 		apiClient:    apiClient,
 		httpClient:   httpClient,
+
+		hasGlobalIPv6: common.HasGlobalIPv6,
 	}
 }
 
@@ -84,12 +88,7 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	// whose outline outbound accepts the server's smart-dialer config and
 	// dials a rule-set download's host.
 	capabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer}
-	// CapabilityIPv6 tells the server this device has a real route to the v6
-	// internet, not just a v6-capable OS, so it's safe to assign a proxy route
-	// whose address is IPv6-only (no v4 fallback). Reuses the same interface
-	// check vpn already trusts to decide whether the TUN itself gets a v6
-	// address, rather than a second, differently-tuned heuristic.
-	if common.HasGlobalIPv6() {
+	if f.hasGlobalIPv6() {
 		capabilities = append(capabilities, C.CapabilityIPv6)
 	}
 	confReq := C.ConfigRequest{
