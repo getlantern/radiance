@@ -551,10 +551,13 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 const proxylessFeature = "proxyless"
 
 // proxylessOn reports whether the proxyless hedge should take new
-// connections: the server's flag is on and the user hasn't turned the
-// setting off. Smart routing is checked where the hedge is built.
+// connections: smart routing is on, the server's flag is on, and the user
+// hasn't turned the setting off. Only smart routing builds the hedge, but a
+// tunnel that was connecting when smart routing went off isn't restarted, so
+// it can have one; checking smart routing here keeps that hedge off.
 func proxylessOn(cfg *config.Config) bool {
-	return cfg != nil && cfg.Features[proxylessFeature] && settings.ProxylessEnabled()
+	return cfg != nil && cfg.Features[proxylessFeature] &&
+		settings.GetBool(settings.SmartRoutingKey) && settings.ProxylessEnabled()
 }
 
 // applyProxyless switches the running tunnel's proxyless hedge to match the
@@ -953,8 +956,10 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
 	}
-	// The proxyless setting switches the running hedge, without a restart.
-	if _, ok := diff[settings.ProxylessKey]; ok {
+	// The proxyless and smart routing settings switch the running hedge,
+	// without a restart.
+	_, proxylessChanged := diff[settings.ProxylessKey]
+	if _, smartChanged := diff[settings.SmartRoutingKey]; proxylessChanged || smartChanged {
 		r.applyProxyless()
 	}
 	if peerRequested {

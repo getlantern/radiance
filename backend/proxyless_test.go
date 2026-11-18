@@ -27,6 +27,7 @@ func TestProxylessOn(t *testing.T) {
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(t.TempDir()))
+	require.NoError(t, settings.Set(settings.SmartRoutingKey, true))
 
 	flagOn := &config.Config{Features: map[string]bool{proxylessFeature: true}}
 	flagOff := &config.Config{Features: map[string]bool{}}
@@ -42,6 +43,9 @@ func TestProxylessOn(t *testing.T) {
 
 	require.NoError(t, settings.Set(settings.ProxylessKey, true))
 	assert.True(t, proxylessOn(flagOn))
+
+	require.NoError(t, settings.Set(settings.SmartRoutingKey, false))
+	assert.False(t, proxylessOn(flagOn), "full tunnel keeps a hedge built while connecting switched off")
 }
 
 // TestGetBoxOptionsProxyless checks that only smart routing builds the
@@ -102,6 +106,7 @@ func proxylessBackend(t *testing.T, dataDir string, cfg *config.Config) *LocalBa
 	settings.Reset()
 	t.Cleanup(settings.Reset)
 	require.NoError(t, settings.InitSettings(dataDir))
+	require.NoError(t, settings.Set(settings.SmartRoutingKey, true))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srvMgr, err := servers.NewManager(dataDir, log.NoOpLogger())
@@ -130,6 +135,11 @@ func TestProxylessFollowsConfigAndSettings(t *testing.T) {
 	assert.False(t, r.vpnClient.ProxylessEnabled(), "turning the setting off switches proxyless off")
 
 	require.NoError(t, r.PatchSettings(settings.Settings{settings.ProxylessKey: true}))
+	assert.True(t, r.vpnClient.ProxylessEnabled())
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.SmartRoutingKey: false}))
+	assert.False(t, r.vpnClient.ProxylessEnabled(), "turning smart routing off switches proxyless off, even with no restart")
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.SmartRoutingKey: true}))
 	assert.True(t, r.vpnClient.ProxylessEnabled())
 
 	live.Features = map[string]bool{}
