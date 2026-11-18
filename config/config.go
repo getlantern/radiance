@@ -464,15 +464,22 @@ func (ch *ConfigHandler) setConfig(cfg *Config) error {
 	oldConfig, _ := ch.GetConfig()
 	ch.config.Store(cfg)
 	ch.logger.Debug("Saving config", "path", ch.configPath)
-	if err := saveConfig(cfg, ch.configPath); err != nil {
-		ch.logger.Error("saving config", "error", err)
-		return fmt.Errorf("saving config: %w", err)
+	saveErr := saveConfig(cfg, ch.configPath)
+	if saveErr != nil {
+		ch.logger.Error("saving config", "error", saveErr)
+	} else {
+		ch.logger.Info("saved new config")
 	}
-	ch.logger.Info("saved new config")
-	ch.logger.Info("Config set")
+	// The config is live once stored, so subscribers hear of it even when
+	// saving fails. A retry of the same config would emit nothing, since it
+	// equals the stored one.
 	if !ch.isClosed() {
 		emit(oldConfig, cfg)
 	}
+	if saveErr != nil {
+		return fmt.Errorf("saving config: %w", saveErr)
+	}
+	ch.logger.Info("Config set")
 	return nil
 }
 

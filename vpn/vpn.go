@@ -290,7 +290,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 				// The error can name a reverse tag or the portal's port.
 				c.logger.Warn("Failed to restore reverse direct state on the new tunnel")
 			}
-			if err := c.restoreProxylessLocked(); err != nil {
+			if err := c.restoreProxylessLocked(boxOptions.Proxyless); err != nil {
 				c.logger.Warn("Failed to restore the proxyless state on the new tunnel", "error", err)
 			}
 			c.setStatus(Connected, nil)

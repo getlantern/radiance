@@ -66,7 +66,7 @@ func TestBuildOptions_ProxylessHedge(t *testing.T) {
 		hedgeOpts := hedge.Options.(*lbO.HedgeOutboundOptions)
 		assert.Equal(t, ProxylessTag, hedgeOpts.First)
 		assert.Equal(t, AutoSelectTag, hedgeOpts.Then)
-		assert.Equal(t, !enabled, hedgeOpts.Disabled, "the hedge starts switched as the flag and setting say")
+		assert.True(t, hedgeOpts.Disabled, "the hedge starts off, and is switched once the tunnel runs")
 
 		assert.Equal(t, ProxylessHedgeTag, modeRoute(t, opts, AutoSelectTag), "auto mode goes through the hedge")
 		assert.Equal(t, ManualSelectTag, modeRoute(t, opts, ManualSelectTag), "manual mode never goes proxyless")
@@ -214,7 +214,36 @@ func TestProxylessStateAppliedToANewTunnel(t *testing.T) {
 	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
 	c.mu.Lock()
 	c.setTunnelLocked(tun)
-	require.NoError(t, c.restoreProxylessLocked())
+	require.NoError(t, c.restoreProxylessLocked(&ProxylessOptions{Enabled: false}))
 	c.mu.Unlock()
-	assert.True(t, hedge.enabled, "a tunnel that starts gets the last requested state")
+	assert.True(t, hedge.enabled, "a tunnel that starts gets the last requested state, not its build options'")
+}
+
+func TestProxylessBuildStateAppliedWhenNoneRequested(t *testing.T) {
+	c := NewVPNClient(t.TempDir(), rlog.NoOpLogger(), nil)
+	hedge := &switchStub{}
+	tun := newModeTestTunnel(t)
+	tun.outboundMgr = stubOutboundManager{outbounds: map[string]adapter.Outbound{ProxylessHedgeTag: hedge}}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.setTunnelLocked(tun)
+	require.NoError(t, c.restoreProxylessLocked(&ProxylessOptions{Enabled: true}))
+	assert.True(t, hedge.enabled, "with no requested state, the build options' state applies")
+	require.NoError(t, c.restoreProxylessLocked(nil))
+}
+
+func TestBuildOptions_NoHedgeWhenItsTagIsTaken(t *testing.T) {
+	bOptions := withProxyless(t, nil)
+	bOptions.Options.Outbounds = append(bOptions.Options.Outbounds, O.Outbound{Type: "direct", Tag: ProxylessHedgeTag, Options: &O.DirectOutboundOptions{}})
+	bOptions.Proxyless = &ProxylessOptions{Enabled: true}
+	opts, _, err := buildOptions(bOptions)
+	require.NoError(t, err)
+	n := 0
+	for _, o := range opts.Outbounds {
+		if o.Tag == ProxylessHedgeTag {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "a saved outbound with the hedge's tag isn't duplicated")
+	assert.Equal(t, AutoSelectTag, modeRoute(t, opts, AutoSelectTag), "and auto mode doesn't route to it")
 }

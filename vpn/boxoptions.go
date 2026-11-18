@@ -465,7 +465,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 	// After the merge, so the hedge is never among the selectable tags.
 	autoTarget := AutoSelectTag
-	if bOptions.Proxyless != nil && addProxylessHedge(&opts, bOptions.Proxyless.Enabled) {
+	if bOptions.Proxyless != nil && addProxylessHedge(&opts) {
 		slog.Info("Adding proxyless hedge", "enabled", bOptions.Proxyless.Enabled)
 		autoTarget = ProxylessHedgeTag
 	}

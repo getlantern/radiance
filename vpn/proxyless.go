@@ -27,9 +27,10 @@ const (
 )
 
 // ProxylessOptions builds the proxyless hedge into the tunnel. The hedge is
-// built only when the server sent its proxyless outbound; Enabled is its
-// initial switch, which [VPNClient.SetProxylessEnabled] flips while the tunnel
-// runs.
+// built only when the server sent its proxyless outbound. It starts switched
+// off and is switched on, after the tunnel starts, to the state last given to
+// [VPNClient.SetProxylessEnabled], or to Enabled when none was. A switch made
+// while the tunnel starts therefore can't be overtaken by a stale Enabled.
 type ProxylessOptions struct {
 	Enabled bool `json:"enabled"`
 }
@@ -53,13 +54,20 @@ func WithProxylessUDP(out O.Outbound) O.Outbound {
 	return out
 }
 
-// addProxylessHedge adds the hedge in front of the auto group. It reports
-// false, changing nothing, when the server sent no proxyless outbound.
-func addProxylessHedge(opts *O.Options, enabled bool) bool {
+// addProxylessHedge adds the hedge, switched off, in front of the auto group.
+// It reports false, changing nothing, when the server sent no proxyless
+// outbound, or when an outbound or endpoint already has the hedge's tag (a
+// user server saved before the tag was reserved), which would otherwise stop
+// the tunnel from starting.
+func addProxylessHedge(opts *O.Options) bool {
 	i := slices.IndexFunc(opts.Outbounds, func(o O.Outbound) bool {
 		return o.Tag == ProxylessTag && o.Type == lbC.TypeOutline
 	})
 	if i < 0 {
+		return false
+	}
+	if slices.ContainsFunc(opts.Outbounds, func(o O.Outbound) bool { return o.Tag == ProxylessHedgeTag }) ||
+		slices.ContainsFunc(opts.Endpoints, func(e O.Endpoint) bool { return e.Tag == ProxylessHedgeTag }) {
 		return false
 	}
 	opts.Outbounds = append(opts.Outbounds, O.Outbound{
@@ -68,7 +76,7 @@ func addProxylessHedge(opts *O.Options, enabled bool) bool {
 		Options: &lbO.HedgeOutboundOptions{
 			First:    ProxylessTag,
 			Then:     AutoSelectTag,
-			Disabled: !enabled,
+			Disabled: true,
 		},
 	})
 	return true
@@ -116,14 +124,20 @@ func (c *VPNClient) ProxylessEnabled() bool {
 	return enabled != nil && *enabled
 }
 
-// restoreProxylessLocked applies the last requested proxyless state to a
-// tunnel that just started. Caller holds mu.
-func (c *VPNClient) restoreProxylessLocked() error {
-	enabled := c.proxyless.Load()
-	if enabled == nil || c.tunnel == nil {
+// restoreProxylessLocked switches on a tunnel's hedge, which starts off, to
+// the last requested state, or to opts' when none was requested. Caller holds
+// mu.
+func (c *VPNClient) restoreProxylessLocked(opts *ProxylessOptions) error {
+	if c.tunnel == nil {
 		return nil
 	}
-	return c.tunnel.setProxylessEnabled(*enabled)
+	if enabled := c.proxyless.Load(); enabled != nil {
+		return c.tunnel.setProxylessEnabled(*enabled)
+	}
+	if opts == nil {
+		return nil
+	}
+	return c.tunnel.setProxylessEnabled(opts.Enabled)
 }
 
 func (t *tunnel) setProxylessEnabled(enabled bool) error {
