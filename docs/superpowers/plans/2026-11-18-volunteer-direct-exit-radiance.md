@@ -106,7 +106,7 @@ go mod tidy
 diff <(git -C ../lantern-box show v0.0.239:go.mod | grep -A1 '=>' | grep -v '^--') <(grep -A1 '=>' go.mod | grep -v '^--')
 ```
 
-Every `replace` that lantern-box v0.0.239 has must appear in radiance with the same target version. radiance may have extra replaces of its own. Fix any mismatch by editing radiance's `replace` lines, then run `go mod tidy` again.
+Every `replace` that lantern-box v0.0.239 has must appear in radiance with the same target version, except lantern-box's `github.com/quic-go/quic-go` replace (its quic-go fork), which radiance leaves out on purpose (ruling 4). radiance may have extra replaces of its own. Fix any mismatch by editing radiance's `replace` lines, then run `go mod tidy` again.
 
 Also check that the bump resolves broflake to 4875108 or later, not to an earlier version lantern-box requires:
 
@@ -1185,7 +1185,7 @@ Pass:
 
 Ask the user to turn `direct_exit` off for the volunteer.
 
-Pass: after two config fetches, new sessions from the user take the relayed path, and the volunteer's exit log shows no further registrations.
+Pass: once `directExitOffDelay` (15 minutes) has passed since the first config without the flag, with no further config event needed, new sessions from the user take the relayed path, and the volunteer's exit log shows no further registrations.
 
 - [ ] **Step 5: iOS**
 
