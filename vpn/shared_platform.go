@@ -72,6 +72,10 @@ func (s *sharedPlatform) StartDefaultInterfaceMonitor(listener libbox.InterfaceU
 	entry := &monitorListener{l: listener}
 	s.opMu.Lock()
 	s.mu.Lock()
+	if !s.started {
+		// An update can land after the last close. A fresh monitor waits for the platform's.
+		s.last = nil
+	}
 	s.listeners = append(s.listeners, entry)
 	seq, last := s.seq, s.last
 	s.mu.Unlock()
@@ -129,6 +133,11 @@ type platformFanOut struct{ s *sharedPlatform }
 func (f platformFanOut) UpdateDefaultInterface(name string, index int32, isExpensive, isConstrained bool) {
 	u := interfaceUpdate{name: name, index: index, isExpensive: isExpensive, isConstrained: isConstrained}
 	f.s.mu.Lock()
+	if len(f.s.listeners) == 0 {
+		// The monitor closed after the platform sent this.
+		f.s.mu.Unlock()
+		return
+	}
 	f.s.seq++
 	seq := f.s.seq
 	f.s.last = &u

@@ -791,3 +791,20 @@ func TestVPNStatusRechecksTheDirectExit(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	assert.Equal(t, int32(2), rechecks.Load(), "only the Android backend listens")
 }
+
+// TestDirectExitPlatformOnlyOnAndroid checks that only Android hands the widget's direct exit a
+// platform interface. Elsewhere, macOS's network extension included, the exit boxes keep
+// sing-box's own interface monitor.
+func TestDirectExitPlatformOnlyOnAndroid(t *testing.T) {
+	prev := directExitNeedsVPN
+	t.Cleanup(func() { directExitNeedsVPN = prev })
+	vc := vpn.NewVPNClient(t.TempDir(), nil, fakeVPNPlatform{})
+
+	directExitNeedsVPN = func() bool { return false }
+	assert.Nil(t, directExitPlatform(vc), "a platform interface outside Android stays the VPN's")
+
+	directExitNeedsVPN = func() bool { return true }
+	assert.NotNil(t, directExitPlatform(vc))
+	assert.Same(t, vc.BoxPlatform(), directExitPlatform(vc), "Android's exit shares the VPN's monitor")
+	assert.Nil(t, directExitPlatform(vpn.NewVPNClient(t.TempDir(), nil, nil)))
+}

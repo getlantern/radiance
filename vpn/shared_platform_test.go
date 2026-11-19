@@ -133,6 +133,25 @@ func TestSharedPlatformFansOut(t *testing.T) {
 	assert.Equal(t, 2, starts)
 }
 
+func TestSharedPlatformDropsUpdatesAfterTheLastClose(t *testing.T) {
+	under := &monitorPlatform{}
+	s := newSharedPlatform(under)
+	a := &recordingListener{}
+	require.NoError(t, s.StartDefaultInterfaceMonitor(a))
+	fanOut := under.listener
+	require.NoError(t, s.CloseDefaultInterfaceMonitor(a))
+	// An update the platform sent as the monitor closed.
+	fanOut.UpdateDefaultInterface("stale0", 9, false, false)
+
+	b, c := &recordingListener{}, &recordingListener{}
+	require.NoError(t, s.StartDefaultInterfaceMonitor(b))
+	require.NoError(t, s.StartDefaultInterfaceMonitor(c))
+	assert.Empty(t, b.got())
+	assert.Empty(t, c.got(), "no listener gets an interface from before the monitor restarted")
+	under.update("wlan0", 1)
+	assert.Equal(t, []string{"wlan0"}, c.got())
+}
+
 func TestSharedPlatformStartError(t *testing.T) {
 	under := &monitorPlatform{startErr: errors.New("netlink banned")}
 	s := newSharedPlatform(under)

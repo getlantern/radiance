@@ -473,7 +473,7 @@ func (r *LocalBackend) Start() {
 	if r.vpnClient != nil {
 		unbounded.SetVPNStatus(func() string { return string(r.vpnClient.Status()) })
 		unbounded.SetBoxContext(r.vpnClient.BoxContext)
-		unbounded.SetPlatformInterface(r.vpnClient.BoxPlatform())
+		unbounded.SetPlatformInterface(directExitPlatform(r.vpnClient))
 	}
 	unbounded.SetDirectExitAllowed(r.directExitAllowed)
 	unbounded.InitSubscription(cachedCfg)
@@ -620,6 +620,17 @@ var recheckDirectExit = unbounded.RecheckDirectExit
 // interface, whose default interface monitor and socket protection work only
 // then. Tests replace it.
 var directExitNeedsVPN = common.IsAndroid
+
+// directExitPlatform is the platform interface the widget's direct exit boxes
+// run on: the VPN's, shared, only where directExitNeedsVPN (Android). Elsewhere
+// it is nil, and the exit boxes keep sing-box's own interface monitor, even on
+// macOS, whose network extension has a platform interface too.
+func directExitPlatform(vc *vpn.VPNClient) libbox.PlatformInterface {
+	if !directExitNeedsVPN() {
+		return nil
+	}
+	return vc.BoxPlatform()
+}
 
 // directExitAllowed reports whether the widget may exit users' traffic itself:
 // from a country that is known and not censored, as for the pairings-only

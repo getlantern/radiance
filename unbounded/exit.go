@@ -112,11 +112,11 @@ func exitHeaders(h http.Header) {
 	}
 }
 
-// SetPlatformInterface sets the platform interface the exit's boxes run on, as the VPN tunnel's
-// does: on Android, the VPN service's, whose default interface monitor sing-box needs with
+// SetPlatformInterface sets the platform interface the exit's boxes run on. Only Android sets
+// one: the VPN service's, whose default interface monitor sing-box needs with
 // auto_detect_interface (netlink is banned there) and whose socket protection keeps exit traffic
 // out of the tunnel. Its monitor must be one several boxes can share (vpn.VPNClient.BoxPlatform).
-// nil, as on desktop, leaves sing-box's own monitor. It applies from the next exit run.
+// nil, everywhere else, leaves sing-box's own monitor. It applies from the next exit run.
 func SetPlatformInterface(p libbox.PlatformInterface) {
 	manager.mu.Lock()
 	manager.exitPlatform = p
@@ -264,12 +264,13 @@ type exitPlatformKey struct{}
 
 // exitContext is RunExit's context: lantern-box's protocols behind radiance's host access
 // checks and, with a platform interface, the platform's local DNS, as for the VPN tunnel, and
-// the platform itself, for newExitBox.
+// the platform itself, for newExitBox. That one starts from an empty context, as the tunnel's
+// does: box.BaseContext already has a DNS transport registry, which would keep the platform's.
 func exitContext(platform libbox.PlatformInterface) context.Context {
 	if platform == nil {
 		return hostaccess.Context(box.BaseContext())
 	}
-	ctx := hostaccess.ContextWithDNSTransport(box.BaseContext(), platform)
+	ctx := hostaccess.ContextWithDNSTransport(context.Background(), platform)
 	return context.WithValue(ctx, exitPlatformKey{}, platform)
 }
 
