@@ -96,6 +96,26 @@ func TestRootHandlerUploads(t *testing.T) {
 	assert.Contains(t, local.String(), "uploaded")
 }
 
+type derefError struct{ msg string }
+
+func (e *derefError) Error() string { return e.msg }
+
+func TestUploadSurvivesNilPointerError(t *testing.T) {
+	t.Cleanup(func() { SetUploadHandler(nil) })
+	logger := slog.New(newRootHandler(&bytes.Buffer{}, slog.LevelInfo))
+	sink := newRecordingHandler()
+	SetUploadHandler(sink)
+
+	var nilErr *derefError
+	require.NotPanics(t, func() { logger.Info("failed", "error", nilErr) })
+	logger.Info("failed", "error", &derefError{msg: "dial https://example.com/?key=abc"})
+
+	got := sink.got()
+	require.Len(t, got, 2)
+	assert.Equal(t, "<nil>", recordAttrs(got[0])["error"].String())
+	assert.Equal(t, "dial https://example.com/", recordAttrs(got[1])["error"].String())
+}
+
 func TestTeeRespectsLocalLevel(t *testing.T) {
 	t.Cleanup(func() { SetUploadHandler(nil) })
 	logger := slog.New(newTeeHandler(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelWarn})))

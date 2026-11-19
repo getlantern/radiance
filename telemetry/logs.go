@@ -20,7 +20,9 @@ import (
 )
 
 // logShutdownTimeout bounds the final flush when log upload stops, which can
-// run on the settings IPC path.
+// run on the settings IPC path. Shutdown does not take a caller's context: the
+// SDK skips closing the batch worker and exporter when shutdown starts on a
+// done context, and nothing would close them afterwards.
 const logShutdownTimeout = 5 * time.Second
 
 // Guarded by initMutex.
@@ -61,7 +63,7 @@ func UpdateLogUpload() error {
 
 func applyLogUploadLocked() error {
 	if logTarget == nil || !settings.GetBool(settings.SendLogsToSigNozKey) {
-		return stopLogUploadLocked(context.Background())
+		return stopLogUploadLocked()
 	}
 	if logProvider != nil {
 		return nil
@@ -93,14 +95,12 @@ func newUploadHandler(p *sdklog.LoggerProvider) slog.Handler {
 	return otelslog.NewHandler("radiance", otelslog.WithLoggerProvider(p), otelslog.WithSource(true))
 }
 
-// stopLogUploadLocked flushes queued records until ctx is done or
-// logShutdownTimeout passes, whichever comes first.
-func stopLogUploadLocked(ctx context.Context) error {
+func stopLogUploadLocked() error {
 	if logProvider == nil {
 		return nil
 	}
 	rlog.SetUploadHandler(nil)
-	ctx, cancel := context.WithTimeout(ctx, logShutdownTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), logShutdownTimeout)
 	defer cancel()
 	err := logProvider.Shutdown(ctx)
 	logProvider = nil

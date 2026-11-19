@@ -113,7 +113,17 @@ func upload(ctx context.Context, sink slog.Handler, ops []handlerOp, r slog.Reco
 func redactUploadAttr(groups []string, a slog.Attr) slog.Attr {
 	a.Value = a.Value.Resolve()
 	if a.Value.Kind() != slog.KindGroup {
-		return redactAttr(groups, a)
+		a = redactAttr(groups, a)
+		// The text handler recovers from an Error method that panics, as on
+		// a nil pointer; the upload handler does not.
+		if err, ok := a.Value.Any().(error); ok {
+			s, ok := errorString(err)
+			if !ok {
+				s = "<nil>"
+			}
+			a.Value = slog.StringValue(redactString(s))
+		}
+		return a
 	}
 	if logsafe.IsSecretKey(a.Key) || slices.ContainsFunc(groups, logsafe.IsSecretKey) {
 		return slog.String(a.Key, logsafe.Redacted)

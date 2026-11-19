@@ -54,6 +54,7 @@ func (e *memoryLogExporter) exportedText() []string {
 			}
 		case attribute.MAP:
 			for _, kv := range v.AsMap() {
+				out = append(out, string(kv.Key))
 				walk(kv.Value)
 			}
 		}
@@ -61,6 +62,7 @@ func (e *memoryLogExporter) exportedText() []string {
 	for _, r := range e.records {
 		walk(r.Body())
 		r.WalkAttributes(func(kv attribute.KeyValue) bool {
+			out = append(out, string(kv.Key))
 			walk(kv.Value)
 			return true
 		})
@@ -85,12 +87,14 @@ func TestUploadedLogsRedactAddresses(t *testing.T) {
 		"ipv4", v4, "ipv6", v6, "hostport", v4Port, "ipv6port", v6Port,
 		"many", []string{v4, v6Port},
 		slog.Group("nested", "addr", v4Port),
+		"by_peer", map[string]int{v4Port: 1, "helper-0123456789ab": 2},
+		v6Port, true,
 	)
 
 	text := exp.exportedText()
 	require.NotEmpty(t, text)
 	joined := strings.Join(text, "\n")
-	for _, addr := range []string{"203.0.113.7", "2001:db8::7", "198.51.100.9", "2001:db8::9"} {
+	for _, addr := range []string{"203.0.113.7", "2001:db8::7", "198.51.100.9", "2001:db8::9", "helper-0123456789ab"} {
 		assert.NotContains(t, joined, addr)
 	}
 	assert.Contains(t, joined, "dial [REDACTED] and [REDACTED] via [REDACTED] and [REDACTED] failed")
@@ -124,7 +128,9 @@ func TestUpdateLogUploadFollowsSetting(t *testing.T) {
 	require.NoError(t, settings.Set(settings.SendLogsToSigNozKey, true))
 	require.NoError(t, UpdateLogUpload())
 	assert.NotNil(t, logProvider)
-	require.NoError(t, CloseContext(context.Background()))
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, CloseContext(canceled))
 	assert.Nil(t, logProvider)
 	assert.Nil(t, logTarget)
 }

@@ -231,7 +231,7 @@ func (e redactingLogExporter) Export(ctx context.Context, records []sdklog.Recor
 		r.SetBody(redactLogValue(r.Body()))
 		attrs := make([]attribute.KeyValue, 0, r.AttributesLen())
 		r.WalkAttributes(func(kv attribute.KeyValue) bool {
-			attrs = append(attrs, attribute.KeyValue{Key: kv.Key, Value: redactLogValue(kv.Value)})
+			attrs = append(attrs, redactLogKeyValue(kv))
 			return true
 		})
 		r.SetAttributes(attrs...)
@@ -259,9 +259,13 @@ func redactLogValue(v attribute.Value) attribute.Value {
 	case attribute.MAP:
 		kvs := v.AsMap()
 		for i, kv := range kvs {
-			kvs[i].Value = redactLogValue(kv.Value)
+			kvs[i] = redactLogKeyValue(kv)
 		}
 		return attribute.MapValue(kvs...)
 	}
 	return v
+}
+
+func redactLogKeyValue(kv attribute.KeyValue) attribute.KeyValue {
+	return attribute.KeyValue{Key: attribute.Key(redactText(string(kv.Key), true)), Value: redactLogValue(kv.Value)}
 }
