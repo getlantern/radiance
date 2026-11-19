@@ -6,11 +6,21 @@ go 1.26.10
 
 replace github.com/sagernet/sing-box => github.com/getlantern/sing-box-minimal v1.14.2-lantern.3
 
+// v0.2.8 plus pooled shadowaead chunk buffers: upstream holds two ~64 KB
+// buffers per ss2022 connection for its whole life, even while idle.
+replace github.com/sagernet/sing-shadowsocks => github.com/getlantern/sing-shadowsocks v0.2.8-lantern.3
+
 // replace github.com/sagernet/wireguard-go => github.com/getlantern/wireguard-go v0.0.1-beta.7.0.20251208214020-d78e69f1eff4
 
 replace github.com/tetratelabs/wazero => github.com/getlantern/wazero v1.11.0-water.1
 
 replace github.com/refraction-networking/water => github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa
+
+// The Unbounded QUIC fork, which lantern-box and broflake also replace to. A
+// volunteer direct exit terminates consumers' QUIC sessions, so it needs the
+// same fork as the Unbounded egress. Go does not inherit replace directives
+// from dependencies.
+replace github.com/quic-go/quic-go => github.com/getlantern/quic-go-unbounded-fork v0.62.1-unbounded
 
 // replace github.com/getlantern/lantern-box => ../lantern-box
 
@@ -42,11 +52,11 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/alexflint/go-arg v1.6.1
 	github.com/getlantern/amp v0.0.0-20260606002220-a8629924577c
-	github.com/getlantern/broflake v0.0.0-20261117033427-62a624d1b849
-	github.com/getlantern/common v1.2.1-0.20261118200432-1495a50e0d7e
+	github.com/getlantern/broflake v0.0.0-20261118210841-4875108851cd
+	github.com/getlantern/common v1.2.1-0.20261119045254-055d272b7f4a
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261118170249-97dd2fc5eff5
-	github.com/getlantern/lantern-box v0.0.238
+	github.com/getlantern/lantern-box v0.0.239
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/samizdat v0.0.3-0.20261117205503-f66a0285afd9
