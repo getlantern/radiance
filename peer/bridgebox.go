@@ -24,6 +24,7 @@ import (
 
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
+	"github.com/getlantern/lantern-box/peerrules"
 
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/internal/hostaccess"
@@ -36,7 +37,7 @@ const bridgeLogName = "inbound/helper[" + lbC.TypeSamizdatBridge + "]"
 
 // NewBridgeBox builds a stopped sing-box instance, outside the VPN tunnel, for
 // a helper's bridges, from lantern-cloud's bridge config. It refuses a config
-// without direct mode's abuse rules (validateAbuseRules). Its dials bind to
+// without direct mode's abuse rules (peerrules.ValidateAbuseRules). Its dials bind to
 // the physical interface, it logs only its bridges' own records below warnings
 // (see bridgeLogFilter), and it calls count with a bridge's tag for the bytes
 // each of its connections relays.
@@ -67,7 +68,7 @@ func newBridgeBox(ctx context.Context, base slog.Handler, bridgeConfig string, c
 
 func bridgeBoxOptions(ctx context.Context, bridgeConfig string) (option.Options, error) {
 	// A bridge exits like a direct-mode peer, under the same abuse rules.
-	if err := validateAbuseRules(bridgeConfig); err != nil {
+	if err := peerrules.ValidateAbuseRules(bridgeConfig); err != nil {
 		return option.Options{}, fmt.Errorf("bridge config: %w", err)
 	}
 	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(bridgeConfig))

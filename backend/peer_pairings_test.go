@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/vpn"
 )
 
 // newPairingRouteTestBackend is newPeerTestBackend with a pairing key store
@@ -691,4 +693,124 @@ func TestPairingRoute_CountryOverrideWins(t *testing.T) {
 			assert.Equal(t, tc.starts, fake.IsActive())
 		})
 	}
+}
+
+// TestPairingRouteCountryAllowed checks the country gate the pairings-only route and the widget's direct exit share: only
+// a known, uncensored country passes, and an override decides over the saved country.
+func TestPairingRouteCountryAllowed(t *testing.T) {
+	var censored string
+	for c := range censoredCountries {
+		censored = c
+		break
+	}
+	for _, tc := range []struct {
+		name, saved, override string
+		allowed               bool
+	}{
+		{name: "no country", allowed: false},
+		{name: "censored", saved: censored, allowed: false},
+		{name: "lowercase and padded", saved: " us ", allowed: true},
+		{name: "censored override over US", saved: "US", override: censored, allowed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			t.Cleanup(settings.Reset)
+			prev := env.GetString(env.Country)
+			env.Set(env.Country.String(), tc.override)
+			t.Cleanup(func() { env.Set(env.Country.String(), prev) })
+			require.NoError(t, settings.Set(settings.CountryCodeKey, tc.saved))
+
+			assert.Equal(t, tc.allowed, pairingRouteCountryAllowed())
+		})
+	}
+}
+
+// TestCountryCodeChangedRechecksTheDirectExit checks that a country change, here through PatchSettings, re-checks the
+// widget's direct exit at once instead of waiting for the next config.
+func TestCountryCodeChangedRechecksTheDirectExit(t *testing.T) {
+	var rechecks atomic.Int32
+	prev := recheckDirectExit
+	recheckDirectExit = func() { rechecks.Add(1) }
+	t.Cleanup(func() { recheckDirectExit = prev })
+	r := newPairingRouteTestBackend(t, &fakePeerController{})
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.CountryCodeKey: "CN"}))
+	waitPeerWork(t, r)
+	assert.Equal(t, int32(1), rechecks.Load())
+
+	r.CountryCodeChanged()
+	assert.Equal(t, int32(2), rechecks.Load())
+}
+
+type fakeVPNPlatform struct{ vpn.PlatformInterface }
+
+// TestDirectExitAllowed checks the widget's direct exit gate: a known, uncensored country, and
+// where the exit follows the VPN (Android), a platform interface and a connected VPN.
+func TestDirectExitAllowed(t *testing.T) {
+	prev := directExitNeedsVPN
+	t.Cleanup(func() { directExitNeedsVPN = prev })
+	r := newPeerTestBackend(t, &fakePeerController{})
+
+	directExitNeedsVPN = func() bool { return false }
+	assert.True(t, r.directExitAllowed(), "desktop needs no VPN or platform interface")
+	r.vpnClient = vpn.NewVPNClient(t.TempDir(), nil, nil)
+	assert.True(t, r.directExitAllowed(), "desktop ignores the VPN status")
+
+	directExitNeedsVPN = func() bool { return true }
+	assert.False(t, r.directExitAllowed(), "Android with no platform interface")
+	r.vpnClient = vpn.NewVPNClient(t.TempDir(), nil, fakeVPNPlatform{})
+	assert.False(t, r.directExitAllowed(), "Android with the VPN disconnected (or, on this host, no shared platform)")
+
+	for _, status := range []vpn.VPNStatus{vpn.Disconnected, vpn.Connecting, vpn.Disconnecting, vpn.Restarting, vpn.ErrorStatus} {
+		assert.False(t, directExitVPNReady(true, status), status)
+	}
+	assert.True(t, directExitVPNReady(true, vpn.Connected))
+	assert.False(t, directExitVPNReady(false, vpn.Connected))
+
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "CN"))
+	directExitNeedsVPN = func() bool { return false }
+	assert.False(t, r.directExitAllowed(), "a censored country")
+}
+
+// TestVPNStatusRechecksTheDirectExit checks that on Android each VPN status change re-checks
+// the widget's direct exit, and that desktop doesn't listen.
+func TestVPNStatusRechecksTheDirectExit(t *testing.T) {
+	var rechecks atomic.Int32
+	prevRecheck, prevNeeds := recheckDirectExit, directExitNeedsVPN
+	recheckDirectExit = func() { rechecks.Add(1) }
+	t.Cleanup(func() { recheckDirectExit, directExitNeedsVPN = prevRecheck, prevNeeds })
+
+	directExitNeedsVPN = func() bool { return false }
+	newPeerTestBackend(t, &fakePeerController{}).startDirectExitVPNListener()
+	directExitNeedsVPN = func() bool { return true }
+	newPeerTestBackend(t, &fakePeerController{}).startDirectExitVPNListener()
+
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+	require.Eventually(t, func() bool { return rechecks.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Disconnecting})
+	require.Eventually(t, func() bool { return rechecks.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(2), rechecks.Load(), "only the Android backend listens")
+}
+
+type boxPlatformSource struct{ p libbox.PlatformInterface }
+
+func (s boxPlatformSource) BoxPlatform() libbox.PlatformInterface { return s.p }
+
+// TestDirectExitPlatformOnlyOnAndroid checks that only Android hands the widget's direct exit a
+// platform interface. Elsewhere, macOS's network extension included, the exit boxes keep
+// sing-box's own interface monitor.
+func TestDirectExitPlatformOnlyOnAndroid(t *testing.T) {
+	prev := directExitNeedsVPN
+	t.Cleanup(func() { directExitNeedsVPN = prev })
+	platform := fakeVPNPlatform{}
+	vc := boxPlatformSource{p: platform}
+
+	directExitNeedsVPN = func() bool { return false }
+	assert.Nil(t, directExitPlatform(vc), "a platform interface outside Android stays the VPN's")
+
+	directExitNeedsVPN = func() bool { return true }
+	assert.Equal(t, platform, directExitPlatform(vc), "Android's exit shares the VPN's platform")
+	assert.Nil(t, directExitPlatform(boxPlatformSource{}))
+	assert.Nil(t, directExitPlatform(vpn.NewVPNClient(t.TempDir(), nil, platform)), "the VPN shares its platform only on Android")
 }

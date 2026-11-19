@@ -23,7 +23,7 @@ import (
 	"github.com/getlantern/radiance/log"
 )
 
-// testBridgeConfig passes validateAbuseRules with inline rule sets, so a box
+// testBridgeConfig passes peerrules.ValidateAbuseRules with inline rule sets, so a box
 // built from it starts without downloading any.
 const testBridgeConfig = `{
 	"inbounds": [{"type": "mixed", "tag": "stray", "listen": "127.0.0.1", "listen_port": 0}],

@@ -2,6 +2,8 @@ package vpn
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	box "github.com/getlantern/lantern-box"
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/control"
@@ -195,4 +198,78 @@ func TestResetNetworkForMonitorAllowsMonitorCallbacks(t *testing.T) {
 		t.Fatal("reset did not invoke the monitor callback")
 	}
 	require.EqualValues(t, 1, router.resets.Load())
+}
+
+// monitorCapturePlatform is a native platform that keeps the listener its monitor was started
+// with, as macOS's network extension does to pass back to ResetNetworkForMonitor.
+type monitorCapturePlatform struct {
+	libbox.PlatformInterface
+	listener atomic.Pointer[libbox.InterfaceUpdateListener]
+}
+
+func (*monitorCapturePlatform) UseProcFS() bool                             { return false }
+func (*monitorCapturePlatform) UnderNetworkExtension() bool                 { return false }
+func (*monitorCapturePlatform) UsePlatformAutoDetectInterfaceControl() bool { return false }
+func (*monitorCapturePlatform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
+	return nil, errors.New("no interfaces")
+}
+func (p *monitorCapturePlatform) StartDefaultInterfaceMonitor(l libbox.InterfaceUpdateListener) error {
+	p.listener.Store(&l)
+	return nil
+}
+func (*monitorCapturePlatform) CloseDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error {
+	return nil
+}
+func (*monitorCapturePlatform) RestartService() error { return nil }
+func (*monitorCapturePlatform) PostServiceClose()     {}
+
+// platformTunnel builds a tunnel box on c's box platform, as tunnel.init does, and returns its
+// router and the listener the native platform got.
+func platformTunnel(t *testing.T, c *VPNClient, native *monitorCapturePlatform) (*resetRouter, libbox.InterfaceUpdateListener) {
+	t.Helper()
+	ctx := service.ContextWith[adapter.PlatformInterface](box.Context(context.Background()), libbox.NewPlatformInterfaceWrapper(c.boxPlatform))
+	instance, err := sbox.New(sbox.Options{Context: ctx, Options: option.Options{
+		Log: &option.LogOptions{Disabled: true},
+	}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, instance.Close()) })
+	router := &resetRouter{}
+	service.MustRegister[adapter.Router](ctx, router)
+	require.NoError(t, instance.Network().Start(adapter.StartStateInitialize))
+	c.tunnel = &tunnel{boxInstance: instance}
+	got := native.listener.Load()
+	require.NotNil(t, got, "the box must start the platform's monitor")
+	return router, *got
+}
+
+// TestResetNetworkForMonitorTakesThePlatformsListener checks that the listener the native
+// platform holds resets the tunnel, whether the platform is the tunnel's own (macOS) or shared
+// with the direct exit (Android), and that a foreign or retired one doesn't.
+func TestResetNetworkForMonitorTakesThePlatformsListener(t *testing.T) {
+	prev := sharePlatformMonitor
+	t.Cleanup(func() { sharePlatformMonitor = prev })
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared=%v", shared), func(t *testing.T) {
+			sharePlatformMonitor = func() bool { return shared }
+			native := &monitorCapturePlatform{}
+			c := NewVPNClient(t.TempDir(), nil, native)
+			router, listener := platformTunnel(t, c, native)
+
+			c.ResetNetworkForMonitor(&resetMonitor{})
+			require.Zero(t, router.resets.Load(), "a foreign listener resets nothing")
+			c.ResetNetworkForMonitor(listener)
+			require.EqualValues(t, 1, router.resets.Load())
+			if !shared {
+				return
+			}
+			// The tunnel's monitor closes and a new one starts: the old forwarder is retired.
+			monitor := c.tunnel.boxInstance.Network().InterfaceMonitor().(libbox.InterfaceUpdateListener)
+			require.NoError(t, c.shared.CloseDefaultInterfaceMonitor(monitor))
+			require.NoError(t, c.shared.StartDefaultInterfaceMonitor(monitor))
+			c.ResetNetworkForMonitor(listener)
+			require.EqualValues(t, 1, router.resets.Load(), "a retired forwarder resets nothing")
+			c.ResetNetworkForMonitor(*native.listener.Load())
+			require.EqualValues(t, 2, router.resets.Load())
+		})
+	}
 }

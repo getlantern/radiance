@@ -150,6 +150,7 @@ var reviewedFields = map[reflect.Type]map[string]string{
 		"system": "WireGuard interface used by Lantern's desktop servers; executes and writes nothing",
 	},
 	reflect.TypeFor[lbO.DNSEntryConfig]():                 {"system": "selects the system DNS resolver"},
+	reflect.TypeFor[lbO.UnboundedOutboundOptions]():       {"direct_exit": "Hysteria2 SNI for volunteer direct exits; names no host file or program"},
 	reflect.TypeFor[option.RemoteHTTPSDNSServerOptions](): {"path": "URL path of the DoH request"},
 	reflect.TypeFor[option.HostsDNSServerOptions]():       {"path": "hosts files; read and parsed, never sent"},
 	reflect.TypeFor[option.LocalRuleSet]():                {"path": "rule-set file; read and parsed, never sent"},

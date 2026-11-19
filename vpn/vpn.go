@@ -35,6 +35,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/protocol/samizdatreverse"
 
+	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/internal/hostaccess"
 	"github.com/getlantern/radiance/internal/redact"
@@ -77,7 +78,12 @@ type VPNClient struct {
 	boxCtx atomic.Pointer[context.Context]
 
 	platformIfce PlatformInterface
-	logger       *slog.Logger
+	// boxPlatform is the platform the tunnel's box runs on: platformIfce, or on Android shared.
+	boxPlatform libbox.PlatformInterface
+	// shared is platformIfce with its default interface monitor shared, for the tunnel's box and
+	// the Unbounded direct exit's. Only Android has one, as only its exit runs on the platform.
+	shared *sharedPlatform
+	logger *slog.Logger
 
 	offlineTestCancel context.CancelFunc
 	offlineTestDone   chan struct{}
@@ -211,6 +217,13 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 		offlineTestCancel: func() {},
 		offlineTestDone:   done,
 	}
+	if platformIfce != nil {
+		c.boxPlatform = platformIfce
+		if sharePlatformMonitor() {
+			c.shared = newSharedPlatform(platformIfce)
+			c.boxPlatform = c.shared
+		}
+	}
 	c.status.Store(Disconnected)
 	return c
 }
@@ -287,7 +300,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	c.setStatus(Connecting, nil)
 	for attempt := 1; ; attempt++ {
 		t := c.newTunnel(boxOptions, initialMode)
-		err := t.start(ctx, options, c.platformIfce, isRestart)
+		err := t.start(ctx, options, c.boxPlatform, isRestart)
 		if err == nil {
 			c.setTunnelLocked(t)
 			if err := c.restoreReverseLocked(); err != nil {
@@ -413,7 +426,11 @@ func (c *VPNClient) ResetNetworkForMonitor(listener libbox.InterfaceUpdateListen
 	}
 	network := c.tunnel.boxInstance.Network()
 	current, ok := network.InterfaceMonitor().(libbox.InterfaceUpdateListener)
-	if !ok || current != listener {
+	if !ok {
+		return
+	}
+	// A shared platform holds its forwarder, not the tunnel's monitor.
+	if current != listener && (c.shared == nil || !c.shared.forwardsTo(listener, current)) {
 		return
 	}
 	network.ResetNetwork(c.tunnel.ctx)
@@ -688,6 +705,20 @@ func (c *VPNClient) BoxContext() context.Context {
 		return *ctx
 	}
 	return nil
+}
+
+// sharePlatformMonitor reports whether the tunnel's platform is shared with the Unbounded direct
+// exit's boxes: on Android, whose exit runs on it. Tests replace it.
+var sharePlatformMonitor = common.IsAndroid
+
+// BoxPlatform returns the platform interface the tunnel's sing-box runs on, its default
+// interface monitor shared so another box in this process can run on it too. It is nil except
+// on Android.
+func (c *VPNClient) BoxPlatform() libbox.PlatformInterface {
+	if c.shared == nil {
+		return nil
+	}
+	return c.shared
 }
 
 // setTunnelLocked makes t the running tunnel. The caller must hold c.mu.

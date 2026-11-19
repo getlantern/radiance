@@ -32,6 +32,32 @@ import (
 	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
+// minimalValidLaunchCfg returns a launch_cfg JSON that passes
+// peerrules.ValidateAbuseRules: the four abuse rule_set tags (each as a
+// "remote" rule_set + a matching unconditional reject rule), plus
+// one RFC1918 and one SMTP canary in reject rules. Shared by the
+// stub server used in Start-path tests so the existing tests do not
+// regress on the new check.
+const minimalValidLaunchCfg = `{
+	"inbounds":[{"type":"samizdat","tag":"samizdat-in"}],
+	"route":{
+		"rule_set":[
+			{"type":"remote","tag":"geosite-malware","format":"binary","url":"https://example/geosite-malware.srs","download_detour":"direct"},
+			{"type":"remote","tag":"geoip-malware","format":"binary","url":"https://example/geoip-malware.srs","download_detour":"direct"},
+			{"type":"remote","tag":"geosite-phishing","format":"binary","url":"https://example/geosite-phishing.srs","download_detour":"direct"},
+			{"type":"remote","tag":"geosite-cryptominers","format":"binary","url":"https://example/geosite-cryptominers.srs","download_detour":"direct"}
+		],
+		"rules":[
+			{"action":"reject","rule_set":["geosite-malware"]},
+			{"action":"reject","rule_set":["geoip-malware"]},
+			{"action":"reject","rule_set":["geosite-phishing"]},
+			{"action":"reject","rule_set":["geosite-cryptominers"]},
+			{"action":"reject","ip_cidr":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","::1/128","fc00::/7","fe80::/10"]},
+			{"action":"reject","port":[25,465,587,2525,6660,6661,6662,6663,6664,6665,6666,6667,6668,6669,6697]}
+		]
+	}
+}`
+
 type fakeForwarder struct {
 	mu       sync.Mutex
 	mapErr   error
@@ -658,7 +684,7 @@ func TestClient_Start_AbuseRuleValidationFailureUnwinds(t *testing.T) {
 	box := &fakeBoxService{}
 	srv := newStubServer(t)
 	// Strip the abuse rules from the launch_cfg the stub returns —
-	// just the inbound, no route block. validateAbuseRules will reject
+	// just the inbound, no route block. peerrules.ValidateAbuseRules will reject
 	// this as "missing route block".
 	srv.registerResp.ServerConfig = `{"inbounds":[{"type":"samizdat","tag":"samizdat-in"}]}`
 	c := newTestClient(t, fwd, box, srv)

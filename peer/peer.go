@@ -30,6 +30,7 @@ import (
 	lbO "github.com/getlantern/lantern-box/option"
 	"github.com/getlantern/lantern-box/tracker/peerconn"
 
+	"github.com/getlantern/lantern-box/peerrules"
 	"github.com/getlantern/lantern-box/portforward"
 	"github.com/getlantern/radiance/common/env"
 	"github.com/getlantern/radiance/common/settings"
@@ -572,7 +573,7 @@ func (c *Client) Start(ctx context.Context) (retErr error) {
 	// config would otherwise turn every peer in the field into one
 	// until the next deploy. The peer prefers failing to share over
 	// sharing unsafely.
-	if err := validateAbuseRules(regResp.ServerConfig); err != nil {
+	if err := peerrules.ValidateAbuseRules(regResp.ServerConfig); err != nil {
 		return fmt.Errorf("launch_cfg failed abuse-rule sanity check: %w", err)
 	}
 
@@ -1466,7 +1467,7 @@ func (c *Client) rotateCreds(ctx context.Context) error {
 	// freshly fetched launch_cfg on an already-running peer. Validating only
 	// at Start would let a server-side regression reach every long-lived peer
 	// on its next hourly rotation.
-	if err := validateAbuseRules(regResp.ServerConfig); err != nil {
+	if err := peerrules.ValidateAbuseRules(regResp.ServerConfig); err != nil {
 		return fail(fmt.Errorf("rotated launch_cfg failed abuse-rule sanity check: %w", err), true)
 	}
 

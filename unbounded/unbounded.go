@@ -41,6 +41,7 @@ import (
 	"github.com/getlantern/broflake/clientcore"
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
+	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/sameorigin"
@@ -246,6 +247,20 @@ type unboundedManager struct {
 	usage *helper.Usage
 	// runHook hears each start and stop of the worker, under mu.
 	runHook func(running bool)
+
+	// exitFlag is config-new's direct_exit, debounced.
+	exitFlag exitFlag
+	// exitAllowed reports whether this device may exit users' traffic at
+	// all (SetDirectExitAllowed). nil: never.
+	exitAllowed func() bool
+	// exitPlatform is the platform interface the exit's boxes run on
+	// (SetPlatformInterface). nil: sing-box's own.
+	exitPlatform libbox.PlatformInterface
+	// exitRun is the running widget's direct exit. nil with none.
+	exitRun *exitRun
+	// exitNotBefore is the hold-off lantern-cloud last asked the exit for,
+	// kept across widget runs so a restart can't cut it short.
+	exitNotBefore time.Time
 }
 
 // shouldStart reports whether all three start conditions hold. Caller
@@ -533,6 +548,10 @@ func (m *unboundedManager) syncRooms(ctx context.Context, done chan struct{}, rt
 		}
 		pool := servePool()
 		rtcOpt.SetServePool(pool)
+		if pool != prevPool {
+			// The exit's next registration says whether it serves the pool.
+			m.reregisterExit()
+		}
 		reason := ""
 		if prevPool && !pool {
 			reason = "Unbounded: helping others turned off; restarting the widget to close its sessions"
@@ -695,11 +714,22 @@ func applyConfig(cfg config.Config) {
 		manager.lastCfg = &copied
 	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
+	if manager.exitFlag.update(cfg.Features[directExitFeature], time.Now()) {
+		// Identical configs bring no further events, so the off comes from a timer. A stale
+		// one only re-checks.
+		time.AfterFunc(directExitOffDelay, RecheckDirectExit)
+	}
+	run := manager.exitRun
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
 	ucfg := manager.lastCfg
 	cfgChanged := running && !manager.runningCfg.Equal(ucfg)
 	manager.mu.Unlock()
+
+	// The exit turns on and off without restarting the widget.
+	if run != nil {
+		run.sync()
+	}
 
 	switch {
 	case shouldRun && !running:
@@ -986,6 +1016,12 @@ func (m *unboundedManager) startLocked() {
 			return
 		}
 		served := applyRooms(rtcOpt, tickets)
+		// The exit is offered to broflake off, and turned on and off later
+		// with direct_exit: broflake reads WebRTCOptions.Exit only here.
+		exitRun := m.startExit()
+		if exitRun != nil {
+			rtcOpt.Exit = exitRun.e.Options()
+		}
 
 		egOpt := clientcore.NewDefaultEgressOptions()
 		egOpt.HTTPClient = bypassHTTPClient
@@ -1001,6 +1037,9 @@ func (m *unboundedManager) startLocked() {
 		ui, err := newWidget(bfOpt, rtcOpt, egOpt)
 		if err != nil {
 			slog.Error("Unbounded: failed to create broflake widget", "error", err)
+			if exitRun != nil {
+				exitRun.close()
+			}
 			cancel()
 			m.mu.Lock()
 			m.fireRunLocked(false)
@@ -1013,7 +1052,11 @@ func (m *unboundedManager) startLocked() {
 
 		m.mu.Lock()
 		m.running = ctx.Err() == nil
+		m.exitRun = exitRun
 		m.mu.Unlock()
+		if exitRun != nil {
+			exitRun.sync()
+		}
 		slog.Info("Unbounded: broflake widget proxy started")
 		// The worker waits for syncRooms before reporting done, so a stopped
 		// run leaves nothing behind.
@@ -1026,10 +1069,14 @@ func (m *unboundedManager) startLocked() {
 		slog.Info("Unbounded: stopping broflake widget proxy")
 		ui.Stop()
 		<-syncDone
+		if exitRun != nil {
+			exitRun.close()
+		}
 		m.mu.Lock()
 		m.cancel = nil
 		m.done = nil
 		m.runningCfg = nil
+		m.exitRun = nil
 		m.mu.Unlock()
 		slog.Info("Unbounded: broflake widget proxy stopped")
 	}()
