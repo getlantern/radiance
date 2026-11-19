@@ -474,6 +474,9 @@ func (r *LocalBackend) Start() {
 		unbounded.SetVPNStatus(func() string { return string(r.vpnClient.Status()) })
 		unbounded.SetBoxContext(r.vpnClient.BoxContext)
 	}
+	// The widget exits users' traffic itself only from a country that is
+	// known and not censored, as for the pairings-only route.
+	unbounded.SetDirectExitAllowed(pairingRouteCountryAllowed)
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {

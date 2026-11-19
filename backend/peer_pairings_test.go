@@ -692,3 +692,33 @@ func TestPairingRoute_CountryOverrideWins(t *testing.T) {
 		})
 	}
 }
+
+// TestPairingRouteCountryAllowed checks the country gate the pairings-only route and the widget's direct exit share: only
+// a known, uncensored country passes, and an override decides over the saved country.
+func TestPairingRouteCountryAllowed(t *testing.T) {
+	var censored string
+	for c := range censoredCountries {
+		censored = c
+		break
+	}
+	for _, tc := range []struct {
+		name, saved, override string
+		allowed               bool
+	}{
+		{name: "no country", allowed: false},
+		{name: "censored", saved: censored, allowed: false},
+		{name: "lowercase and padded", saved: " us ", allowed: true},
+		{name: "censored override over US", saved: "US", override: censored, allowed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, settings.InitSettings(t.TempDir()))
+			t.Cleanup(settings.Reset)
+			prev := env.GetString(env.Country)
+			env.Set(env.Country.String(), tc.override)
+			t.Cleanup(func() { env.Set(env.Country.String(), prev) })
+			require.NoError(t, settings.Set(settings.CountryCodeKey, tc.saved))
+
+			assert.Equal(t, tc.allowed, pairingRouteCountryAllowed())
+		})
+	}
+}
