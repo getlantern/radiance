@@ -128,6 +128,11 @@ type tunnel struct {
 	// endPauseTimer force-wakes an iOS device pause; see devicePause. Guarded by pauseMu.
 	endPauseTimer *time.Timer
 	pauseMu       sync.Mutex
+	// pauseEventsMu guards pauseEventsLive and every PauseEvent emit, so none
+	// follows the wakes close emits. pauseEventsLive is true from pause-callback
+	// registration until releasePauseEvents.
+	pauseEventsMu   sync.Mutex
+	pauseEventsLive bool
 
 	// staleSource is the stale source restart state the client's tunnels
 	// share, and restartForStaleSource starts a restart of this tunnel for
@@ -434,23 +439,21 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 			}
 		})
 
+		t.pauseEventsMu.Lock()
+		t.pauseEventsLive = true
+		t.pauseEventsMu.Unlock()
 		cb := pm.RegisterCallback(t.onPauseUpdate)
 		// A pause can already be in effect before this registration, so seed it
 		// once. Only the paused case is emitted: not emitting a wake keeps this
 		// off-lock read from racing a real pause into the wrong final state.
 		if pm.IsNetworkPaused() {
-			events.Emit(PauseEvent{EventType: PauseEventNetworkPaused})
+			t.emitPauseEvent(PauseEventNetworkPaused)
 		}
 		if pm.IsDevicePaused() {
-			events.Emit(PauseEvent{EventType: PauseEventDevicePaused})
+			t.emitPauseEvent(PauseEventDevicePaused)
 		}
 		t.closers = append(t.closers, closerFunc(func() error {
 			pm.UnregisterCallback(cb)
-			// No further events arrive after unregister, so force wakes to release
-			// consumers left paused at teardown. UnregisterCallback serializes with
-			// in-flight callbacks via the manager lock, so these wakes land last.
-			events.Emit(PauseEvent{EventType: PauseEventNetworkWake})
-			events.Emit(PauseEvent{EventType: PauseEventDeviceWake})
 			return nil
 		}))
 	}
@@ -528,14 +531,36 @@ func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter
 func (t *tunnel) onPauseUpdate(evt int) {
 	switch evt {
 	case pause.EventNetworkPause:
-		events.Emit(PauseEvent{EventType: PauseEventNetworkPaused})
+		t.emitPauseEvent(PauseEventNetworkPaused)
 	case pause.EventNetworkWake:
-		events.Emit(PauseEvent{EventType: PauseEventNetworkWake})
+		t.emitPauseEvent(PauseEventNetworkWake)
 	case pause.EventDevicePaused:
-		events.Emit(PauseEvent{EventType: PauseEventDevicePaused})
+		t.emitPauseEvent(PauseEventDevicePaused)
 	case pause.EventDeviceWake:
-		events.Emit(PauseEvent{EventType: PauseEventDeviceWake})
+		t.emitPauseEvent(PauseEventDeviceWake)
 	}
+}
+
+func (t *tunnel) emitPauseEvent(typ PauseEventType) {
+	t.pauseEventsMu.Lock()
+	defer t.pauseEventsMu.Unlock()
+	if t.pauseEventsLive {
+		events.Emit(PauseEvent{EventType: typ})
+	}
+}
+
+// releasePauseEvents emits wakes for consumers left paused and drops any later
+// event from this tunnel. It must run before close returns: the closers that
+// unregister the pause callback can outlive close and a replacement tunnel.
+func (t *tunnel) releasePauseEvents() {
+	t.pauseEventsMu.Lock()
+	defer t.pauseEventsMu.Unlock()
+	if !t.pauseEventsLive {
+		return
+	}
+	t.pauseEventsLive = false
+	events.Emit(PauseEvent{EventType: PauseEventNetworkWake})
+	events.Emit(PauseEvent{EventType: PauseEventDeviceWake})
 }
 
 // subscribeExhaustionSignal bridges the auto group's exhaustion
@@ -837,6 +862,7 @@ func (t *tunnel) close() error {
 		t.endPauseTimer.Stop()
 	}
 	t.pauseMu.Unlock()
+	t.releasePauseEvents()
 
 	closers := t.closers
 	recovery := t.netRecovery

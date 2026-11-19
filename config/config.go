@@ -356,8 +356,8 @@ func (ch *ConfigHandler) waitUntilDue(last time.Time, interval time.Duration) bo
 		case <-ch.ctx.Done():
 			timer.Stop()
 			return false
+		// Re-measured rather than returned, since a pause can land as the timer fires.
 		case <-timer.C:
-			return true
 		case <-ch.pauseChanged:
 			timer.Stop()
 		}

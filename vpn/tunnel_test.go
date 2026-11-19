@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -105,8 +106,9 @@ func TestTunnelDevicePauseWake(t *testing.T) {
 	require.False(t, mgr.IsDevicePaused())
 }
 
-func TestTunnelCloseReportsWakes(t *testing.T) {
-	got := make(chan PauseEventType, 4)
+func TestTunnelCloseReportsWakesBeforeClosersFinish(t *testing.T) {
+	const barrier = PauseEventType("barrier")
+	got := make(chan PauseEventType, 8)
 	sub := events.Subscribe(func(evt PauseEvent) {
 		// A host without a default route pauses the network during start.
 		if evt.EventType != PauseEventNetworkPaused {
@@ -135,10 +137,22 @@ func TestTunnelCloseReportsWakes(t *testing.T) {
 		},
 	}
 	require.NoError(t, tun.start(t.Context(), options, nil, false))
-	tun.devicePause()
-	require.NoError(t, tun.close())
 
-	for _, want := range []PauseEventType{PauseEventDevicePaused, PauseEventNetworkWake, PauseEventDeviceWake} {
+	block, finished := make(chan struct{}), make(chan struct{})
+	tun.closers = append([]io.Closer{closerFunc(func() error { <-block; return nil })}, tun.closers...)
+	tun.closers = append(tun.closers, closerFunc(func() error { close(finished); return nil }))
+	t.Cleanup(func() {
+		close(block)
+		<-finished
+	})
+	tun.closeTimeout = 50 * time.Millisecond
+
+	tun.devicePause()
+	require.Error(t, tun.close(), "close must time out while a closer is blocked")
+	tun.onPauseUpdate(pause.EventDevicePaused)
+	events.Emit(PauseEvent{EventType: barrier})
+
+	for _, want := range []PauseEventType{PauseEventDevicePaused, PauseEventNetworkWake, PauseEventDeviceWake, barrier} {
 		select {
 		case ev := <-got:
 			require.Equal(t, want, ev)
@@ -570,7 +584,7 @@ func TestOnPauseUpdate(t *testing.T) {
 			sub := events.Subscribe(func(evt PauseEvent) { got <- evt.EventType })
 			defer sub.Unsubscribe()
 
-			(&tunnel{}).onPauseUpdate(tc.evt)
+			(&tunnel{pauseEventsLive: true}).onPauseUpdate(tc.evt)
 
 			select {
 			case ev := <-got:

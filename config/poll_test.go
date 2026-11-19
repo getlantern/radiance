@@ -77,6 +77,20 @@ func TestFetchLoopWaitsPausedIntervalWhileDevicePaused(t *testing.T) {
 	})
 }
 
+func TestFetchLoopRechecksPauseWhenTimerFires(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &countingFetcher{}
+		ch := startPollLoop(t, f, false)
+		// A pause whose signal loses the race to the timer.
+		ch.devicePaused.Store(true)
+
+		advance(testPollInterval)
+		assert.EqualValues(t, 1, f.calls.Load(), "the timer must not fetch on the normal interval while paused")
+		advance(pausedPollInterval - testPollInterval)
+		assert.EqualValues(t, 2, f.calls.Load())
+	})
+}
+
 func TestFetchLoopFetchesOnWakeWhenOverdue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &countingFetcher{}
