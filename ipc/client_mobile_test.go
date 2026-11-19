@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -131,6 +132,48 @@ func TestConfigEventsLocalCallsOnSubscribe(t *testing.T) {
 	waitCall()
 	events.Emit(backend.ConfigAppliedEvent{})
 	waitCall()
+	cancel()
+	<-done
+}
+
+// The bus worker must not call handler while the on-subscribe call is still running.
+func TestConfigEventsLocalCallsDoNotOverlap(t *testing.T) {
+	client := newClient()
+	client.localOnly = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var first atomic.Bool
+	first.Store(true)
+	done := make(chan struct{})
+	go func() {
+		_ = client.ConfigEvents(ctx, func() {
+			entered <- struct{}{}
+			if first.CompareAndSwap(true, false) {
+				<-release
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("on-subscribe call not made")
+	}
+
+	events.Emit(backend.ConfigAppliedEvent{})
+	select {
+	case <-entered:
+		t.Fatal("handler ran while the on-subscribe call was in progress")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event call not made after the on-subscribe call returned")
+	}
 	cancel()
 	<-done
 }

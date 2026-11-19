@@ -76,6 +76,9 @@ type VPNClient struct {
 	// boxCtx is tunnel's sing-box context, read lock-free so the Unbounded
 	// widget's sockets never wait out a connect.
 	boxCtx atomic.Pointer[context.Context]
+	// currentTunnel is tunnel, read lock-free so an SSE frame never waits out a connect or
+	// restart.
+	currentTunnel atomic.Pointer[tunnel]
 
 	platformIfce PlatformInterface
 	// boxPlatform is the platform the tunnel's box runs on: platformIfce, or on Android shared.
@@ -724,6 +727,7 @@ func (c *VPNClient) BoxPlatform() libbox.PlatformInterface {
 // setTunnelLocked makes t the running tunnel. The caller must hold c.mu.
 func (c *VPNClient) setTunnelLocked(t *tunnel) {
 	c.tunnel = t
+	c.currentTunnel.Store(t)
 	if t == nil {
 		c.boxCtx.Store(nil)
 		return
@@ -917,9 +921,7 @@ func (c *VPNClient) AnnouncedAutoSelectedServer() string {
 	if !c.isOpen() {
 		return ""
 	}
-	c.mu.RLock()
-	t := c.tunnel
-	c.mu.RUnlock()
+	t := c.currentTunnel.Load()
 	if t == nil {
 		return ""
 	}

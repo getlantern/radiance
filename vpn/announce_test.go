@@ -3,6 +3,7 @@ package vpn
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,8 @@ func TestAnnounceAutoSelectedStoresBeforeEmit(t *testing.T) {
 
 func TestAnnouncedAutoSelectedServerIsPerTunnel(t *testing.T) {
 	old := &tunnel{}
-	c := &VPNClient{tunnel: old}
+	c := &VPNClient{}
+	c.setTunnelLocked(old)
 	c.status.Store(Connected)
 	announceAutoSelected(old, "old-pick")
 	require.Equal(t, "old-pick", c.AnnouncedAutoSelectedServer())
@@ -38,9 +40,7 @@ func TestAnnouncedAutoSelectedServerIsPerTunnel(t *testing.T) {
 	// A reconnect replaces the tunnel; a listener that has not stopped yet can only
 	// announce into the tunnel it read from.
 	next := &tunnel{}
-	c.mu.Lock()
-	c.tunnel = next
-	c.mu.Unlock()
+	c.setTunnelLocked(next)
 	announceAutoSelected(old, "late-old-pick")
 	assert.Empty(t, c.AnnouncedAutoSelectedServer())
 
@@ -49,4 +49,25 @@ func TestAnnouncedAutoSelectedServerIsPerTunnel(t *testing.T) {
 
 	c.status.Store(Disconnected)
 	assert.Empty(t, c.AnnouncedAutoSelectedServer())
+}
+
+// Connect and restart hold c.mu through box start, so a read that waited on it would stall
+// the SSE frame behind lifecycle work.
+func TestAnnouncedAutoSelectedServerDoesNotWaitOnLifecycleLock(t *testing.T) {
+	tun := &tunnel{}
+	c := &VPNClient{}
+	c.setTunnelLocked(tun)
+	c.status.Store(Connected)
+	announceAutoSelected(tun, "pick")
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	got := make(chan string, 1)
+	go func() { got <- c.AnnouncedAutoSelectedServer() }()
+	select {
+	case tag := <-got:
+		assert.Equal(t, "pick", tag)
+	case <-time.After(2 * time.Second):
+		t.Fatal("AnnouncedAutoSelectedServer waited on c.mu")
+	}
 }
