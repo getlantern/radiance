@@ -74,6 +74,11 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 		}
 		shutdownOTEL = nil
 	}
+	setErrorHandler()
+	logTarget = nil
+	if err := stopLogUploadLocked(); err != nil {
+		slog.Error("Failed to stop log upload", "error", err)
+	}
 
 	attrs := Attributes{
 		App:         "radiance",
@@ -99,6 +104,10 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 	}
 
 	shutdownOTEL = shutdown
+	logTarget = &logUploadTarget{attrs: attrs, cfg: configResponse.OTEL}
+	if err := applyLogUploadLocked(); err != nil {
+		slog.Error("Failed to start log upload", "error", err)
+	}
 	return nil
 }
 
@@ -119,6 +128,10 @@ func CloseContext(ctx context.Context) error {
 			errs = errors.Join(errs, fmt.Errorf("failed to shutdown OpenTelemetry SDK: %w", err))
 		}
 		shutdownOTEL = nil
+	}
+	logTarget = nil
+	if err := stopLogUploadLocked(); err != nil {
+		errs = errors.Join(errs, err)
 	}
 	otel.SetTracerProvider(traceNoop.NewTracerProvider())
 	otel.SetMeterProvider(metricNoop.NewMeterProvider())

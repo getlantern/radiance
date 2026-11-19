@@ -1010,6 +1010,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 				settings.SplitTunnelPolicyKey, vpn.SplitTunnelPolicyExclude, vpn.SplitTunnelPolicyInclude, v)
 		}
 	}
+	if v, ok := diff[settings.SendLogsToSigNozKey]; ok {
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("invalid %s: want a bool, got %T", settings.SendLogsToSigNozKey, v)
+		}
+	}
 	// An explicit peer toggle is applied whether or not it changes the stored
 	// value, and before any other handler: the stored value can lag the
 	// runtime (a peer that stopped itself, or an "on" still starting), and
@@ -1073,6 +1078,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			}
 		} else {
 			r.stopTelemetry()
+		}
+	}
+	if _, ok := diff[settings.SendLogsToSigNozKey]; ok {
+		if err := telemetry.UpdateLogUpload(); err != nil {
+			errs = errors.Join(errs, err)
 		}
 	}
 

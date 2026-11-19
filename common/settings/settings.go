@@ -99,6 +99,9 @@ const (
 	ConfigFetchDisabledKey        _key = "config_fetch_disabled"     // bool
 	FeatureOverridesKey           _key = "feature_overrides"         // string
 	AdmissionRejectionDisabledKey _key = "admission_reject_disabled" // bool
+	// SendLogsToSigNozKey uploads the log, redacted, to the telemetry collector
+	// while telemetry runs. Unset means false.
+	SendLogsToSigNozKey _key = "send_logs_to_signoz" // bool
 )
 
 var ErrNotExist = errors.New("key does not exist")

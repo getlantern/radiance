@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/getlantern/radiance/internal/redact"
@@ -209,4 +210,58 @@ func redactValue(kv attribute.KeyValue, helper bool) (attribute.KeyValue, bool) 
 		return attribute.StringSlice(string(kv.Key), vs), true
 	}
 	return kv, false
+}
+
+// redactingLogExporter redacts every IP address, with any port, and every
+// helper tag in each log record's body and attribute values before export.
+// Unlike a span, a log line rarely says which outbound its addresses belong
+// to, so none is kept.
+type redactingLogExporter struct {
+	sdklog.Exporter
+}
+
+func newRedactingLogExporter(e sdklog.Exporter) sdklog.Exporter {
+	return redactingLogExporter{Exporter: e}
+}
+
+func (e redactingLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
+	out := make([]sdklog.Record, len(records))
+	for i := range records {
+		r := records[i].Clone()
+		r.SetBody(redactLogValue(r.Body()))
+		attrs := make([]attribute.KeyValue, 0, r.AttributesLen())
+		r.WalkAttributes(func(kv attribute.KeyValue) bool {
+			attrs = append(attrs, attribute.KeyValue{Key: kv.Key, Value: redactLogValue(kv.Value)})
+			return true
+		})
+		r.SetAttributes(attrs...)
+		out[i] = r
+	}
+	return e.Exporter.Export(ctx, out)
+}
+
+func redactLogValue(v attribute.Value) attribute.Value {
+	switch v.Type() {
+	case attribute.STRING:
+		return attribute.StringValue(redactText(v.AsString(), true))
+	case attribute.STRINGSLICE:
+		vs := v.AsStringSlice()
+		for i, s := range vs {
+			vs[i] = redactText(s, true)
+		}
+		return attribute.StringSliceValue(vs)
+	case attribute.SLICE:
+		vs := v.AsSlice()
+		for i, e := range vs {
+			vs[i] = redactLogValue(e)
+		}
+		return attribute.SliceValue(vs...)
+	case attribute.MAP:
+		kvs := v.AsMap()
+		for i, kv := range kvs {
+			kvs[i].Value = redactLogValue(kv.Value)
+		}
+		return attribute.MapValue(kvs...)
+	}
+	return v
 }
