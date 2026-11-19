@@ -81,6 +81,21 @@ func TestTeeUploadsOnlyWhileHandlerSet(t *testing.T) {
 	}
 }
 
+func TestRootHandlerUploads(t *testing.T) {
+	t.Cleanup(func() { SetUploadHandler(nil) })
+	var local bytes.Buffer
+	logger := slog.New(newRootHandler(&local, slog.LevelInfo))
+	sink := newRecordingHandler()
+	SetUploadHandler(sink)
+
+	logger.Info("uploaded")
+
+	got := sink.got()
+	require.Len(t, got, 1)
+	assert.Equal(t, "uploaded", got[0].Message)
+	assert.Contains(t, local.String(), "uploaded")
+}
+
 func TestTeeRespectsLocalLevel(t *testing.T) {
 	t.Cleanup(func() { SetUploadHandler(nil) })
 	logger := slog.New(newTeeHandler(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelWarn})))

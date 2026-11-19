@@ -1038,11 +1038,16 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) > 0 {
 		patchErr = settings.Patch(diff)
 	}
-	// A failed save still applies the live value, so the country route and
-	// the proxyless hedge follow it before the error returns: a retry would
-	// be an empty diff.
+	// A failed save still applies the live value, so the country route, the
+	// proxyless hedge and log upload follow it before the error returns: a
+	// retry would be an empty diff.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
+	}
+	if _, ok := diff[settings.SendLogsToSigNozKey]; ok {
+		if err := telemetry.UpdateLogUpload(); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 	// The proxyless and smart routing settings switch the running hedge,
 	// without a restart.
@@ -1078,11 +1083,6 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			}
 		} else {
 			r.stopTelemetry()
-		}
-	}
-	if _, ok := diff[settings.SendLogsToSigNozKey]; ok {
-		if err := telemetry.UpdateLogUpload(); err != nil {
-			errs = errors.Join(errs, err)
 		}
 	}
 

@@ -45,6 +45,13 @@ func TestOwnerSettingsPermissions(t *testing.T) {
 	require.Equal(t, "Europe/Paris", settings.GetString(settings.TimeZoneKey))
 	require.Equal(t, "debug", settings.GetString(settings.LogLevelKey))
 
+	response = servePeerRequest(api, owner, http.MethodPatch, settingsEndpoint, `{"send_logs_to_signoz":true}`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.True(t, settings.GetBool(settings.SendLogsToSigNozKey))
+	response = servePeerRequest(api, owner, http.MethodPatch, settingsEndpoint, `{"send_logs_to_signoz":"yes"}`)
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	require.True(t, settings.GetBool(settings.SendLogsToSigNozKey))
+
 	response = servePeerRequest(api, owner, http.MethodGet, settingsEndpoint, "")
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Contains(t, response.Body.String(), `"locale":"fr-FR"`)

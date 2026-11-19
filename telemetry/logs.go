@@ -61,7 +61,7 @@ func UpdateLogUpload() error {
 
 func applyLogUploadLocked() error {
 	if logTarget == nil || !settings.GetBool(settings.SendLogsToSigNozKey) {
-		return stopLogUploadLocked()
+		return stopLogUploadLocked(context.Background())
 	}
 	if logProvider != nil {
 		return nil
@@ -93,12 +93,14 @@ func newUploadHandler(p *sdklog.LoggerProvider) slog.Handler {
 	return otelslog.NewHandler("radiance", otelslog.WithLoggerProvider(p), otelslog.WithSource(true))
 }
 
-func stopLogUploadLocked() error {
+// stopLogUploadLocked flushes queued records until ctx is done or
+// logShutdownTimeout passes, whichever comes first.
+func stopLogUploadLocked(ctx context.Context) error {
 	if logProvider == nil {
 		return nil
 	}
 	rlog.SetUploadHandler(nil)
-	ctx, cancel := context.WithTimeout(context.Background(), logShutdownTimeout)
+	ctx, cancel := context.WithTimeout(ctx, logShutdownTimeout)
 	defer cancel()
 	err := logProvider.Shutdown(ctx)
 	logProvider = nil

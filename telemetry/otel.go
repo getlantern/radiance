@@ -76,7 +76,7 @@ func Initialize(deviceID string, configResponse config.Config, pro bool) error {
 	}
 	setErrorHandler()
 	logTarget = nil
-	if err := stopLogUploadLocked(); err != nil {
+	if err := stopLogUploadLocked(context.Background()); err != nil {
 		slog.Error("Failed to stop log upload", "error", err)
 	}
 
@@ -130,7 +130,7 @@ func CloseContext(ctx context.Context) error {
 		shutdownOTEL = nil
 	}
 	logTarget = nil
-	if err := stopLogUploadLocked(); err != nil {
+	if err := stopLogUploadLocked(ctx); err != nil {
 		errs = errors.Join(errs, err)
 	}
 	otel.SetTracerProvider(traceNoop.NewTracerProvider())

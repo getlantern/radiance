@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
 )
 
 type memoryLogExporter struct {
@@ -113,10 +114,7 @@ func TestUpdateLogUploadFollowsSetting(t *testing.T) {
 	require.NoError(t, UpdateLogUpload())
 	assert.Nil(t, logProvider, "upload must not start before telemetry is initialized")
 
-	initMutex.Lock()
-	logTarget = &logUploadTarget{cfg: common.OTEL{Endpoint: "127.0.0.1:1"}}
-	initMutex.Unlock()
-	require.NoError(t, UpdateLogUpload())
+	require.NoError(t, Initialize("device", config.Config{OTEL: common.OTEL{Endpoint: "127.0.0.1:1"}}, false))
 	assert.NotNil(t, logProvider)
 
 	require.NoError(t, settings.Set(settings.SendLogsToSigNozKey, false))
