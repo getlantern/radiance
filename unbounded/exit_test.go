@@ -1,0 +1,272 @@
+package unbounded
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/getlantern/broflake/clientcore"
+	C "github.com/getlantern/common"
+	"github.com/getlantern/lantern-box/node"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	rcommon "github.com/getlantern/radiance/common"
+	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/config"
+)
+
+// fakeExit records what the manager does to the exit.
+type fakeExit struct {
+	mu      sync.Mutex
+	enabled []bool
+	closed  bool
+}
+
+func (f *fakeExit) Options() *clientcore.ExitOptions { return &clientcore.ExitOptions{} }
+func (f *fakeExit) SetEnabled(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enabled = append(f.enabled, on)
+}
+func (f *fakeExit) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+}
+func (f *fakeExit) state() (last bool, closed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n := len(f.enabled); n > 0 {
+		last = f.enabled[n-1]
+	}
+	return last, f.closed
+}
+
+// exitHarness installs a fake exit and a RunExit that records each run until its context ends.
+type exitHarness struct {
+	exit    *fakeExit
+	runs    atomic.Int32
+	running atomic.Int32
+	mu      sync.Mutex
+	cfgs    []node.ExitConfig
+	rtcExit atomic.Bool
+}
+
+func newExitHarness(t *testing.T) *exitHarness {
+	t.Helper()
+	h := &exitHarness{exit: &fakeExit{}}
+	resetManager(t, func(_ *clientcore.BroflakeOptions, rtcOpt *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
+		h.rtcExit.Store(rtcOpt.Exit != nil)
+		return &fakeWidget{}, nil
+	})
+	newDirectExit = func(context.Context) (directExit, error) { return h.exit, nil }
+	runDirectExit = func(ctx context.Context, _ directExit, cfg node.ExitConfig) error {
+		h.mu.Lock()
+		h.cfgs = append(h.cfgs, cfg)
+		h.mu.Unlock()
+		h.runs.Add(1)
+		h.running.Add(1)
+		defer h.running.Add(-1)
+		<-ctx.Done()
+		return nil
+	}
+	// Runs before resetManager's cleanup, which waits for the worker to exit.
+	t.Cleanup(func() { manager.stop() })
+	return h
+}
+
+func (h *exitHarness) lastCfg() node.ExitConfig {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cfgs[len(h.cfgs)-1]
+}
+
+func directExitConfig(on bool) config.Config {
+	return config.Config{
+		Unbounded: testCfg(),
+		Features:  map[string]bool{C.UNBOUNDED: true, directExitFeature: on},
+	}
+}
+
+func eventually(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	require.Eventually(t, cond, 2*time.Second, 5*time.Millisecond, msg)
+}
+
+func TestExitFlagTurnsOnAtOnceAndOffAfterTwoMisses(t *testing.T) {
+	var f exitFlag
+	assert.False(t, f.update(false))
+	assert.True(t, f.update(true))
+	assert.True(t, f.update(false), "one config without direct_exit must not stop the exit")
+	assert.False(t, f.update(false), "the second in a row does")
+	assert.True(t, f.update(true))
+	assert.True(t, f.update(false))
+	assert.True(t, f.update(true), "a config with the flag resets the count")
+	assert.True(t, f.update(false))
+}
+
+func TestDirectExitRunsWhileTheFlagIsOn(t *testing.T) {
+	h := newExitHarness(t)
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return h.running.Load() == 1 }, "RunExit should start with the flag on")
+	assert.True(t, h.rtcExit.Load(), "broflake must get the exit's options")
+	last, _ := h.exit.state()
+	assert.True(t, last, "the exit must be enabled")
+
+	cfg := h.lastCfg()
+	assert.Equal(t, rcommon.GetBaseURL(), cfg.APIURL)
+	assert.Equal(t, settings.GetString(settings.DeviceIDKey), cfg.DeviceID)
+	assert.NotNil(t, cfg.HTTPClient)
+	assert.NotNil(t, cfg.Header)
+	assert.NotNil(t, cfg.NewBox)
+	assert.NotNil(t, cfg.ServePool)
+	assert.NotNil(t, cfg.Reregister)
+	assert.NotNil(t, cfg.OnHoldOff)
+	assert.Equal(t, uint32(0x2024), cfg.RoutingMark)
+
+	applyConfig(directExitConfig(false))
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(1), h.running.Load(), "one config without the flag keeps the exit")
+
+	applyConfig(directExitConfig(false))
+	eventually(t, func() bool { return h.running.Load() == 0 }, "two in a row stop RunExit")
+	last, _ = h.exit.state()
+	assert.False(t, last, "and disable the exit")
+	assert.Equal(t, int32(1), h.runs.Load(), "turning the flag off must not restart the widget")
+}
+
+func TestDirectExitNeedsAnAllowedCountry(t *testing.T) {
+	h := newExitHarness(t)
+	SetDirectExitAllowed(func() bool { return false })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	waitForRunning(t, manager, true, 2*time.Second)
+	eventually(t, h.rtcExit.Load, "the exit is offered to broflake, off")
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(0), h.runs.Load(), "no registration from a disallowed country")
+
+	SetDirectExitAllowed(func() bool { return true })
+	eventually(t, func() bool { return h.running.Load() == 1 }, "allowing the country starts RunExit")
+}
+
+func TestDirectExitNeverOnWithoutAnAllowedCheck(t *testing.T) {
+	h := newExitHarness(t)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	applyConfig(directExitConfig(true))
+	waitForRunning(t, manager, true, 2*time.Second)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(0), h.runs.Load())
+}
+
+func TestDirectExitClosesWithTheWidget(t *testing.T) {
+	h := newExitHarness(t)
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return h.running.Load() == 1 }, "RunExit should start")
+
+	require.NoError(t, Stop(context.Background()))
+	assert.Equal(t, int32(0), h.running.Load(), "Stop must end RunExit before it returns")
+	_, closed := h.exit.state()
+	assert.True(t, closed, "Stop must close the exit")
+}
+
+func TestNoDirectExitOnUnsupportedPlatforms(t *testing.T) {
+	h := newExitHarness(t)
+	directExitUnsupported = func() bool { return true }
+	var made atomic.Bool
+	newDirectExit = func(context.Context) (directExit, error) { made.Store(true); return h.exit, nil }
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	waitForRunning(t, manager, true, 2*time.Second)
+	time.Sleep(20 * time.Millisecond)
+	assert.False(t, made.Load())
+	assert.False(t, h.rtcExit.Load())
+	assert.Equal(t, int32(0), h.runs.Load())
+}
+
+func TestWidgetRunsWhenTheExitCantBeMade(t *testing.T) {
+	h := newExitHarness(t)
+	newDirectExit = func(context.Context) (directExit, error) { return nil, errors.New("no quic") }
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	waitForRunning(t, manager, true, 2*time.Second)
+	time.Sleep(20 * time.Millisecond)
+	assert.False(t, h.rtcExit.Load(), "no exit, so broflake relays as before")
+	assert.Equal(t, int32(0), h.runs.Load())
+}
+
+func TestExitHoldOffOutlivesAWidgetRun(t *testing.T) {
+	h := newExitHarness(t)
+	until := time.Now().Add(time.Hour).Truncate(time.Second)
+	runDirectExit = func(ctx context.Context, _ directExit, cfg node.ExitConfig) error {
+		h.mu.Lock()
+		h.cfgs = append(h.cfgs, cfg)
+		h.mu.Unlock()
+		h.runs.Add(1)
+		cfg.OnHoldOff(until)
+		<-ctx.Done()
+		return nil
+	}
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return h.runs.Load() == 1 }, "first run")
+
+	manager.stop()
+	manager.start()
+	eventually(t, func() bool { return h.runs.Load() == 2 }, "second run")
+	assert.True(t, h.lastCfg().NotBefore.Equal(until), "the next run must wait out the hold-off")
+}
+
+func TestServePoolChangeReregisters(t *testing.T) {
+	h := newExitHarness(t)
+	prevInterval := roomSyncInterval
+	roomSyncInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		roomSyncInterval = prevInterval
+		_ = settings.Set(settings.PeerServePoolKey, true)
+	})
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, false))
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return h.running.Load() == 1 }, "RunExit should start")
+	rereg := h.lastCfg().Reregister
+
+	require.NoError(t, settings.Set(settings.PeerServePoolKey, true))
+	select {
+	case <-rereg:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turning helping others on must re-register the exit")
+	}
+}
+
+func TestExitHeadersAreConfigNews(t *testing.T) {
+	require.NoError(t, settings.Set(settings.UserIDKey, int64(1234567890)))
+	h := http.Header{}
+	h.Set("X-Lantern-App", "lantern-box")
+	h.Set(rcommon.DeviceIDHeader, "set-by-runexit")
+	h.Set("Content-Type", "application/json")
+
+	exitHeaders(h)
+
+	assert.Equal(t, rcommon.Name, h.Get(rcommon.AppNameHeader), "lantern-cloud refuses lantern-box's app name in webrtc mode")
+	assert.Equal(t, "1234567890", h.Get(rcommon.UserIDHeader), "the same user ID config-new gets, for the flag's stickiness")
+	assert.Equal(t, rcommon.Platform, h.Get(rcommon.PlatformHeader))
+	assert.Equal(t, "set-by-runexit", h.Get(rcommon.DeviceIDHeader), "RunExit's device ID stays")
+	assert.Equal(t, "application/json", h.Get("Content-Type"))
+}

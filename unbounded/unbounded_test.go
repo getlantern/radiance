@@ -16,6 +16,7 @@ import (
 
 	"github.com/getlantern/broflake/clientcore"
 	C "github.com/getlantern/common"
+	"github.com/getlantern/lantern-box/node"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -79,6 +80,13 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 	require.NoError(t, settings.Set(settings.UnboundedKey, false))
 
 	prevManager := manager
+	prevNewExit, prevRunExit, prevUnsupported := newDirectExit, runDirectExit, directExitUnsupported
+	newDirectExit = func(context.Context) (directExit, error) { return &fakeExit{}, nil }
+	runDirectExit = func(ctx context.Context, _ directExit, _ node.ExitConfig) error {
+		<-ctx.Done()
+		return nil
+	}
+	directExitUnsupported = func() bool { return false }
 	prevWidget := newWidget
 	prevInit := initOnce
 	// armed: true so direct manager.start calls in tests don't bail on
@@ -104,6 +112,7 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 		}
 		manager = prevManager
 		newWidget = prevWidget
+		newDirectExit, runDirectExit, directExitUnsupported = prevNewExit, prevRunExit, prevUnsupported
 		initOnce = prevInit
 		_ = settings.Set(settings.UnboundedKey, false)
 	})
