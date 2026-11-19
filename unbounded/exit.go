@@ -23,10 +23,12 @@ import (
 // rather than relaying it to the egress server.
 const directExitFeature = "direct_exit"
 
-// directExitOffAfter is how many configs in a row must leave direct_exit off before a running
-// exit stops. lantern-cloud can drop the flag from one config when a lookup behind it fails, and
-// stopping ends every session the exit serves.
-const directExitOffAfter = 2
+// directExitOffDelay is how long direct_exit must stay off before a running exit stops.
+// lantern-cloud can drop the flag from one config when a lookup behind it fails, and stopping ends
+// every session the exit serves. It outlasts config-new's 10-minute poll, so the next fetch can
+// turn the flag back on first. It's a delay rather than a count of configs because config-new
+// sends no event for a config that hasn't changed. Tests shorten it.
+var directExitOffDelay = 15 * time.Minute
 
 // autoRedirectOutputMark is sing-tun's DefaultAutoRedirectOutputMark, which radiance's Linux tun
 // keeps (it sets auto_redirect with no output mark). The exit box's sockets carry it, so the
@@ -60,21 +62,31 @@ var runDirectExit = func(ctx context.Context, e directExit, cfg node.ExitConfig)
 	return node.RunExit(ctx, cfg)
 }
 
-// exitFlag is config-new's direct_exit, which turns on at once and off only after
-// directExitOffAfter configs in a row without it.
+// exitFlag is config-new's direct_exit, which turns on at once and off only once it has been off
+// for directExitOffDelay.
 type exitFlag struct {
-	on     bool
-	misses int
+	on bool
+	// offAt is when a pending off takes effect, zero when none is pending.
+	offAt time.Time
 }
 
-func (f *exitFlag) update(on bool) bool {
+// update records a config's direct_exit, and reports whether it started a pending off.
+func (f *exitFlag) update(on bool, now time.Time) bool {
 	if on {
-		f.on, f.misses = true, 0
+		f.on, f.offAt = true, time.Time{}
+		return false
+	}
+	if f.on && f.offAt.IsZero() {
+		f.offAt = now.Add(directExitOffDelay)
 		return true
 	}
-	f.misses++
-	if f.misses >= directExitOffAfter {
-		f.on = false
+	return false
+}
+
+// settle applies a pending off whose time has come, and reports whether the flag is on.
+func (f *exitFlag) settle(now time.Time) bool {
+	if f.on && !f.offAt.IsZero() && !now.Before(f.offAt) {
+		f.on, f.offAt = false, time.Time{}
 	}
 	return f.on
 }
@@ -121,7 +133,7 @@ func RecheckDirectExit() {
 
 // exitWantedLocked reports whether the exit should be on. Caller must hold m.mu.
 func (m *unboundedManager) exitWantedLocked() bool {
-	return m.exitFlag.on && m.exitAllowed != nil && m.exitAllowed()
+	return m.exitFlag.settle(time.Now()) && m.exitAllowed != nil && m.exitAllowed()
 }
 
 func (m *unboundedManager) exitWanted() bool {

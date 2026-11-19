@@ -60,6 +60,8 @@ type exitHarness struct {
 func newExitHarness(t *testing.T) *exitHarness {
 	t.Helper()
 	h := &exitHarness{exit: &fakeExit{}}
+	prevDelay := directExitOffDelay
+	t.Cleanup(func() { directExitOffDelay = prevDelay })
 	resetManager(t, func(_ *clientcore.BroflakeOptions, rtcOpt *clientcore.WebRTCOptions, _ *clientcore.EgressOptions) (widget, error) {
 		h.rtcExit.Store(rtcOpt.Exit != nil)
 		return &fakeWidget{}, nil
@@ -98,16 +100,23 @@ func eventually(t *testing.T, cond func() bool, msg string) {
 	require.Eventually(t, cond, 2*time.Second, 5*time.Millisecond, msg)
 }
 
-func TestExitFlagTurnsOnAtOnceAndOffAfterTwoMisses(t *testing.T) {
+func TestExitFlagTurnsOnAtOnceAndOffAfterTheDelay(t *testing.T) {
 	var f exitFlag
-	assert.False(t, f.update(false))
-	assert.True(t, f.update(true))
-	assert.True(t, f.update(false), "one config without direct_exit must not stop the exit")
-	assert.False(t, f.update(false), "the second in a row does")
-	assert.True(t, f.update(true))
-	assert.True(t, f.update(false))
-	assert.True(t, f.update(true), "a config with the flag resets the count")
-	assert.True(t, f.update(false))
+	now := time.Now()
+	assert.False(t, f.update(false, now), "an off flag has nothing to stop")
+	assert.False(t, f.settle(now))
+	assert.False(t, f.update(true, now))
+	assert.True(t, f.settle(now))
+
+	assert.True(t, f.update(false, now), "the first config without direct_exit starts the delay")
+	assert.False(t, f.update(false, now.Add(time.Minute)), "later ones don't restart it")
+	assert.True(t, f.settle(now.Add(directExitOffDelay-time.Second)), "the exit stays on through the delay")
+	assert.False(t, f.settle(now.Add(directExitOffDelay)), "and stops once it passes")
+
+	assert.False(t, f.update(true, now))
+	assert.True(t, f.update(false, now))
+	assert.False(t, f.update(true, now.Add(time.Minute)), "a config with the flag cancels the off")
+	assert.True(t, f.settle(now.Add(2*directExitOffDelay)))
 }
 
 func TestDirectExitRunsWhileTheFlagIsOn(t *testing.T) {
@@ -134,10 +143,13 @@ func TestDirectExitRunsWhileTheFlagIsOn(t *testing.T) {
 
 	applyConfig(directExitConfig(false))
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, int32(1), h.running.Load(), "one config without the flag keeps the exit")
+	assert.Equal(t, int32(1), h.running.Load(), "a config without the flag keeps the exit through the delay")
 
+	// config-new sends nothing more while the config stays the same, so the delay alone stops it.
+	directExitOffDelay = 50 * time.Millisecond
+	applyConfig(directExitConfig(true))
 	applyConfig(directExitConfig(false))
-	eventually(t, func() bool { return h.running.Load() == 0 }, "two in a row stop RunExit")
+	eventually(t, func() bool { return h.running.Load() == 0 }, "the delay passing stops RunExit")
 	last, _ = h.exit.state()
 	assert.False(t, last, "and disable the exit")
 	assert.Equal(t, int32(1), h.runs.Load(), "turning the flag off must not restart the widget")

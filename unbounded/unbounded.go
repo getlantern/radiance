@@ -710,7 +710,11 @@ func applyConfig(cfg config.Config) {
 		manager.lastCfg = &copied
 	}
 	manager.lastFeatureOn = cfg.Features[C.UNBOUNDED]
-	manager.exitFlag.update(cfg.Features[directExitFeature])
+	if manager.exitFlag.update(cfg.Features[directExitFeature], time.Now()) {
+		// Identical configs bring no further events, so the off comes from a timer. A stale
+		// one only re-checks.
+		time.AfterFunc(directExitOffDelay, RecheckDirectExit)
+	}
 	run := manager.exitRun
 	shouldRun := manager.shouldStart()
 	running := manager.cancel != nil
