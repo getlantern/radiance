@@ -619,7 +619,8 @@ var recheckDirectExit = unbounded.RecheckDirectExit
 // CountryCodeChanged reconciles what depends on this device's country after
 // it changes: the pairings-only route and the widget's direct exit run only
 // where it is allowed. The exit stops at once when the country becomes
-// unknown or censored, rather than at the next config.
+// unknown or censored, rather than at the next config, so this can wait for
+// the exit to tear down.
 func (r *LocalBackend) CountryCodeChanged() {
 	r.syncPairingRoute()
 	recheckDirectExit()

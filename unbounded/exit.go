@@ -30,7 +30,8 @@ const directExitOffAfter = 2
 
 // autoRedirectOutputMark is sing-tun's DefaultAutoRedirectOutputMark, which radiance's Linux tun
 // keeps (it sets auto_redirect with no output mark). The exit box's sockets carry it, so the
-// tun's nftables rules don't redirect exit traffic into the volunteer's own tunnel.
+// tun's nftables rules don't redirect exit traffic into the volunteer's own tunnel. Setting it
+// needs CAP_NET_ADMIN, which the Linux daemon has as root.
 const autoRedirectOutputMark = 0x2024
 
 // directExitUnsupported: on iOS the backend runs in the network extension, which can't hold the
@@ -108,7 +109,7 @@ func SetDirectExitAllowed(allowed func() bool) {
 }
 
 // RecheckDirectExit turns the running exit, if any, on or off to match the allowed check now,
-// as after this device's country changed.
+// as after this device's country changed. Turning it off waits for RunExit to tear down.
 func RecheckDirectExit() {
 	manager.mu.Lock()
 	run := manager.exitRun

@@ -256,6 +256,8 @@ func TestServePoolChangeReregisters(t *testing.T) {
 }
 
 func TestExitHeadersAreConfigNews(t *testing.T) {
+	prevUser := settings.GetInt64(settings.UserIDKey)
+	t.Cleanup(func() { _ = settings.Set(settings.UserIDKey, prevUser) })
 	require.NoError(t, settings.Set(settings.UserIDKey, int64(1234567890)))
 	h := http.Header{}
 	h.Set("X-Lantern-App", "lantern-box")

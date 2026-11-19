@@ -36,7 +36,7 @@
 3. **No direct exit on iOS.** The backend runs inside the network extension there, which can't hold a second sing-box (see `backend/peer_share.go`, `peerShareUnsupported`). The exit box is a second sing-box, so iOS volunteers keep relaying.
 4. **Same country gate as the pairings-only route.** The country must be known and not censored, with the override winning (`pairingRouteCountryAllowed`, backend/peer_pairings.go). `RunExit`'s doc asks for exactly this. The backend injects the check as `unbounded.SetDirectExitAllowed`, because `unbounded` can't import `backend`. Without one, the exit is never on.
 
-   On a first run, the backend saves the country from a config event only after `unbounded` has handled that same event. So the exit turns on at the next config fetch, not the first.
+   The backend also re-checks the exit whenever the saved country changes (`CountryCodeChanged` calls `unbounded.RecheckDirectExit`), so the exit turns on with the same config that set the country and stops at once when the country becomes unknown or censored. radiance stays on upstream quic-go (c44dd97). The exit's Hysteria2 runs on sagernet/quic-go, so lantern-box's quic-go fork replace isn't needed.
 5. **Debounce off, not on.** The exit turns on with the first config that has `direct_exit`. It turns off only after `directExitOffAfter` (2) configs in a row without it. lantern-cloud can drop the flag from a single config when a pairing lookup times out. Turning off ends every running session, so one bad fetch shouldn't do that.
 6. **Registration headers are config-new's.** `ExitConfig.Header` copies every header `common.NewRequestWithHeaders` sets onto the request, plus `X-Lantern-Feature-Override`, as `peer.API.do` does. That replaces lantern-box's `X-Lantern-App: lantern-box`, which lantern-cloud refuses with 400. It also sends `X-Lantern-User-Id` as `settings.GetString(UserIDKey)`, which formats the same base-10 string config-new's `ConfigRequest.UserID` carries, so the flag's stickiness agrees. `X-Lantern-Device-Id` is left as `RunExit` sets it, from `ExitConfig.DeviceID`, which is the same `settings.DeviceIDKey`.
 7. **The HTTP client is `bypassHTTPClient`.** `ExitConfig.HTTPClient`'s doc requires a client that dials around the VPN's tunnel. `RunExit` wraps it in its own same-origin guard.
@@ -54,7 +54,6 @@
 - After any `go get`, run `go mod tidy` and commit `go.mod` and `go.sum` together, in the same commit as the bump.
 - radiance's `replace` directives must match lantern-box v0.0.239's `go.mod`:
   - `github.com/sagernet/sing-box` => `github.com/getlantern/sing-box-minimal v1.14.2-lantern.3`;
-  - the quic-go fork `v0.62.1-unbounded`;
   - `outline-sdk/x v0.3.0-lantern.1`;
   - gvisor `sing-box-mod.1`.
 - Tests: `make test` (that is, `go test -v -tags "with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme" ./...`) must pass. So must `go test -race` on the touched packages with the same tags, and `go vet` with the same tags.
