@@ -38,8 +38,8 @@ type logUploadTarget struct {
 
 var setErrorHandlerOnce sync.Once
 
-// setErrorHandler logs OpenTelemetry's errors, such as failed exports, to the
-// log file only. otel's default handler writes them to the standard logger,
+// setErrorHandler logs OpenTelemetry's errors, such as failed exports, without
+// uploading them. otel's default handler writes them to the standard logger,
 // which slog.SetDefault routes into the log handler, so a failing log export
 // would upload its own failure.
 func setErrorHandler() {

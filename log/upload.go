@@ -35,11 +35,10 @@ func WithoutUpload(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noUploadKey{}, true)
 }
 
-// teeHandler passes each record to its local handler and, while an upload
-// handler is set, to that too. ops replays WithAttrs and WithGroup onto the
-// upload handler, which may be set after they were called.
 type teeHandler struct {
 	slog.Handler
+	// ops is replayed onto the upload handler, which may be set after
+	// WithAttrs and WithGroup ran.
 	ops []handlerOp
 }
 
@@ -79,8 +78,8 @@ func (h *teeHandler) WithGroup(name string) slog.Handler {
 	return &teeHandler{Handler: h.Handler.WithGroup(name), ops: append(slices.Clip(h.ops), handlerOp{group: name})}
 }
 
-// upload sends a redacted copy of r to sink. Its errors are dropped: logging
-// them would upload them too.
+// upload sends a redacted copy of r to sink and drops sink's error; export
+// failures surface through OpenTelemetry's error handler.
 func upload(ctx context.Context, sink slog.Handler, ops []handlerOp, r slog.Record) {
 	if ctx == nil {
 		ctx = context.Background()
