@@ -20,9 +20,7 @@ import (
 )
 
 // logShutdownTimeout bounds the final flush when log upload stops, which can
-// run on the settings IPC path. Shutdown does not take a caller's context: the
-// SDK skips closing the batch worker and exporter when shutdown starts on a
-// done context, and nothing would close them afterwards.
+// run on the settings IPC path.
 const logShutdownTimeout = 5 * time.Second
 
 // Guarded by initMutex.
@@ -100,6 +98,8 @@ func stopLogUploadLocked() error {
 		return nil
 	}
 	rlog.SetUploadHandler(nil)
+	// Not the caller's context: the SDK never closes the batch worker and
+	// exporter if Shutdown starts on a done one.
 	ctx, cancel := context.WithTimeout(context.Background(), logShutdownTimeout)
 	defer cancel()
 	err := logProvider.Shutdown(ctx)
