@@ -424,6 +424,54 @@ func sseWriter(w http.ResponseWriter) http.Flusher {
 	return flusher
 }
 
+// sseStateStream serves an SSE stream of current state. An E event only wakes the stream, and
+// wake-ups before the next frame coalesce into one. frame runs once after subscribing and again
+// on each wake-up; it returns false to send nothing. It returns when the request ends or a write
+// fails.
+func sseStateStream[E events.Event, F any](w http.ResponseWriter, r *http.Request, frame func() (F, bool)) {
+	flusher := sseWriter(w)
+	if flusher == nil {
+		return
+	}
+	wake := make(chan struct{}, 1)
+	sub := events.Subscribe(func(E) {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
+	defer sub.Unsubscribe()
+
+	send := func() error {
+		v, ok := frame()
+		if !ok {
+			return nil
+		}
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if send() != nil {
+		return
+	}
+	for {
+		select {
+		case <-wake:
+			if send() != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 /////////////
 //   VPN   //
 /////////////
@@ -581,44 +629,10 @@ func (s *localapi) peerStatusHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).PeerStatus())
 }
 
-// peerStatusEventsHandler streams peer.StatusEvent over SSE. The wire
-// payload is always the live snapshot from PeerStatus(), not the event's
-// captured value: the trigger below coalesces, so a burst of phases becomes
-// one wakeup and the captured value could be one the consumer never needed.
-// Reading the live snapshot when the trigger fires guarantees the SSE
-// consumer's last message reflects current state.
 func (s *localapi) peerStatusEventsHandler(w http.ResponseWriter, r *http.Request) {
-	flusher := sseWriter(w)
-	if flusher == nil {
-		return
-	}
-	trigger := make(chan struct{}, 1)
-	sub := events.Subscribe(func(_ peer.StatusEvent) {
-		select {
-		case trigger <- struct{}{}:
-		default:
-		}
+	sseStateStream[peer.StatusEvent](w, r, func() (peer.StatusEvent, bool) {
+		return peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()}, true
 	})
-	defer sub.Unsubscribe()
-
-	send := func() {
-		data, err := json.Marshal(peer.StatusEvent{Status: s.backend(r.Context()).PeerStatus()})
-		if err != nil {
-			return
-		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-	send() // replay current snapshot for subscribers attaching between events
-
-	for {
-		select {
-		case <-trigger:
-			send()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }
 
 // peerConnectionEventsHandler streams peer.ConnectionEvent over SSE for
@@ -751,78 +765,16 @@ func (s *localapi) serverAutoSelectedHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *http.Request) {
-	flusher := sseWriter(w)
-	if flusher == nil {
-		return
-	}
-	trigger := make(chan struct{}, 1)
-	sub := events.Subscribe(func(vpn.AutoSelectedEvent) {
-		select {
-		case trigger <- struct{}{}:
-		default:
-		}
-	})
-	defer sub.Unsubscribe()
-
-	// Each frame carries the selection read when it is sent, not the event's, so a queued event
-	// can't follow a newer selection. The first send reaches a subscriber that attached after the
-	// last change, which the change listener would never emit again.
-	send := func() {
+	sseStateStream[vpn.AutoSelectedEvent](w, r, func() (vpn.AutoSelectedEvent, bool) {
 		tag, err := s.backend(r.Context()).CurrentAutoSelectedServer()
-		if err != nil || tag == "" {
-			return
-		}
-		data, err := json.Marshal(vpn.AutoSelectedEvent{Selected: tag})
-		if err != nil {
-			return
-		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-	send()
-
-	for {
-		select {
-		case <-trigger:
-			send()
-		case <-r.Context().Done():
-			return
-		}
-	}
+		return vpn.AutoSelectedEvent{Selected: tag}, err == nil && tag != ""
+	})
 }
 
 func (s *localapi) serverSelectionEventsHandler(w http.ResponseWriter, r *http.Request) {
-	flusher := sseWriter(w)
-	if flusher == nil {
-		return
-	}
-	ch := make(chan []byte, 16)
-	sub := events.Subscribe(func(evt vpn.SelectionSavedEvent) {
-		data, err := json.Marshal(evt)
-		if err != nil {
-			return
-		}
-		select {
-		case ch <- data:
-		default:
-		}
+	sseStateStream[vpn.SelectionSavedEvent](w, r, func() (vpn.SelectionSavedEvent, bool) {
+		return vpn.SelectionSavedEvent{}, true
 	})
-	defer sub.Unsubscribe()
-	// Sent once subscribed, so a save the client could not hear, before it
-	// connected or while it reconnected, still prompts a read.
-	if data, err := json.Marshal(vpn.SelectionSavedEvent{}); err == nil {
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-	for {
-		select {
-		case data := <-ch:
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }
 
 func (s *localapi) serverURLTestEventsHandler(w http.ResponseWriter, r *http.Request) {
@@ -865,32 +817,12 @@ func (s *localapi) configUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// configEventsHandler streams a notification on every config.NewConfigEvent.
-// The payload is always "{}" — subscribers only need to know a change
-// occurred and fetch fresh state through the other GET endpoints, so we don't
-// serialize the (potentially large) full Config.
+// configEventsHandler streams "{}" on subscribe and after config changes. Subscribers fetch
+// fresh state through the GET endpoints, so the potentially large Config is not serialized.
 func (s *localapi) configEventsHandler(w http.ResponseWriter, r *http.Request) {
-	flusher := sseWriter(w)
-	if flusher == nil {
-		return
-	}
-	ch := make(chan struct{}, 16)
-	sub := events.Subscribe(func(evt config.NewConfigEvent) {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
+	sseStateStream[config.NewConfigEvent](w, r, func() (struct{}, bool) {
+		return struct{}{}, true
 	})
-	defer sub.Unsubscribe()
-	for {
-		select {
-		case <-ch:
-			fmt.Fprint(w, "data: {}\n\n")
-			flusher.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }
 
 ///////////////////////
@@ -1061,28 +993,9 @@ func (s *localapi) userMessageHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *localapi) userMessageEventsHandler(w http.ResponseWriter, r *http.Request) {
-	flusher := sseWriter(w)
-	if flusher == nil {
-		return
-	}
-	ch := make(chan struct{}, 1)
-	ch <- struct{}{}
-	sub := events.Subscribe(func(clientmessage.AvailableEvent) {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
+	sseStateStream[clientmessage.AvailableEvent](w, r, func() (struct{}, bool) {
+		return struct{}{}, true
 	})
-	defer sub.Unsubscribe()
-	for {
-		select {
-		case <-ch:
-			fmt.Fprint(w, "data: {}\n\n")
-			flusher.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }
 
 func (s *localapi) userMessageRefreshHandler(w http.ResponseWriter, r *http.Request) {

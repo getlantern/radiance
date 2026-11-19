@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/backend"
+	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/vpn"
 )
@@ -64,20 +65,50 @@ func (a *autoSelectedTunnel) CurrentAutoSelectedServer() (string, error) {
 	return tag, nil
 }
 
+func openStream(t *testing.T, b *backend.LocalBackend, endpoint string) *bufio.Reader {
+	t.Helper()
+	srv := httptest.NewServer(newLocalAPI(b, false))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+endpoint, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return bufio.NewReader(resp.Body)
+}
+
+func readFrame(t *testing.T, body *bufio.Reader) string {
+	t.Helper()
+	line, err := body.ReadString('\n')
+	require.NoError(t, err)
+	data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
+	require.True(t, ok, line)
+	_, err = body.ReadString('\n')
+	require.NoError(t, err)
+	return data
+}
+
+func readAutoSelected(t *testing.T, body *bufio.Reader) string {
+	t.Helper()
+	var evt vpn.AutoSelectedEvent
+	require.NoError(t, json.Unmarshal([]byte(readFrame(t, body)), &evt))
+	return evt.Selected
+}
+
+func TestConfigEventsStreamSendsOnSubscribe(t *testing.T) {
+	body := openStream(t, &backend.LocalBackend{}, configEventsEndpoint)
+	require.Equal(t, "{}", readFrame(t, body))
+	events.Emit(config.NewConfigEvent{})
+	require.Equal(t, "{}", readFrame(t, body))
+}
+
 func TestAutoSelectedEventsStream(t *testing.T) {
 	subscribe := func(t *testing.T, tun *autoSelectedTunnel) *bufio.Reader {
 		b := &backend.LocalBackend{}
 		b.SetLiveTunnelForTest(tun)
-		srv := httptest.NewServer(newLocalAPI(b, false))
-		t.Cleanup(srv.Close)
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		t.Cleanup(cancel)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+serverAutoSelectedEventsEndpoint, nil)
-		require.NoError(t, err)
-		resp, err := srv.Client().Do(req)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = resp.Body.Close() })
-		return bufio.NewReader(resp.Body)
+		return openStream(t, b, serverAutoSelectedEventsEndpoint)
 	}
 
 	t.Run("sends the current selection on subscribe and on each event", func(t *testing.T) {
@@ -100,19 +131,6 @@ func TestAutoSelectedEventsStream(t *testing.T) {
 		events.Emit(vpn.AutoSelectedEvent{Selected: "next"})
 		require.Equal(t, "next", readAutoSelected(t, body))
 	})
-}
-
-func readAutoSelected(t *testing.T, body *bufio.Reader) string {
-	t.Helper()
-	line, err := body.ReadString('\n')
-	require.NoError(t, err)
-	data, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
-	require.True(t, ok, line)
-	var evt vpn.AutoSelectedEvent
-	require.NoError(t, json.Unmarshal([]byte(data), &evt))
-	_, err = body.ReadString('\n')
-	require.NoError(t, err)
-	return evt.Selected
 }
 
 func TestSSERetryLoopResetsBackoffAfterStableStream(t *testing.T) {
