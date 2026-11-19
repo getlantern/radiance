@@ -114,6 +114,7 @@ func TestUpdateLogUploadFollowsSetting(t *testing.T) {
 		require.NoError(t, CloseContext(context.Background()))
 		settings.Reset()
 	})
+	require.NoError(t, settings.Set(settings.TelemetryKey, true))
 	require.NoError(t, settings.Set(settings.SendLogsToSigNozKey, true))
 
 	require.NoError(t, UpdateLogUpload())
@@ -129,6 +130,14 @@ func TestUpdateLogUploadFollowsSetting(t *testing.T) {
 	require.NoError(t, settings.Set(settings.SendLogsToSigNozKey, true))
 	require.NoError(t, UpdateLogUpload())
 	assert.NotNil(t, logProvider)
+
+	require.NoError(t, settings.Set(settings.TelemetryKey, false))
+	require.NoError(t, UpdateLogUpload())
+	assert.Nil(t, logProvider, "upload must stop when telemetry consent is withdrawn")
+	require.NoError(t, settings.Set(settings.TelemetryKey, true))
+	require.NoError(t, UpdateLogUpload())
+	assert.NotNil(t, logProvider)
+
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.NoError(t, CloseContext(canceled))

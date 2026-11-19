@@ -1039,12 +1039,13 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 		patchErr = settings.Patch(diff)
 	}
 	// A failed save still applies the live value, so the country route, the
-	// proxyless hedge and log upload follow it before the error returns: a
-	// retry would be an empty diff.
+	// proxyless hedge and log upload (which follows telemetry consent too)
+	// follow it before the error returns: a retry would be an empty diff.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
 	}
-	if _, ok := diff[settings.SendLogsToSigNozKey]; ok {
+	_, logUploadChanged := diff[settings.SendLogsToSigNozKey]
+	if _, consentChanged := diff[settings.TelemetryKey]; logUploadChanged || consentChanged {
 		if err := telemetry.UpdateLogUpload(); err != nil {
 			errs = errors.Join(errs, err)
 		}

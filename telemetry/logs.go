@@ -52,7 +52,7 @@ func setErrorHandler() {
 
 // UpdateLogUpload starts or stops uploading the log to match
 // [settings.SendLogsToSigNozKey]. Upload runs only while telemetry is
-// initialized with an endpoint.
+// initialized with an endpoint and [settings.TelemetryKey] is true.
 func UpdateLogUpload() error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
@@ -60,7 +60,7 @@ func UpdateLogUpload() error {
 }
 
 func applyLogUploadLocked() error {
-	if logTarget == nil || !settings.GetBool(settings.SendLogsToSigNozKey) {
+	if logTarget == nil || !settings.GetBool(settings.TelemetryKey) || !settings.GetBool(settings.SendLogsToSigNozKey) {
 		return stopLogUploadLocked()
 	}
 	if logProvider != nil {
