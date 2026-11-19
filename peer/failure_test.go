@@ -143,7 +143,7 @@ func TestClassifyStartFailure_ServerErrorAtVerifyIsNotTheRoutersFault(t *testing
 // Regression for a bug this classifier shipped with in review: a phase-keyed
 // fallback ("anything that fails while registering is a network problem")
 // reported a launch_cfg that failed our own abuse-rule check as "couldn't
-// reach Lantern's servers". validateAbuseRules runs after Register has already
+// reach Lantern's servers". peerrules.ValidateAbuseRules runs after Register has already
 // succeeded, so the phase still reads registering — position is not evidence.
 func TestClassifyStartFailure_PhaseAloneNeverNamesAFailure(t *testing.T) {
 	for _, phase := range []Phase{PhaseMappingPort, PhaseDetectingIP, PhaseRegistering, PhaseVerifying, PhaseStartingBox} {
