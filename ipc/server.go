@@ -755,31 +755,36 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 	if flusher == nil {
 		return
 	}
-	ch := make(chan []byte, 16)
-	sub := events.Subscribe(func(evt vpn.AutoSelectedEvent) {
-		data, err := json.Marshal(evt)
-		if err != nil {
-			return
-		}
+	trigger := make(chan struct{}, 1)
+	sub := events.Subscribe(func(vpn.AutoSelectedEvent) {
 		select {
-		case ch <- data:
+		case trigger <- struct{}{}:
 		default:
 		}
 	})
 	defer sub.Unsubscribe()
-	// The current selection is sent after subscribing: the change listener emits only on change,
-	// so a subscriber that attaches after the last change would otherwise never see it.
-	if tag, err := s.backend(r.Context()).CurrentAutoSelectedServer(); err == nil && tag != "" {
-		if data, err := json.Marshal(vpn.AutoSelectedEvent{Selected: tag}); err == nil {
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+
+	// Each frame carries the selection read when it is sent, not the event's, so a queued event
+	// can't follow a newer selection. The first send reaches a subscriber that attached after the
+	// last change, which the change listener would never emit again.
+	send := func() {
+		tag, err := s.backend(r.Context()).CurrentAutoSelectedServer()
+		if err != nil || tag == "" {
+			return
 		}
+		data, err := json.Marshal(vpn.AutoSelectedEvent{Selected: tag})
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
 	}
+	send()
+
 	for {
 		select {
-		case data := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+		case <-trigger:
+			send()
 		case <-r.Context().Done():
 			return
 		}

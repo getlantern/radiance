@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"testing/synctest"
@@ -33,19 +34,40 @@ func (d eofAfter) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// autoSelectedTunnel reports a fixed auto selection; its other methods are
-// the nil VPNClient's and must not be called.
+// autoSelectedTunnel reports a settable auto selection and signals each read;
+// its other methods are the nil VPNClient's and must not be called.
 type autoSelectedTunnel struct {
 	*vpn.VPNClient
-	tag string
+	mu    sync.Mutex
+	tag   string
+	reads chan struct{}
 }
 
-func (a autoSelectedTunnel) CurrentAutoSelectedServer() (string, error) { return a.tag, nil }
+func newAutoSelectedTunnel(tag string) *autoSelectedTunnel {
+	return &autoSelectedTunnel{tag: tag, reads: make(chan struct{}, 1)}
+}
 
-func TestAutoSelectedEventsStreamSendsCurrentOnSubscribe(t *testing.T) {
-	subscribe := func(t *testing.T, current string) *bufio.Reader {
+func (a *autoSelectedTunnel) set(tag string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tag = tag
+}
+
+func (a *autoSelectedTunnel) CurrentAutoSelectedServer() (string, error) {
+	a.mu.Lock()
+	tag := a.tag
+	a.mu.Unlock()
+	select {
+	case a.reads <- struct{}{}:
+	default:
+	}
+	return tag, nil
+}
+
+func TestAutoSelectedEventsStream(t *testing.T) {
+	subscribe := func(t *testing.T, tun *autoSelectedTunnel) *bufio.Reader {
 		b := &backend.LocalBackend{}
-		b.SetLiveTunnelForTest(autoSelectedTunnel{tag: current})
+		b.SetLiveTunnelForTest(tun)
 		srv := httptest.NewServer(newLocalAPI(b, false))
 		t.Cleanup(srv.Close)
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -58,35 +80,24 @@ func TestAutoSelectedEventsStreamSendsCurrentOnSubscribe(t *testing.T) {
 		return bufio.NewReader(resp.Body)
 	}
 
-	t.Run("current selection", func(t *testing.T) {
-		body := subscribe(t, "fastest")
+	t.Run("sends the current selection on subscribe and on each event", func(t *testing.T) {
+		tun := newAutoSelectedTunnel("fastest")
+		body := subscribe(t, tun)
 		require.Equal(t, "fastest", readAutoSelected(t, body))
-		events.Emit(vpn.AutoSelectedEvent{Selected: "next"})
+
+		tun.set("next")
+		events.Emit(vpn.AutoSelectedEvent{Selected: "stale"})
 		require.Equal(t, "next", readAutoSelected(t, body))
 	})
 
-	t.Run("no selection", func(t *testing.T) {
-		// Emit until the handler has subscribed, which can be after the
-		// response headers arrive. The first frame must be an emitted one,
-		// not a snapshot.
-		stop := make(chan struct{})
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			for {
-				events.Emit(vpn.AutoSelectedEvent{Selected: "next"})
-				select {
-				case <-stop:
-					return
-				case <-time.After(10 * time.Millisecond):
-				}
-			}
-		}()
-		t.Cleanup(func() {
-			close(stop)
-			<-done
-		})
-		body := subscribe(t, "")
+	t.Run("sends nothing without a selection", func(t *testing.T) {
+		tun := newAutoSelectedTunnel("")
+		body := subscribe(t, tun)
+		// The first read happens after the handler subscribes.
+		<-tun.reads
+
+		tun.set("next")
+		events.Emit(vpn.AutoSelectedEvent{Selected: "next"})
 		require.Equal(t, "next", readAutoSelected(t, body))
 	})
 }
@@ -108,30 +119,36 @@ func TestSSERetryLoopResetsBackoffAfterStableStream(t *testing.T) {
 	const failures = 20
 	tests := []struct {
 		name      string
-		streamFor time.Duration
+		accept    bool
+		lasts     time.Duration
 		wantReset bool
 	}{
-		{name: "stable stream", streamFor: 2 * sseStableAfter, wantReset: true},
-		{name: "immediately closed stream", streamFor: 0, wantReset: false},
+		{name: "stable stream", accept: true, lasts: 2 * sseStableAfter, wantReset: true},
+		{name: "immediately closed stream", accept: true, lasts: 0, wantReset: false},
+		{name: "slow failed connect", accept: false, lasts: 2 * sseStableAfter, wantReset: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
+				refused := &net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}
 				var attempts []time.Time
 				c := newClient()
 				c.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
 					attempts = append(attempts, time.Now())
 					switch n := len(attempts); {
 					case n <= failures:
-						return nil, &net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}
-					case n == failures+1:
+						return nil, refused
+					case n == failures+1 && tt.accept:
 						return &http.Response{
 							StatusCode: http.StatusOK,
-							Body:       io.NopCloser(eofAfter(tt.streamFor)),
+							Body:       io.NopCloser(eofAfter(tt.lasts)),
 							Header:     make(http.Header),
 						}, nil
+					case n == failures+1:
+						time.Sleep(tt.lasts)
+						return nil, refused
 					default:
 						cancel()
 						return nil, context.Canceled
@@ -141,7 +158,7 @@ func TestSSERetryLoopResetsBackoffAfterStableStream(t *testing.T) {
 				require.ErrorIs(t, c.sseRetryLoop(ctx, "/test/events", func([]byte) {}), context.Canceled)
 				require.Len(t, attempts, failures+2)
 
-				wait := attempts[failures+1].Sub(attempts[failures]) - tt.streamFor
+				wait := attempts[failures+1].Sub(attempts[failures]) - tt.lasts
 				if tt.wantReset {
 					// First backoff step: 10ms with ±20% jitter.
 					require.LessOrEqual(t, wait, 12*time.Millisecond)
