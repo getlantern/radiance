@@ -420,6 +420,7 @@ func sseWriter(w http.ResponseWriter) http.Flusher {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 	return flusher
 }
 
@@ -766,6 +767,14 @@ func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *htt
 		}
 	})
 	defer sub.Unsubscribe()
+	// The current selection is sent after subscribing: the change listener emits only on change,
+	// so a subscriber that attaches after the last change would otherwise never see it.
+	if tag, err := s.backend(r.Context()).CurrentAutoSelectedServer(); err == nil && tag != "" {
+		if data, err := json.Marshal(vpn.AutoSelectedEvent{Selected: tag}); err == nil {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 	for {
 		select {
 		case data := <-ch:

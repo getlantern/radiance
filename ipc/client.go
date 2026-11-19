@@ -784,13 +784,22 @@ func (c *Client) ReportIssue(ctx context.Context, issueType issue.IssueType, des
 // streams //
 /////////////
 
+// sseStableAfter is how long an attempt, connect included, must last before it resets the retry
+// backoff. Resetting on every successful connect would let a server that accepts and then
+// immediately closes drive a tight loop.
+const sseStableAfter = time.Second
+
 // sseRetryLoop runs sseStream in a retry loop until ctx is cancelled.
 func (c *Client) sseRetryLoop(ctx context.Context, endpoint string, handler func([]byte)) error {
 	bo := common.NewBackoff(0, 30*time.Second)
 	for ctx.Err() == nil {
+		start := time.Now()
 		err := c.sseStream(ctx, endpoint, handler)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if time.Since(start) >= sseStableAfter {
+			bo.Reset()
 		}
 		// silently ignore IPC not running errors, since they are expected when the daemon is not running.
 		// prevent spamming the logs with errors until the daemon starts.
