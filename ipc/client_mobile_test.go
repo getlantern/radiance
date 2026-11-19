@@ -106,3 +106,31 @@ func TestSelectionSavedEventsLocalCallsOnSubscribe(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// The fallback backend applies its cached config before ConfigEvents subscribes, so the
+// handler runs once on subscribing, then once per applied config.
+func TestConfigEventsLocalCallsOnSubscribe(t *testing.T) {
+	client := newClient()
+	client.localOnly = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := make(chan struct{}, 4)
+	done := make(chan struct{})
+	go func() {
+		_ = client.ConfigEvents(ctx, func() { calls <- struct{}{} })
+		close(done)
+	}()
+	waitCall := func() {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler not called")
+		}
+	}
+	waitCall()
+	events.Emit(backend.ConfigAppliedEvent{})
+	waitCall()
+	cancel()
+	<-done
+}

@@ -90,13 +90,15 @@ func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestComp
 	})
 }
 
-// ConfigEvents calls handler each time the stream connects or reconnects and
-// after a config change is applied; events carry no payload. Blocks until ctx is
-// cancelled.
+// ConfigEvents calls handler on subscribing, each time the stream connects or
+// reconnects, and after a config change is applied; events carry no payload. Blocks
+// until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	// The bus subscription is not redundant with SSE: when the tunnel process is down,
 	// the client's fallback LocalBackend emits ConfigAppliedEvents on the in-process bus.
 	events.SubscribeContext(ctx, func(backend.ConfigAppliedEvent) { handler() })
+	// A config applied before the subscription, such as the fallback's cached one, went unheard.
+	handler()
 	if c.localOnly {
 		<-ctx.Done()
 		return ctx.Err()
