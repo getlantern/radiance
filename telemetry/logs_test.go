@@ -90,6 +90,7 @@ func TestUploadedLogsRedactAddresses(t *testing.T) {
 		"by_peer", map[string]int{v4Port: 1, "helper-0123456789ab": 2},
 		v6Port, true,
 	)
+	logger.Info("ungrouped", v4Port, true, "helper-0123456789ab", 1)
 
 	text := exp.exportedText()
 	require.NotEmpty(t, text)

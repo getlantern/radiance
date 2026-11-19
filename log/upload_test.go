@@ -112,7 +112,9 @@ func TestUploadSurvivesNilPointerError(t *testing.T) {
 
 	got := sink.got()
 	require.Len(t, got, 2)
-	assert.Equal(t, "<nil>", recordAttrs(got[0])["error"].String())
+	nilAttr := recordAttrs(got[0])["error"]
+	assert.Equal(t, slog.KindString, nilAttr.Kind())
+	assert.Equal(t, "<nil>", nilAttr.String())
 	assert.Equal(t, "dial https://example.com/", recordAttrs(got[1])["error"].String())
 }
 
