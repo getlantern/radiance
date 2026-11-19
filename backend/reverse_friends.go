@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 
@@ -58,6 +59,15 @@ func loadReverseFriends(path string) *reverseFriends {
 		if lbA.IsHelperTag(friend) {
 			f.byPairing[h] = friend
 		}
+	}
+	// A file saved before it took fileperm.File may be unreadable to the
+	// other process sharing the data dir, such as the app when the root
+	// network extension saved it on macOS. Saving it again replaces it with
+	// one in the right mode. Only a regular file is replaced: the rename
+	// replaces a link itself, but a link's target is left alone.
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() &&
+		info.Mode().Perm() != fileperm.File && runtime.GOOS != "windows" {
+		f.saveLocked()
 	}
 	return f
 }
@@ -159,7 +169,9 @@ func (f *reverseFriends) saveLocked() {
 	}
 	data, err := json.Marshal(f.byPairing)
 	if err == nil {
-		err = atomicfile.WriteFile(f.path, data, fileperm.Private)
+		// fileperm.File, not Private: on macOS the app and the root network
+		// extension both read it from the shared data dir.
+		err = atomicfile.WriteFile(f.path, data, fileperm.File)
 	}
 	if err != nil {
 		slog.Warn("Could not save the reverse friends", "error", err)
