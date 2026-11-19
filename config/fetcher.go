@@ -87,10 +87,12 @@ func (f *fetcher) fetchConfig(ctx context.Context, preferred common.PreferredLoc
 	// Advertise OutlineSmartDialer only with lantern-box v0.0.219 or later,
 	// whose outline outbound accepts the server's smart-dialer config and
 	// dials a rule-set download's host.
-	// Advertise UnboundedDirectExit because our lantern-box (v0.0.239 or
-	// later) has the Unbounded outbound's direct_exit option, which the
-	// server withholds from older clients: sing-box rejects unknown fields.
-	capabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer, C.CapabilityUnboundedDirectExit}
+	// Advertise UnboundedDirectExitObfs because our lantern-box (v0.0.240 or
+	// later) takes only Salamander-obfuscated direct exits and its
+	// direct_exit option accepts pool_allowlist, which the server withholds
+	// from older clients: sing-box rejects unknown fields. The server no
+	// longer sends anything for the plain UnboundedDirectExit.
+	capabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer, C.CapabilityUnboundedDirectExitObfs}
 	if f.hasGlobalIPv6() {
 		capabilities = append(capabilities, C.CapabilityIPv6)
 	}

@@ -29,7 +29,7 @@ func TestFetchConfig(t *testing.T) {
 	privateKey, err := wgtypes.GenerateKey()
 	require.NoError(t, err)
 
-	baseCapabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer, C.CapabilityUnboundedDirectExit}
+	baseCapabilities := []string{C.CapabilityNonSelectableOutbounds, C.CapabilityUnboundedTuning, C.CapabilityOutlineSmartDialer, C.CapabilityUnboundedDirectExitObfs}
 	tests := []struct {
 		name               string
 		preferredServerLoc *C.ServerLocation
@@ -122,10 +122,12 @@ func TestFetchConfig(t *testing.T) {
 				"the server matches this exact wire string")
 			assert.Contains(t, confReq.Capabilities, C.CapabilityOutlineSmartDialer,
 				"the server sends the proxyless rule-set detour only to clients advertising this")
-			assert.Equal(t, "unbounded_direct_exit", C.CapabilityUnboundedDirectExit,
+			assert.Equal(t, "unbounded_direct_exit_obfs", C.CapabilityUnboundedDirectExitObfs,
 				"the server matches this exact wire string")
-			assert.Contains(t, confReq.Capabilities, C.CapabilityUnboundedDirectExit,
+			assert.Contains(t, confReq.Capabilities, C.CapabilityUnboundedDirectExitObfs,
 				"the server sends the Unbounded outbound's direct_exit only to clients advertising this")
+			assert.NotContains(t, confReq.Capabilities, C.CapabilityUnboundedDirectExit,
+				"the server sends nothing for the pre-obfuscation capability")
 			if tt.preferredServerLoc != nil {
 				assert.Equal(t, tt.preferredServerLoc, confReq.PreferredLocation)
 			}
