@@ -107,6 +107,7 @@ func TestRedactLogValueRedactsAuthCredentials(t *testing.T) {
 		"proxy said basic dXNlcjpwYXNz rejected": "proxy said basic [REDACTED] rejected",
 		"Basic Zm9vOmJhcjE= sent":                "Basic [REDACTED] sent",
 		"basic auth failed":                      "basic auth failed",
+		"Basic authentication failed":            "Basic [REDACTED] failed",
 		"Authorization: bearer abcdefgh":         "Authorization: bearer [REDACTED]",
 	} {
 		assert.Equal(t, want, redactLogValue(attribute.StringValue(in)).AsString())
