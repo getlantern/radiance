@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/getlantern/broflake/common/helperticket"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -758,7 +759,7 @@ func TestDirectExitAllowed(t *testing.T) {
 	directExitNeedsVPN = func() bool { return true }
 	assert.False(t, r.directExitAllowed(), "Android with no platform interface")
 	r.vpnClient = vpn.NewVPNClient(t.TempDir(), nil, fakeVPNPlatform{})
-	assert.False(t, r.directExitAllowed(), "Android with the VPN disconnected")
+	assert.False(t, r.directExitAllowed(), "Android with the VPN disconnected (or, on this host, no shared platform)")
 
 	for _, status := range []vpn.VPNStatus{vpn.Disconnected, vpn.Connecting, vpn.Disconnecting, vpn.Restarting, vpn.ErrorStatus} {
 		assert.False(t, directExitVPNReady(true, status), status)
@@ -792,19 +793,24 @@ func TestVPNStatusRechecksTheDirectExit(t *testing.T) {
 	assert.Equal(t, int32(2), rechecks.Load(), "only the Android backend listens")
 }
 
+type boxPlatformSource struct{ p libbox.PlatformInterface }
+
+func (s boxPlatformSource) BoxPlatform() libbox.PlatformInterface { return s.p }
+
 // TestDirectExitPlatformOnlyOnAndroid checks that only Android hands the widget's direct exit a
 // platform interface. Elsewhere, macOS's network extension included, the exit boxes keep
 // sing-box's own interface monitor.
 func TestDirectExitPlatformOnlyOnAndroid(t *testing.T) {
 	prev := directExitNeedsVPN
 	t.Cleanup(func() { directExitNeedsVPN = prev })
-	vc := vpn.NewVPNClient(t.TempDir(), nil, fakeVPNPlatform{})
+	platform := fakeVPNPlatform{}
+	vc := boxPlatformSource{p: platform}
 
 	directExitNeedsVPN = func() bool { return false }
 	assert.Nil(t, directExitPlatform(vc), "a platform interface outside Android stays the VPN's")
 
 	directExitNeedsVPN = func() bool { return true }
-	assert.NotNil(t, directExitPlatform(vc))
-	assert.Same(t, vc.BoxPlatform(), directExitPlatform(vc), "Android's exit shares the VPN's monitor")
-	assert.Nil(t, directExitPlatform(vpn.NewVPNClient(t.TempDir(), nil, nil)))
+	assert.Equal(t, platform, directExitPlatform(vc), "Android's exit shares the VPN's platform")
+	assert.Nil(t, directExitPlatform(boxPlatformSource{}))
+	assert.Nil(t, directExitPlatform(vpn.NewVPNClient(t.TempDir(), nil, platform)), "the VPN shares its platform only on Android")
 }

@@ -621,11 +621,16 @@ var recheckDirectExit = unbounded.RecheckDirectExit
 // then. Tests replace it.
 var directExitNeedsVPN = common.IsAndroid
 
+// boxPlatformer is the part of vpn.VPNClient directExitPlatform reads.
+type boxPlatformer interface {
+	BoxPlatform() libbox.PlatformInterface
+}
+
 // directExitPlatform is the platform interface the widget's direct exit boxes
 // run on: the VPN's, shared, only where directExitNeedsVPN (Android). Elsewhere
 // it is nil, and the exit boxes keep sing-box's own interface monitor, even on
 // macOS, whose network extension has a platform interface too.
-func directExitPlatform(vc *vpn.VPNClient) libbox.PlatformInterface {
+func directExitPlatform(vc boxPlatformer) libbox.PlatformInterface {
 	if !directExitNeedsVPN() {
 		return nil
 	}

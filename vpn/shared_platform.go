@@ -13,17 +13,22 @@ import (
 // one monitor listener (Android's is a single global one), so sharedPlatform registers its own
 // and fans each update out to every box's. Everything else passes through.
 //
+// Each platform monitor start gets its own forwarder, and only the current one's updates count:
+// the platform can still deliver an update queued for a closed monitor, and Android drops those
+// only for a listener other than the current one.
+//
 // Listeners may start or close monitors from an update, except from one the platform delivers
 // inside its own start or close call.
 type sharedPlatform struct {
 	libbox.PlatformInterface
-	fanOut libbox.InterfaceUpdateListener
 
 	// opMu orders the platform's monitor start and close. started is guarded by it.
 	opMu    sync.Mutex
 	started bool
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// current is the forwarder of the platform's running monitor, nil with none.
+	current   *platformFanOut
 	listeners []*monitorListener
 	seq       uint64
 	// last is the latest default interface update, nil before one or once the monitor closes.
@@ -31,13 +36,11 @@ type sharedPlatform struct {
 }
 
 // newSharedPlatform wraps p, or returns nil for a nil p.
-func newSharedPlatform(p libbox.PlatformInterface) libbox.PlatformInterface {
+func newSharedPlatform(p libbox.PlatformInterface) *sharedPlatform {
 	if p == nil {
 		return nil
 	}
-	s := &sharedPlatform{PlatformInterface: p}
-	s.fanOut = platformFanOut{s}
-	return s
+	return &sharedPlatform{PlatformInterface: p}
 }
 
 type interfaceUpdate struct {
@@ -72,15 +75,20 @@ func (s *sharedPlatform) StartDefaultInterfaceMonitor(listener libbox.InterfaceU
 	entry := &monitorListener{l: listener}
 	s.opMu.Lock()
 	s.mu.Lock()
+	var fwd *platformFanOut
 	if !s.started {
-		// An update can land after the last close. A fresh monitor waits for the platform's.
-		s.last = nil
+		// A fresh monitor waits for the platform's first update.
+		fwd = &platformFanOut{s: s}
+		s.current, s.last = fwd, nil
 	}
 	s.listeners = append(s.listeners, entry)
 	seq, last := s.seq, s.last
 	s.mu.Unlock()
-	if !s.started {
-		if err := s.PlatformInterface.StartDefaultInterfaceMonitor(s.fanOut); err != nil {
+	if fwd != nil {
+		if err := s.PlatformInterface.StartDefaultInterfaceMonitor(fwd); err != nil {
+			s.mu.Lock()
+			s.current = nil
+			s.mu.Unlock()
 			s.removeListener(listener)
 			s.opMu.Unlock()
 			return err
@@ -104,15 +112,28 @@ func (s *sharedPlatform) CloseDefaultInterfaceMonitor(listener libbox.InterfaceU
 	}
 	s.mu.Lock()
 	empty := len(s.listeners) == 0
+	fwd := s.current
 	if empty {
-		s.last = nil
+		s.current, s.last = nil, nil
 	}
 	s.mu.Unlock()
 	if !empty || !s.started {
 		return nil
 	}
 	s.started = false
-	return s.PlatformInterface.CloseDefaultInterfaceMonitor(s.fanOut)
+	return s.PlatformInterface.CloseDefaultInterfaceMonitor(fwd)
+}
+
+// forwardsTo reports whether listener is the running monitor's forwarder and monitor is one of
+// the listeners it forwards to, so a platform handing back the listener it holds names monitor.
+func (s *sharedPlatform) forwardsTo(listener, monitor libbox.InterfaceUpdateListener) bool {
+	fwd, ok := listener.(*platformFanOut)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fwd == s.current && slices.ContainsFunc(s.listeners, func(m *monitorListener) bool { return m.l == monitor })
 }
 
 func (s *sharedPlatform) removeListener(listener libbox.InterfaceUpdateListener) bool {
@@ -127,14 +148,14 @@ func (s *sharedPlatform) removeListener(listener libbox.InterfaceUpdateListener)
 	return true
 }
 
-// platformFanOut is sharedPlatform's one listener on the platform's monitor.
+// platformFanOut is sharedPlatform's listener on one start of the platform's monitor. Once that
+// monitor closes, it forwards nothing.
 type platformFanOut struct{ s *sharedPlatform }
 
-func (f platformFanOut) UpdateDefaultInterface(name string, index int32, isExpensive, isConstrained bool) {
+func (f *platformFanOut) UpdateDefaultInterface(name string, index int32, isExpensive, isConstrained bool) {
 	u := interfaceUpdate{name: name, index: index, isExpensive: isExpensive, isConstrained: isConstrained}
 	f.s.mu.Lock()
-	if len(f.s.listeners) == 0 {
-		// The monitor closed after the platform sent this.
+	if f.s.current != f {
 		f.s.mu.Unlock()
 		return
 	}
@@ -148,8 +169,12 @@ func (f platformFanOut) UpdateDefaultInterface(name string, index int32, isExpen
 	}
 }
 
-func (f platformFanOut) UpdateNetworkPath(networkPath string) {
+func (f *platformFanOut) UpdateNetworkPath(networkPath string) {
 	f.s.mu.Lock()
+	if f.s.current != f {
+		f.s.mu.Unlock()
+		return
+	}
 	listeners := slices.Clone(f.s.listeners)
 	f.s.mu.Unlock()
 	for _, m := range listeners {

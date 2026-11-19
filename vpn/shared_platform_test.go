@@ -193,10 +193,45 @@ func TestSharedPlatformListenerReentry(t *testing.T) {
 }
 
 func TestVPNClientSharesBoxPlatform(t *testing.T) {
-	c := NewVPNClient(t.TempDir(), nil, &fakeVPNPlatform{})
+	prev := sharePlatformMonitor
+	t.Cleanup(func() { sharePlatformMonitor = prev })
+
+	sharePlatformMonitor = func() bool { return false }
+	platform := &fakeVPNPlatform{}
+	c := NewVPNClient(t.TempDir(), nil, platform)
+	assert.Same(t, platform, c.boxPlatform, "off Android the tunnel runs on the platform itself")
+	assert.Nil(t, c.BoxPlatform(), "and shares nothing")
+
+	sharePlatformMonitor = func() bool { return true }
+	c = NewVPNClient(t.TempDir(), nil, platform)
 	p := c.BoxPlatform()
 	require.NotNil(t, p)
 	assert.Same(t, p, c.BoxPlatform(), "one shared platform per client")
+	assert.Same(t, c.shared, c.boxPlatform, "the tunnel runs on the shared platform")
+}
+
+func TestSharedPlatformIgnoresARetiredForwarder(t *testing.T) {
+	under := &monitorPlatform{}
+	s := newSharedPlatform(under)
+	a := &recordingListener{}
+	require.NoError(t, s.StartDefaultInterfaceMonitor(a))
+	old := under.listener
+	require.NoError(t, s.CloseDefaultInterfaceMonitor(a))
+
+	b, c := &recordingListener{}, &recordingListener{}
+	require.NoError(t, s.StartDefaultInterfaceMonitor(b))
+	assert.NotSame(t, old, under.listener, "each platform start gets its own forwarder")
+	// An update the platform queued for the closed monitor.
+	old.UpdateDefaultInterface("stale0", 9, false, false)
+	old.UpdateNetworkPath("stale")
+	require.NoError(t, s.StartDefaultInterfaceMonitor(c))
+	assert.Empty(t, b.got())
+	assert.Empty(t, b.paths)
+	assert.Empty(t, c.got(), "nor is the stale update cached for a later listener")
+
+	under.update("wlan0", 1)
+	assert.Equal(t, []string{"wlan0"}, b.got())
+	assert.Equal(t, []string{"wlan0"}, c.got())
 }
 
 type fakeVPNPlatform struct{ libbox.PlatformInterface }
