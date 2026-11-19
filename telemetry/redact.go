@@ -2,12 +2,14 @@ package telemetry
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/getlantern/radiance/internal/logsafe"
 	"github.com/getlantern/radiance/internal/redact"
 )
 
@@ -212,10 +214,10 @@ func redactValue(kv attribute.KeyValue, helper bool) (attribute.KeyValue, bool) 
 	return kv, false
 }
 
-// redactingLogExporter redacts every IP address, with any port, and every
-// helper tag in each log record's body and attribute values before export.
-// Unlike a span, a log line rarely says which outbound its addresses belong
-// to, so none is kept.
+// redactingLogExporter applies [redactLogText] to each log record's body and
+// attribute values, and [redactText] to attribute keys, before export. It
+// redacts every address, since a log line, unlike a span, rarely says which
+// outbound its addresses belong to.
 type redactingLogExporter struct {
 	sdklog.Exporter
 }
@@ -243,11 +245,11 @@ func (e redactingLogExporter) Export(ctx context.Context, records []sdklog.Recor
 func redactLogValue(v attribute.Value) attribute.Value {
 	switch v.Type() {
 	case attribute.STRING:
-		return attribute.StringValue(redactText(v.AsString(), true))
+		return attribute.StringValue(redactLogText(v.AsString()))
 	case attribute.STRINGSLICE:
 		vs := v.AsStringSlice()
 		for i, s := range vs {
-			vs[i] = redactText(s, true)
+			vs[i] = redactLogText(s)
 		}
 		return attribute.StringSliceValue(vs)
 	case attribute.SLICE:
@@ -264,6 +266,23 @@ func redactLogValue(v attribute.Value) attribute.Value {
 		return attribute.MapValue(kvs...)
 	}
 	return v
+}
+
+var (
+	// bearerCredential matches any token after "Bearer".
+	bearerCredential = regexp.MustCompile(`(?i)\b(bearer)(\s+)[A-Za-z0-9._~+/=-]+`)
+	// basicCredential matches a token after "Basic" that holds a digit, "+",
+	// "/" or "=", or runs to 12 or more base64 characters. Short prose such as
+	// "basic auth" is left alone, but a long word such as "authentication" is
+	// redacted too.
+	basicCredential = regexp.MustCompile(`(?i)\b(basic)(\s+)(?:[A-Za-z0-9._~+/-]*[0-9+/=][A-Za-z0-9._~+/=-]*|[A-Za-z0-9+/]{12,}={0,2})`)
+)
+
+// redactLogText is redactText for log records, which also carry credentials
+// in free text, such as an Authorization header a dial error quotes.
+func redactLogText(s string) string {
+	s = bearerCredential.ReplaceAllString(redactText(s, true), "${1}${2}"+logsafe.Redacted)
+	return basicCredential.ReplaceAllString(s, "${1}${2}"+logsafe.Redacted)
 }
 
 func redactLogKeyValue(kv attribute.KeyValue) attribute.KeyValue {

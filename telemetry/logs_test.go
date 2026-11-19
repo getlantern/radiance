@@ -101,6 +101,18 @@ func TestUploadedLogsRedactAddresses(t *testing.T) {
 	assert.Contains(t, joined, "dial [REDACTED] and [REDACTED] via [REDACTED] and [REDACTED] failed")
 }
 
+func TestRedactLogValueRedactsAuthCredentials(t *testing.T) {
+	for in, want := range map[string]string{
+		"Authorization: Bearer s3cr3t-token":     "Authorization: Bearer [REDACTED]",
+		"proxy said basic dXNlcjpwYXNz rejected": "proxy said basic [REDACTED] rejected",
+		"Basic Zm9vOmJhcjE= sent":                "Basic [REDACTED] sent",
+		"basic auth failed":                      "basic auth failed",
+		"Authorization: bearer abcdefgh":         "Authorization: bearer [REDACTED]",
+	} {
+		assert.Equal(t, want, redactLogValue(attribute.StringValue(in)).AsString())
+	}
+}
+
 func TestRedactLogValueKeepsNonAddressText(t *testing.T) {
 	v := redactLogValue(attribute.StringValue("connected to example.com in 1.5s"))
 	assert.Equal(t, "connected to example.com in 1.5s", v.AsString())
