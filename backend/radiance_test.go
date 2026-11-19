@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -76,6 +77,28 @@ func TestApplyCurrentConfigLoadsCachedServers(t *testing.T) {
 	assert.Equal(t, "shadowsocks", server.Type)
 	assert.Equal(t, "Shanghai", server.Location.City)
 	assert.Equal(t, "CN", server.Location.CountryCode)
+}
+
+func TestConfigAppliedEventFollowsServerUpdate(t *testing.T) {
+	t.Setenv("RADIANCE_COUNTRY", "US")
+	dataDir := t.TempDir()
+	writeCachedConfig(t, dataDir, cachedConfig())
+	r := newCachedConfigBackend(t, dataDir)
+	// The debug hook runs inside Emit, so it sees the state at the moment of the emit;
+	// a subscriber would run later, after applyConfig returned.
+	var emitted, found bool
+	events.SetEmitDebugLogger(func(eventType reflect.Type, _ int) {
+		if eventType == reflect.TypeFor[ConfigAppliedEvent]() {
+			emitted = true
+			_, found = r.GetServerByTag("cached-out")
+		}
+	})
+	t.Cleanup(func() { events.SetEmitDebugLogger(nil) })
+
+	r.applyCurrentConfig()
+
+	require.True(t, emitted, "no ConfigAppliedEvent")
+	assert.True(t, found, "servers must be applied before ConfigAppliedEvent")
 }
 
 func TestApplyCurrentConfigKeepsHardDemotedServers(t *testing.T) {
@@ -2014,6 +2037,12 @@ func (f *fakeHelperTunnel) CurrentAutoSelectedServer() (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.autoChoice, nil
+}
+
+func (f *fakeHelperTunnel) AnnouncedAutoSelectedServer() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.autoChoice
 }
 
 func (f *fakeHelperTunnel) CurrentSelectedServer() (string, error) {

@@ -58,7 +58,8 @@ func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestComp
 }
 
 // ConfigEvents calls handler each time the stream connects or reconnects and
-// after config changes; events carry no payload. Blocks until ctx is cancelled.
+// after a config change is applied; events carry no payload. Blocks until ctx is
+// cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
 	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { handler() })
 }

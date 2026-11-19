@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/getlantern/radiance/backend"
-	"github.com/getlantern/radiance/config"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/vpn"
 )
@@ -35,34 +34,42 @@ func (d eofAfter) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// autoSelectedTunnel reports a settable auto selection and signals each read;
-// its other methods are the nil VPNClient's and must not be called.
+// autoSelectedTunnel reports a settable current and announced auto selection and
+// signals each announced read; its other methods are the nil VPNClient's and must
+// not be called.
 type autoSelectedTunnel struct {
 	*vpn.VPNClient
-	mu    sync.Mutex
-	tag   string
-	reads chan struct{}
+	mu        sync.Mutex
+	current   string
+	announced string
+	reads     chan struct{}
 }
 
-func newAutoSelectedTunnel(tag string) *autoSelectedTunnel {
-	return &autoSelectedTunnel{tag: tag, reads: make(chan struct{}, 1)}
+func newAutoSelectedTunnel(current, announced string) *autoSelectedTunnel {
+	return &autoSelectedTunnel{current: current, announced: announced, reads: make(chan struct{}, 1)}
 }
 
-func (a *autoSelectedTunnel) set(tag string) {
+func (a *autoSelectedTunnel) announce(tag string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.tag = tag
+	a.announced = tag
 }
 
 func (a *autoSelectedTunnel) CurrentAutoSelectedServer() (string, error) {
 	a.mu.Lock()
-	tag := a.tag
+	defer a.mu.Unlock()
+	return a.current, nil
+}
+
+func (a *autoSelectedTunnel) AnnouncedAutoSelectedServer() string {
+	a.mu.Lock()
+	tag := a.announced
 	a.mu.Unlock()
 	select {
 	case a.reads <- struct{}{}:
 	default:
 	}
-	return tag, nil
+	return tag
 }
 
 func openStream(t *testing.T, b *backend.LocalBackend, endpoint string) *bufio.Reader {
@@ -100,7 +107,7 @@ func readAutoSelected(t *testing.T, body *bufio.Reader) string {
 func TestConfigEventsStreamSendsOnSubscribe(t *testing.T) {
 	body := openStream(t, &backend.LocalBackend{}, configEventsEndpoint)
 	require.Equal(t, "{}", readFrame(t, body))
-	events.Emit(config.NewConfigEvent{})
+	events.Emit(backend.ConfigAppliedEvent{})
 	require.Equal(t, "{}", readFrame(t, body))
 }
 
@@ -111,23 +118,30 @@ func TestAutoSelectedEventsStream(t *testing.T) {
 		return openStream(t, b, serverAutoSelectedEventsEndpoint)
 	}
 
-	t.Run("sends the current selection on subscribe and on each event", func(t *testing.T) {
-		tun := newAutoSelectedTunnel("fastest")
+	// The tunnel's current pick differs from the announced one in each case: the
+	// stream must send only what the change listener announced, or a pick that
+	// reverts before the listener's next poll would never be corrected.
+	t.Run("sends the announced selection on subscribe and on each event", func(t *testing.T) {
+		tun := newAutoSelectedTunnel("unannounced", "fastest")
 		body := subscribe(t, tun)
 		require.Equal(t, "fastest", readAutoSelected(t, body))
 
-		tun.set("next")
+		tun.announce("next")
 		events.Emit(vpn.AutoSelectedEvent{Selected: "stale"})
 		require.Equal(t, "next", readAutoSelected(t, body))
 	})
 
-	t.Run("sends nothing without a selection", func(t *testing.T) {
-		tun := newAutoSelectedTunnel("")
+	t.Run("sends nothing before an announcement", func(t *testing.T) {
+		tun := newAutoSelectedTunnel("unannounced", "")
 		body := subscribe(t, tun)
 		// The first read happens after the handler subscribes.
-		<-tun.reads
+		select {
+		case <-tun.reads:
+		case <-time.After(5 * time.Second):
+			t.Fatal("handler never read the announced selection")
+		}
 
-		tun.set("next")
+		tun.announce("next")
 		events.Emit(vpn.AutoSelectedEvent{Selected: "next"})
 		require.Equal(t, "next", readAutoSelected(t, body))
 	})

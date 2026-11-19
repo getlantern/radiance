@@ -766,8 +766,8 @@ func (s *localapi) serverAutoSelectedHandler(w http.ResponseWriter, r *http.Requ
 
 func (s *localapi) serverAutoSelectedEventsHandler(w http.ResponseWriter, r *http.Request) {
 	sseStateStream[vpn.AutoSelectedEvent](w, r, func() (vpn.AutoSelectedEvent, bool) {
-		tag, err := s.backend(r.Context()).CurrentAutoSelectedServer()
-		return vpn.AutoSelectedEvent{Selected: tag}, err == nil && tag != ""
+		tag := s.backend(r.Context()).AnnouncedAutoSelectedServer()
+		return vpn.AutoSelectedEvent{Selected: tag}, tag != ""
 	})
 }
 
@@ -817,10 +817,10 @@ func (s *localapi) configUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// configEventsHandler streams "{}" on subscribe and after config changes. Subscribers fetch
-// fresh state through the GET endpoints, so the potentially large Config is not serialized.
+// configEventsHandler streams "{}" on subscribe and after a config change is applied. Subscribers
+// fetch fresh state through the GET endpoints, so the potentially large Config is not serialized.
 func (s *localapi) configEventsHandler(w http.ResponseWriter, r *http.Request) {
-	sseStateStream[config.NewConfigEvent](w, r, func() (struct{}, bool) {
+	sseStateStream[backend.ConfigAppliedEvent](w, r, func() (struct{}, bool) {
 		return struct{}{}, true
 	})
 }

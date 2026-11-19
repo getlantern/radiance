@@ -794,7 +794,7 @@ func (c *Client) sseRetryLoop(ctx context.Context, endpoint string, handler func
 	bo := common.NewBackoff(0, 30*time.Second)
 	for ctx.Err() == nil {
 		var opened time.Time
-		err := c.sseStream(ctx, endpoint, handler, func() { opened = time.Now() })
+		err := c.sseStream(ctx, endpoint, handler, func(at time.Time) { opened = at })
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

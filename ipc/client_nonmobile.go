@@ -93,8 +93,8 @@ func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) erro
 
 // sseStream connects to an SSE endpoint and calls handler for each event data line.
 // Blocks until ctx is cancelled or the connection is closed. onOpen, if non-nil, is called once
-// the server accepts the stream, before any event.
-func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]byte), onOpen func()) error {
+// the server accepts the stream, before any event, with the time its response arrived.
+func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]byte), onOpen func(time.Time)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("create SSE request: %w", err)
@@ -108,6 +108,7 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 		}
 		return fmt.Errorf("SSE connect %s: %w", endpoint, err)
 	}
+	responded := time.Now()
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -115,7 +116,7 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 		return &Error{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 	if onOpen != nil {
-		onOpen()
+		onOpen(responded)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

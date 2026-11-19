@@ -90,6 +90,10 @@ type VPNClient struct {
 
 	status atomic.Value // VPNStatus
 
+	// announcedAuto is the auto selection AutoSelectedChangeListener last emitted. It is stored
+	// before the emit, so a reader woken by the event sees that selection or a newer one.
+	announcedAuto atomic.Pointer[string]
+
 	// connObserver, if set, receives connection-close pushes. It outlives individual tunnels
 	// and is re-attached to each tunnel's tracker at connect.
 	connObserver ConnObserver
@@ -902,6 +906,20 @@ func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
 	return outbound.(adapter.OutboundGroup).Now(), nil
 }
 
+// AnnouncedAutoSelectedServer returns the auto selection the last AutoSelectedEvent from
+// [VPNClient.AutoSelectedChangeListener] carried, or "" when the tunnel is not running or the
+// running listener has emitted nothing. It can lag [VPNClient.CurrentAutoSelectedServer] by one
+// poll, but a change it does not show is always followed by an event.
+func (c *VPNClient) AnnouncedAutoSelectedServer() string {
+	if !c.isOpen() {
+		return ""
+	}
+	if tag := c.announcedAuto.Load(); tag != nil {
+		return *tag
+	}
+	return ""
+}
+
 // CurrentSelectedServer returns the tag of the currently selected outbound in
 // whichever selector mode (auto or manual) the tunnel is in. Returns an empty
 // string with a nil error when the tunnel is not running.
@@ -946,10 +964,17 @@ const (
 	steadyPollInterval = 10 * time.Second
 )
 
+func (c *VPNClient) announceAutoSelected(tag string) {
+	c.announcedAuto.Store(&tag)
+	events.Emit(AutoSelectedEvent{Selected: tag})
+}
+
 // AutoSelectedChangeListener polls for auto-selection changes and emits an
 // AutoSelectedEvent whenever the selection differs from the previous value.
 // It performs an initial rapid poll to catch the first selection soon after
-// tunnel connect, then settles into a slower steady-state interval.
+// tunnel connect, then settles into a slower steady-state interval. Each emitted
+// selection is what [VPNClient.AnnouncedAutoSelectedServer] returns until the next
+// one, and is cleared when the listener stops.
 func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -961,6 +986,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 		tick := time.NewTimer(rapidPollInterval)
 		defer func() {
 			tick.Stop()
+			c.announcedAuto.Store(nil)
 			close(done)
 		}()
 	initial:
@@ -978,7 +1004,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectedEvent{Selected: curr})
+					c.announceAutoSelected(curr)
 					if curr != "" {
 						break initial
 					}
@@ -1009,7 +1035,7 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectedEvent{Selected: curr})
+					c.announceAutoSelected(curr)
 				}
 				tick.Reset(steadyPollInterval)
 			}
