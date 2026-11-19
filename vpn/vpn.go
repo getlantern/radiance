@@ -76,6 +76,9 @@ type VPNClient struct {
 	// boxCtx is tunnel's sing-box context, read lock-free so the Unbounded
 	// widget's sockets never wait out a connect.
 	boxCtx atomic.Pointer[context.Context]
+	// currentTunnel is tunnel, read lock-free so an SSE frame never waits out a connect or
+	// restart.
+	currentTunnel atomic.Pointer[tunnel]
 
 	platformIfce PlatformInterface
 	// boxPlatform is the platform the tunnel's box runs on: platformIfce, or on Android shared.
@@ -724,6 +727,7 @@ func (c *VPNClient) BoxPlatform() libbox.PlatformInterface {
 // setTunnelLocked makes t the running tunnel. The caller must hold c.mu.
 func (c *VPNClient) setTunnelLocked(t *tunnel) {
 	c.tunnel = t
+	c.currentTunnel.Store(t)
 	if t == nil {
 		c.boxCtx.Store(nil)
 		return
@@ -886,20 +890,45 @@ type URLTestCompleteEvent struct {
 }
 
 func (c *VPNClient) CurrentAutoSelectedServer() (string, error) {
+	_, tag, err := c.currentAutoSelected()
+	return tag, err
+}
+
+// currentAutoSelected also returns the tunnel the selection was read from, nil when the tunnel
+// is not running.
+func (c *VPNClient) currentAutoSelected() (*tunnel, string, error) {
 	if !c.isOpen() {
 		c.logger.Log(nil, log.LevelTrace, "Tunnel not running, cannot get auto selections")
-		return "", nil
+		return nil, "", nil
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.tunnel == nil {
-		return "", ErrTunnelNotConnected
+		return nil, "", ErrTunnelNotConnected
 	}
 	outbound, loaded := c.tunnel.outboundMgr.Outbound(AutoSelectTag)
 	if !loaded {
-		return "", fmt.Errorf("auto select group not found")
+		return nil, "", fmt.Errorf("auto select group not found")
 	}
-	return outbound.(adapter.OutboundGroup).Now(), nil
+	return c.tunnel, outbound.(adapter.OutboundGroup).Now(), nil
+}
+
+// AnnouncedAutoSelectedServer returns the auto selection [VPNClient.AutoSelectedChangeListener]
+// last announced for the running tunnel, or "" when the tunnel is not running or nothing has
+// been announced for it. It can lag [VPNClient.CurrentAutoSelectedServer] by one poll, but a
+// change it does not show is always followed by an event.
+func (c *VPNClient) AnnouncedAutoSelectedServer() string {
+	if !c.isOpen() {
+		return ""
+	}
+	t := c.currentTunnel.Load()
+	if t == nil {
+		return ""
+	}
+	if tag := t.announcedAuto.Load(); tag != nil {
+		return *tag
+	}
+	return ""
 }
 
 // CurrentSelectedServer returns the tag of the currently selected outbound in
@@ -946,10 +975,21 @@ const (
 	steadyPollInterval = 10 * time.Second
 )
 
+// announceAutoSelected records tag on t, the tunnel it was read from, so a listener still
+// running after a reconnect can't attach an earlier tunnel's selection to the new one.
+func announceAutoSelected(t *tunnel, tag string) {
+	if t != nil {
+		t.announcedAuto.Store(&tag)
+	}
+	events.Emit(AutoSelectedEvent{Selected: tag})
+}
+
 // AutoSelectedChangeListener polls for auto-selection changes and emits an
 // AutoSelectedEvent whenever the selection differs from the previous value.
 // It performs an initial rapid poll to catch the first selection soon after
-// tunnel connect, then settles into a slower steady-state interval.
+// tunnel connect, then settles into a slower steady-state interval. Each emitted
+// selection is what [VPNClient.AnnouncedAutoSelectedServer] returns for the tunnel
+// it was read from until the next one.
 func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -971,14 +1011,14 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 			case <-initialDeadline.C:
 				break initial
 			case <-tick.C:
-				curr, err := c.CurrentAutoSelectedServer()
+				t, curr, err := c.currentAutoSelected()
 				if err != nil {
 					tick.Reset(rapidPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectedEvent{Selected: curr})
+					announceAutoSelected(t, curr)
 					if curr != "" {
 						break initial
 					}
@@ -1002,14 +1042,14 @@ func (c *VPNClient) AutoSelectedChangeListener(ctx context.Context) <-chan struc
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				curr, err := c.CurrentAutoSelectedServer()
+				t, curr, err := c.currentAutoSelected()
 				if err != nil {
 					tick.Reset(steadyPollInterval)
 					continue
 				}
 				if curr != prev {
 					prev = curr
-					events.Emit(AutoSelectedEvent{Selected: curr})
+					announceAutoSelected(t, curr)
 				}
 				tick.Reset(steadyPollInterval)
 			}

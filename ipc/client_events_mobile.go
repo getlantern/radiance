@@ -5,9 +5,10 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
 	"github.com/getlantern/radiance/account"
-	"github.com/getlantern/radiance/config"
+	"github.com/getlantern/radiance/backend"
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/peer"
 	"github.com/getlantern/radiance/unbounded"
@@ -90,17 +91,28 @@ func (c *Client) URLTestEvents(ctx context.Context, handler func(vpn.URLTestComp
 	})
 }
 
-// ConfigEvents streams config-updated notifications. Each event signals that
-// config changed and carries no payload. Blocks until ctx is cancelled.
+// ConfigEvents calls handler on subscribing, each time the stream connects or
+// reconnects, and after a config change is applied; events carry no payload. Blocks
+// until ctx is cancelled.
 func (c *Client) ConfigEvents(ctx context.Context, handler func()) error {
+	// The bus worker, this goroutine and the SSE stream all call handler; serialized, each call
+	// reads state no older than the last one's.
+	var mu sync.Mutex
+	notify := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		handler()
+	}
 	// The bus subscription is not redundant with SSE: when the tunnel process is down,
-	// the client's fallback LocalBackend emits NewConfigEvents on the in-process bus.
-	events.SubscribeContext(ctx, func(config.NewConfigEvent) { handler() })
+	// the client's fallback LocalBackend emits ConfigAppliedEvents on the in-process bus.
+	events.SubscribeContext(ctx, func(backend.ConfigAppliedEvent) { notify() })
+	// A config applied before the subscription, such as the fallback's cached one, went unheard.
+	notify()
 	if c.localOnly {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { handler() })
+	return c.sseRetryLoop(ctx, configEventsEndpoint, func([]byte) { notify() })
 }
 
 // UserMessageEvents streams pending-message notifications until ctx is canceled.

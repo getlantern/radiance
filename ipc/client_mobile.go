@@ -245,7 +245,7 @@ func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) erro
 				case merged <- string(data):
 				default:
 				}
-			})
+			}, nil)
 			// Server unavailable or disconnected; wait before retrying.
 			select {
 			case <-time.After(500 * time.Millisecond):
@@ -266,8 +266,9 @@ func (c *Client) TailLogs(ctx context.Context, handler func(rlog.LogEntry)) erro
 }
 
 // sseStream connects to an SSE endpoint and calls handler for each event data line.
-// Blocks until ctx is cancelled or the connection is closed.
-func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]byte)) error {
+// Blocks until ctx is cancelled or the connection is closed. onOpen, if non-nil, is called once
+// the server accepts the stream, before any event, with the time its response arrived.
+func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]byte), onOpen func(time.Time)) error {
 	if c.localOnly {
 		return ErrIPCNotRunning
 	}
@@ -284,12 +285,16 @@ func (c *Client) sseStream(ctx context.Context, endpoint string, handler func([]
 		}
 		return fmt.Errorf("SSE connect %s: %w", endpoint, err)
 	}
+	responded := time.Now()
 	c.stopLocal() // IPC is reachable; shut down local backend if still running
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return &Error{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	if onOpen != nil {
+		onOpen(responded)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

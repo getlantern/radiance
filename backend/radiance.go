@@ -518,6 +518,12 @@ func (r *LocalBackend) prewarmOfflineURLTests(source string) {
 	}
 }
 
+// ConfigAppliedEvent is emitted once a config's servers and outbounds are applied to the
+// backend, so reads made on it see that config. [config.NewConfigEvent] can arrive before then.
+type ConfigAppliedEvent struct {
+	events.Event
+}
+
 // applyConfig updates the runtime server state from a config snapshot. The
 // proxyless switch follows the handler's current config, not cfg.
 func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
@@ -546,6 +552,7 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 		slog.Error("updating non-selectable outbounds", "error", err)
 	}
 	r.applyProxyless()
+	events.Emit(ConfigAppliedEvent{})
 }
 
 // proxylessFeature is the server-side flag for proxyless access. It is the
@@ -1393,6 +1400,7 @@ func (r *LocalBackend) RevokePrivateServerInvite(ip string, port int, accessToke
 type liveTunnel interface {
 	Connect(ctx context.Context, boxOptions vpn.BoxOptions) error
 	CurrentAutoSelectedServer() (string, error)
+	AnnouncedAutoSelectedServer() string
 	CurrentSelectedServer() (string, error)
 	ManualSelection() (string, bool)
 	SelectedPersonalProxy() string
@@ -2400,6 +2408,12 @@ func (r *LocalBackend) CurrentAutoSelectedServer() (string, error) {
 	return r.liveTunnel().CurrentAutoSelectedServer()
 }
 
+// AnnouncedAutoSelectedServer returns the auto selection the running tunnel's change listener
+// last announced, or "" when there is none.
+func (r *LocalBackend) AnnouncedAutoSelectedServer() string {
+	return r.liveTunnel().AnnouncedAutoSelectedServer()
+}
+
 func (r *LocalBackend) startSessionAutoSelectListener() {
 	events.SubscribeContext(r.ctx, func(evt vpn.AutoSelectedEvent) {
 		if evt.Selected == "" || r.vpnClient.Status() != vpn.Connected {
@@ -2601,6 +2615,12 @@ func (r *LocalBackend) UseHelperPairingKeysForTest(p *helper.PairingKeys) {
 // IPC route, which cannot build a full backend.
 func (r *LocalBackend) SetHelperRelayForTest(rl *helper.Relayer) {
 	r.helperRelay = rl
+}
+
+// SetLiveTunnelForTest replaces the tunnel every backend tunnel call goes to,
+// for tests of the IPC route, which cannot build a full backend.
+func (r *LocalBackend) SetLiveTunnelForTest(t liveTunnel) {
+	r.live = t
 }
 
 //////////////////

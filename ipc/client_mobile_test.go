@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func TestRemoteClientNeverCreatesFallback(t *testing.T) {
 		_, err := client.do(context.Background(), http.MethodGet, "/settings", nil)
 		require.ErrorIs(t, err, ErrIPCNotRunning)
 		require.ErrorIs(t, err, connectionErr)
-		err = client.sseStream(context.Background(), "/config/events", func([]byte) {})
+		err = client.sseStream(context.Background(), "/config/events", func([]byte) {}, nil)
 		require.ErrorIs(t, err, ErrIPCNotRunning)
 		require.ErrorIs(t, err, connectionErr)
 		require.Nil(t, client.localapi)
@@ -73,7 +74,7 @@ func TestRemoteClientNeverCreatesFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "{}", string(body))
 	var event string
-	require.NoError(t, client.sseStream(context.Background(), "/config/events", func(data []byte) { event = string(data) }))
+	require.NoError(t, client.sseStream(context.Background(), "/config/events", func(data []byte) { event = string(data) }, nil))
 	require.Equal(t, "connected", event)
 	client.Close()
 	require.Nil(t, client.localapi)
@@ -103,6 +104,76 @@ func TestSelectionSavedEventsLocalCallsOnSubscribe(t *testing.T) {
 	waitCall()
 	events.Emit(vpn.SelectionSavedEvent{})
 	waitCall()
+	cancel()
+	<-done
+}
+
+// The fallback backend applies its cached config before ConfigEvents subscribes, so the
+// handler runs once on subscribing, then once per applied config.
+func TestConfigEventsLocalCallsOnSubscribe(t *testing.T) {
+	client := newClient()
+	client.localOnly = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := make(chan struct{}, 4)
+	done := make(chan struct{})
+	go func() {
+		_ = client.ConfigEvents(ctx, func() { calls <- struct{}{} })
+		close(done)
+	}()
+	waitCall := func() {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler not called")
+		}
+	}
+	waitCall()
+	events.Emit(backend.ConfigAppliedEvent{})
+	waitCall()
+	cancel()
+	<-done
+}
+
+// The bus worker must not call handler while the on-subscribe call is still running.
+func TestConfigEventsLocalCallsDoNotOverlap(t *testing.T) {
+	client := newClient()
+	client.localOnly = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var first atomic.Bool
+	first.Store(true)
+	done := make(chan struct{})
+	go func() {
+		_ = client.ConfigEvents(ctx, func() {
+			entered <- struct{}{}
+			if first.CompareAndSwap(true, false) {
+				<-release
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("on-subscribe call not made")
+	}
+
+	events.Emit(backend.ConfigAppliedEvent{})
+	select {
+	case <-entered:
+		t.Fatal("handler ran while the on-subscribe call was in progress")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event call not made after the on-subscribe call returned")
+	}
 	cancel()
 	<-done
 }

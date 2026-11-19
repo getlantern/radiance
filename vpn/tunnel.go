@@ -61,6 +61,10 @@ type tunnel struct {
 	selectionHistorySeed map[string]lbA.TagHistory
 	logFactory           sblog.ObservableFactory
 
+	// announcedAuto is the auto selection AutoSelectedChangeListener last emitted for this tunnel.
+	// It is stored before the emit, so a reader woken by the event sees that selection or a newer one.
+	announcedAuto atomic.Pointer[string]
+
 	dataPath string
 
 	// optsMap is a map of current outbound/endpoint options JSON, used to deduplicate when adding
