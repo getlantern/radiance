@@ -270,3 +270,25 @@ func TestExitHeadersAreConfigNews(t *testing.T) {
 	assert.Equal(t, "set-by-runexit", h.Get(rcommon.DeviceIDHeader), "RunExit's device ID stays")
 	assert.Equal(t, "application/json", h.Get("Content-Type"))
 }
+
+func TestRecheckDirectExitFollowsTheAllowedCheck(t *testing.T) {
+	h := newExitHarness(t)
+	var allowed atomic.Bool
+	allowed.Store(true)
+	SetDirectExitAllowed(allowed.Load)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return h.running.Load() == 1 }, "RunExit should start from an allowed country")
+
+	allowed.Store(false)
+	RecheckDirectExit()
+	assert.Equal(t, int32(0), h.running.Load(), "the re-check stops RunExit before it returns")
+	last, _ := h.exit.state()
+	assert.False(t, last, "and disables the exit")
+
+	allowed.Store(true)
+	RecheckDirectExit()
+	eventually(t, func() bool { return h.running.Load() == 1 }, "an allowed country starts RunExit again")
+	assert.Equal(t, int32(2), h.runs.Load())
+}

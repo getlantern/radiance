@@ -612,10 +612,17 @@ func setCountryCodeFromConfig(cfg *config.Config) bool {
 	return settings.GetString(settings.CountryCodeKey) == cfg.Country
 }
 
+// recheckDirectExit re-checks the widget's direct exit against the country
+// gate. Tests replace it.
+var recheckDirectExit = unbounded.RecheckDirectExit
+
 // CountryCodeChanged reconciles what depends on this device's country after
-// it changes: the pairings-only route runs only where it is allowed.
+// it changes: the pairings-only route and the widget's direct exit run only
+// where it is allowed. The exit stops at once when the country becomes
+// unknown or censored, rather than at the next config.
 func (r *LocalBackend) CountryCodeChanged() {
 	r.syncPairingRoute()
+	recheckDirectExit()
 }
 
 // serverListFromConfig converts config outbounds and endpoints into managed

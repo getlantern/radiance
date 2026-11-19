@@ -103,6 +103,14 @@ func exitHeaders(h http.Header) {
 func SetDirectExitAllowed(allowed func() bool) {
 	manager.mu.Lock()
 	manager.exitAllowed = allowed
+	manager.mu.Unlock()
+	RecheckDirectExit()
+}
+
+// RecheckDirectExit turns the running exit, if any, on or off to match the allowed check now,
+// as after this device's country changed.
+func RecheckDirectExit() {
+	manager.mu.Lock()
 	run := manager.exitRun
 	manager.mu.Unlock()
 	if run != nil {

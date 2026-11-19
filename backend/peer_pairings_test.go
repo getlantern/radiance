@@ -722,3 +722,20 @@ func TestPairingRouteCountryAllowed(t *testing.T) {
 		})
 	}
 }
+
+// TestCountryCodeChangedRechecksTheDirectExit checks that a country change, here through PatchSettings, re-checks the
+// widget's direct exit at once instead of waiting for the next config.
+func TestCountryCodeChangedRechecksTheDirectExit(t *testing.T) {
+	var rechecks atomic.Int32
+	prev := recheckDirectExit
+	recheckDirectExit = func() { rechecks.Add(1) }
+	t.Cleanup(func() { recheckDirectExit = prev })
+	r := newPairingRouteTestBackend(t, &fakePeerController{})
+
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.CountryCodeKey: "CN"}))
+	waitPeerWork(t, r)
+	assert.Equal(t, int32(1), rechecks.Load())
+
+	r.CountryCodeChanged()
+	assert.Equal(t, int32(2), rechecks.Load())
+}
