@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,9 @@ import (
 	"github.com/getlantern/broflake/clientcore"
 	C "github.com/getlantern/common"
 	"github.com/getlantern/lantern-box/node"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -305,4 +309,86 @@ func TestRecheckDirectExitFollowsTheAllowedCheck(t *testing.T) {
 	RecheckDirectExit()
 	eventually(t, func() bool { return h.running.Load() == 1 }, "an allowed country starts RunExit again")
 	assert.Equal(t, int32(2), h.runs.Load())
+}
+
+// exitPlatform is a platform interface for the exit's boxes: enough of one for sing-box to build
+// a box with auto_detect_interface on it, counting its default interface monitor's starts.
+type exitPlatform struct {
+	libbox.PlatformInterface
+	monitorStarts atomic.Int32
+}
+
+func (*exitPlatform) LocalDNSTransport() libbox.LocalDNSTransport { return nil }
+func (*exitPlatform) UseProcFS() bool                             { return false }
+func (*exitPlatform) UsePlatformAutoDetectInterfaceControl() bool { return false }
+func (*exitPlatform) UnderNetworkExtension() bool                 { return false }
+func (*exitPlatform) IncludeAllNetworks() bool                    { return false }
+func (*exitPlatform) RegisterMyInterface(string)                  {}
+func (*exitPlatform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
+	return nil, errors.New("no interfaces")
+}
+func (p *exitPlatform) StartDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error {
+	p.monitorStarts.Add(1)
+	return nil
+}
+func (*exitPlatform) CloseDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error { return nil }
+
+// runContexts records the context each RunExit is handed.
+func runContexts(t *testing.T) func() []context.Context {
+	var mu sync.Mutex
+	var ctxs []context.Context
+	runDirectExit = func(ctx context.Context, _ directExit, _ node.ExitConfig) error {
+		mu.Lock()
+		ctxs = append(ctxs, ctx)
+		mu.Unlock()
+		<-ctx.Done()
+		return nil
+	}
+	return func() []context.Context {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(ctxs)
+	}
+}
+
+func TestDirectExitRunsOnThePlatformInterface(t *testing.T) {
+	newExitHarness(t)
+	ctxs := runContexts(t)
+	platform := &exitPlatform{}
+	SetPlatformInterface(platform)
+	var allowed atomic.Bool
+	allowed.Store(true)
+	SetDirectExitAllowed(allowed.Load)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return len(ctxs()) == 1 }, "RunExit should start")
+	allowed.Store(false)
+	RecheckDirectExit()
+	allowed.Store(true)
+	RecheckDirectExit()
+	eventually(t, func() bool { return len(ctxs()) == 2 }, "RunExit should start again")
+
+	for _, ctx := range ctxs() {
+		assert.Same(t, platform, ctx.Value(exitPlatformKey{}), "each run carries the platform")
+		assert.Nil(t, service.FromContext[adapter.PlatformInterface](ctx), "boxes get their own wrapper, not the run's")
+	}
+	a, b := newExitBoxContext(ctxs()[0]), newExitBoxContext(ctxs()[0])
+	wa, wb := service.FromContext[adapter.PlatformInterface](a), service.FromContext[adapter.PlatformInterface](b)
+	require.NotNil(t, wa)
+	require.NotNil(t, wb)
+	assert.NotSame(t, wa, wb, "each exit box gets a fresh wrapper")
+}
+
+func TestDirectExitRunsWithoutAPlatformInterface(t *testing.T) {
+	newExitHarness(t)
+	ctxs := runContexts(t)
+	SetDirectExitAllowed(func() bool { return true })
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	applyConfig(directExitConfig(true))
+	eventually(t, func() bool { return len(ctxs()) == 1 }, "RunExit should start")
+	ctx := ctxs()[0]
+	assert.Nil(t, ctx.Value(exitPlatformKey{}))
+	assert.Nil(t, service.FromContext[adapter.PlatformInterface](newExitBoxContext(ctx)), "desktop boxes keep sing-box's own monitor")
 }

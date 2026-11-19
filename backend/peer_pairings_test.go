@@ -17,6 +17,7 @@ import (
 	"github.com/getlantern/radiance/events"
 	"github.com/getlantern/radiance/helper"
 	"github.com/getlantern/radiance/peer"
+	"github.com/getlantern/radiance/vpn"
 )
 
 // newPairingRouteTestBackend is newPeerTestBackend with a pairing key store
@@ -738,4 +739,55 @@ func TestCountryCodeChangedRechecksTheDirectExit(t *testing.T) {
 
 	r.CountryCodeChanged()
 	assert.Equal(t, int32(2), rechecks.Load())
+}
+
+type fakeVPNPlatform struct{ vpn.PlatformInterface }
+
+// TestDirectExitAllowed checks the widget's direct exit gate: a known, uncensored country, and
+// where the exit follows the VPN (Android), a platform interface and a connected VPN.
+func TestDirectExitAllowed(t *testing.T) {
+	prev := directExitNeedsVPN
+	t.Cleanup(func() { directExitNeedsVPN = prev })
+	r := newPeerTestBackend(t, &fakePeerController{})
+
+	directExitNeedsVPN = func() bool { return false }
+	assert.True(t, r.directExitAllowed(), "desktop needs no VPN or platform interface")
+	r.vpnClient = vpn.NewVPNClient(t.TempDir(), nil, nil)
+	assert.True(t, r.directExitAllowed(), "desktop ignores the VPN status")
+
+	directExitNeedsVPN = func() bool { return true }
+	assert.False(t, r.directExitAllowed(), "Android with no platform interface")
+	r.vpnClient = vpn.NewVPNClient(t.TempDir(), nil, fakeVPNPlatform{})
+	assert.False(t, r.directExitAllowed(), "Android with the VPN disconnected")
+
+	for _, status := range []vpn.VPNStatus{vpn.Disconnected, vpn.Connecting, vpn.Disconnecting, vpn.Restarting, vpn.ErrorStatus} {
+		assert.False(t, directExitVPNReady(true, status), status)
+	}
+	assert.True(t, directExitVPNReady(true, vpn.Connected))
+	assert.False(t, directExitVPNReady(false, vpn.Connected))
+
+	require.NoError(t, settings.Set(settings.CountryCodeKey, "CN"))
+	directExitNeedsVPN = func() bool { return false }
+	assert.False(t, r.directExitAllowed(), "a censored country")
+}
+
+// TestVPNStatusRechecksTheDirectExit checks that on Android each VPN status change re-checks
+// the widget's direct exit, and that desktop doesn't listen.
+func TestVPNStatusRechecksTheDirectExit(t *testing.T) {
+	var rechecks atomic.Int32
+	prevRecheck, prevNeeds := recheckDirectExit, directExitNeedsVPN
+	recheckDirectExit = func() { rechecks.Add(1) }
+	t.Cleanup(func() { recheckDirectExit, directExitNeedsVPN = prevRecheck, prevNeeds })
+
+	directExitNeedsVPN = func() bool { return false }
+	newPeerTestBackend(t, &fakePeerController{}).startDirectExitVPNListener()
+	directExitNeedsVPN = func() bool { return true }
+	newPeerTestBackend(t, &fakePeerController{}).startDirectExitVPNListener()
+
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Connected})
+	require.Eventually(t, func() bool { return rechecks.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+	events.Emit(vpn.StatusUpdateEvent{Status: vpn.Disconnecting})
+	require.Eventually(t, func() bool { return rechecks.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(2), rechecks.Load(), "only the Android backend listens")
 }

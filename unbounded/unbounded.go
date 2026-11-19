@@ -41,6 +41,7 @@ import (
 	"github.com/getlantern/broflake/clientcore"
 	"github.com/getlantern/broflake/common"
 	"github.com/getlantern/broflake/common/helperticket"
+	"github.com/sagernet/sing-box/experimental/libbox"
 
 	"github.com/getlantern/radiance/bypass"
 	"github.com/getlantern/radiance/common/sameorigin"
@@ -252,6 +253,9 @@ type unboundedManager struct {
 	// exitAllowed reports whether this device may exit users' traffic at
 	// all (SetDirectExitAllowed). nil: never.
 	exitAllowed func() bool
+	// exitPlatform is the platform interface the exit's boxes run on
+	// (SetPlatformInterface). nil: sing-box's own.
+	exitPlatform libbox.PlatformInterface
 	// exitRun is the running widget's direct exit. nil with none.
 	exitRun *exitRun
 	// exitNotBefore is the hold-off lantern-cloud last asked the exit for,

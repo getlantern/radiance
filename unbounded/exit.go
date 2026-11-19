@@ -12,6 +12,7 @@ import (
 	lblog "github.com/getlantern/lantern-box/log"
 	"github.com/getlantern/lantern-box/node"
 	"github.com/getlantern/lantern-box/protocol/unbounded/exit"
+	"github.com/sagernet/sing-box/experimental/libbox"
 
 	rcommon "github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
@@ -111,8 +112,19 @@ func exitHeaders(h http.Header) {
 	}
 }
 
-// SetDirectExitAllowed sets the check for whether this device may exit users' traffic at all:
-// its country is known and not censored. nil, the default, never allows it.
+// SetPlatformInterface sets the platform interface the exit's boxes run on, as the VPN tunnel's
+// does: on Android, the VPN service's, whose default interface monitor sing-box needs with
+// auto_detect_interface (netlink is banned there) and whose socket protection keeps exit traffic
+// out of the tunnel. Its monitor must be one several boxes can share (vpn.VPNClient.BoxPlatform).
+// nil, as on desktop, leaves sing-box's own monitor. It applies from the next exit run.
+func SetPlatformInterface(p libbox.PlatformInterface) {
+	manager.mu.Lock()
+	manager.exitPlatform = p
+	manager.mu.Unlock()
+}
+
+// SetDirectExitAllowed sets the check for whether this device may exit users' traffic at all,
+// such as its country being known and not censored. nil, the default, never allows it.
 func SetDirectExitAllowed(allowed func() bool) {
 	manager.mu.Lock()
 	manager.exitAllowed = allowed
@@ -121,7 +133,8 @@ func SetDirectExitAllowed(allowed func() bool) {
 }
 
 // RecheckDirectExit turns the running exit, if any, on or off to match the allowed check now,
-// as after this device's country changed. Turning it off waits for RunExit to tear down.
+// as after this device's country or VPN status changed. Turning it off waits for RunExit to
+// tear down.
 func RecheckDirectExit() {
 	manager.mu.Lock()
 	run := manager.exitRun
@@ -176,7 +189,10 @@ func (m *unboundedManager) startExit() *exitRun {
 		slog.Warn("Unbounded: no direct exit", "error", err)
 		return nil
 	}
-	return newExitRun(e, node.ExitConfig{
+	m.mu.Lock()
+	platform := m.exitPlatform
+	m.mu.Unlock()
+	return newExitRun(e, platform, node.ExitConfig{
 		APIURL:      rcommon.GetBaseURL(),
 		DeviceID:    settings.GetString(settings.DeviceIDKey),
 		HTTPClient:  bypassHTTPClient,
@@ -193,6 +209,7 @@ func (m *unboundedManager) startExit() *exitRun {
 // RunExit keeping its registration and boxes current while the exit is on.
 type exitRun struct {
 	e          directExit
+	platform   libbox.PlatformInterface
 	cfg        node.ExitConfig
 	wanted     func() bool
 	notBefore  func() time.Time
@@ -204,8 +221,8 @@ type exitRun struct {
 	done   chan struct{}
 }
 
-func newExitRun(e directExit, cfg node.ExitConfig, wanted func() bool, notBefore func() time.Time) *exitRun {
-	r := &exitRun{e: e, cfg: cfg, wanted: wanted, notBefore: notBefore, reregister: make(chan struct{}, 1)}
+func newExitRun(e directExit, platform libbox.PlatformInterface, cfg node.ExitConfig, wanted func() bool, notBefore func() time.Time) *exitRun {
+	r := &exitRun{e: e, platform: platform, cfg: cfg, wanted: wanted, notBefore: notBefore, reregister: make(chan struct{}, 1)}
 	r.cfg.Reregister = r.reregister
 	return r
 }
@@ -227,7 +244,7 @@ func (r *exitRun) sync() {
 	if r.cancel != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(hostaccess.Context(box.BaseContext()))
+	ctx, cancel := context.WithCancel(exitContext(r.platform))
 	done := make(chan struct{})
 	r.cancel, r.done = cancel, done
 	cfg := r.cfg
@@ -240,6 +257,20 @@ func (r *exitRun) sync() {
 			slog.Error("Unbounded: direct exit can't run", "error", err)
 		}
 	}()
+}
+
+// exitPlatformKey is the context key for the platform interface newExitBox builds each box on.
+type exitPlatformKey struct{}
+
+// exitContext is RunExit's context: lantern-box's protocols behind radiance's host access
+// checks and, with a platform interface, the platform's local DNS, as for the VPN tunnel, and
+// the platform itself, for newExitBox.
+func exitContext(platform libbox.PlatformInterface) context.Context {
+	if platform == nil {
+		return hostaccess.Context(box.BaseContext())
+	}
+	ctx := hostaccess.ContextWithDNSTransport(box.BaseContext(), platform)
+	return context.WithValue(ctx, exitPlatformKey{}, platform)
 }
 
 func (r *exitRun) stopLocked() {

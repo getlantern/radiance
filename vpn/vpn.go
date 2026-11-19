@@ -77,7 +77,10 @@ type VPNClient struct {
 	boxCtx atomic.Pointer[context.Context]
 
 	platformIfce PlatformInterface
-	logger       *slog.Logger
+	// boxPlatform is platformIfce with its default interface monitor shared, for the tunnel's
+	// box and the Unbounded direct exit's. nil with no platformIfce.
+	boxPlatform libbox.PlatformInterface
+	logger      *slog.Logger
 
 	offlineTestCancel context.CancelFunc
 	offlineTestDone   chan struct{}
@@ -207,6 +210,7 @@ func NewVPNClient(dataPath string, logger *slog.Logger, platformIfce PlatformInt
 	close(done)
 	c := &VPNClient{
 		platformIfce:      platformIfce,
+		boxPlatform:       newSharedPlatform(platformIfce),
 		logger:            logger,
 		offlineTestCancel: func() {},
 		offlineTestDone:   done,
@@ -287,7 +291,7 @@ func (c *VPNClient) start(ctx context.Context, boxOptions BoxOptions, options op
 	c.setStatus(Connecting, nil)
 	for attempt := 1; ; attempt++ {
 		t := c.newTunnel(boxOptions, initialMode)
-		err := t.start(ctx, options, c.platformIfce, isRestart)
+		err := t.start(ctx, options, c.boxPlatform, isRestart)
 		if err == nil {
 			c.setTunnelLocked(t)
 			if err := c.restoreReverseLocked(); err != nil {
@@ -688,6 +692,13 @@ func (c *VPNClient) BoxContext() context.Context {
 		return *ctx
 	}
 	return nil
+}
+
+// BoxPlatform returns the platform interface the tunnel's sing-box runs on, its default
+// interface monitor shared so another box in this process can run on it too, or nil with none
+// (desktop).
+func (c *VPNClient) BoxPlatform() libbox.PlatformInterface {
+	return c.boxPlatform
 }
 
 // setTunnelLocked makes t the running tunnel. The caller must hold c.mu.

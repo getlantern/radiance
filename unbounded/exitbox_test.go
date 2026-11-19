@@ -42,3 +42,14 @@ func TestNewExitBoxRejectsBadJSON(t *testing.T) {
 	_, err := newExitBox(exitBoxContext(t), `{`)
 	require.Error(t, err)
 }
+
+func TestNewExitBoxUsesThePlatformMonitor(t *testing.T) {
+	platform := &exitPlatform{}
+	ctx, cancel := context.WithCancel(exitContext(platform))
+	t.Cleanup(cancel)
+	// RunExit forces auto_detect_interface on every exit box.
+	b, err := newExitBox(ctx, `{"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct","auto_detect_interface":true}}`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+	assert.Equal(t, int32(1), platform.monitorStarts.Load(), "the box must watch the default interface through the platform")
+}

@@ -7,6 +7,7 @@ import (
 	"github.com/getlantern/lantern-box/node"
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox"
 	sblog "github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
@@ -19,10 +20,9 @@ import (
 // clone of ctx's service registry, so it keeps ctx's registries but registers its managers
 // only in its own, with a log factory that logs nothing, since the box carries strangers'
 // destinations. It also refuses options that grant host access, as radiance does for every
-// peer box. ctx must come from hostaccess.Context.
+// peer box. ctx must come from exitContext.
 func newExitBox(ctx context.Context, options string) (node.ExitBox, error) {
-	ctx = service.ExtendContext(ctx)
-	service.MustRegister[sblog.Factory](ctx, sblog.NewNOPFactory())
+	ctx = newExitBoxContext(ctx)
 	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(options))
 	if err != nil {
 		return nil, fmt.Errorf("decode exit box options: %w", err)
@@ -39,6 +39,19 @@ func newExitBox(ctx context.Context, options string) (node.ExitBox, error) {
 		return nil, fmt.Errorf("start exit box: %w", err)
 	}
 	return exitBox{b: b, ctx: ctx}, nil
+}
+
+// newExitBoxContext is an exit box's clone of ctx's service registry. With exitContext's platform
+// interface, it registers a wrapper of the platform for the box alone: sing-box initializes the
+// wrapper with the box's network manager, and the exit runs a box per kind, and two across a
+// rotation.
+func newExitBoxContext(ctx context.Context) context.Context {
+	ctx = service.ExtendContext(ctx)
+	service.MustRegister[sblog.Factory](ctx, sblog.NewNOPFactory())
+	if platform, _ := ctx.Value(exitPlatformKey{}).(libbox.PlatformInterface); platform != nil {
+		service.MustRegister[adapter.PlatformInterface](ctx, libbox.NewPlatformInterfaceWrapper(platform))
+	}
+	return ctx
 }
 
 type exitBox struct {
