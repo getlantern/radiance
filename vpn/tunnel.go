@@ -425,29 +425,32 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		t.netRecovery = newNetRecovery(t.boxInstance.Network(), pm.IsNetworkPaused)
 		go t.netRecovery.run(t.ctx)
 		slog.Debug("Network recovery supervisor started")
-		events.SubscribeContext(t.ctx, func(evt NetworkEvent) {
+		events.SubscribeContext(t.ctx, func(evt PauseEvent) {
 			switch evt.EventType {
-			case NetworkEventPaused:
+			case PauseEventNetworkPaused:
 				t.netRecovery.pause()
-			case NetworkEventWake:
+			case PauseEventNetworkWake:
 				t.netRecovery.wake()
 			}
 		})
 
 		cb := pm.RegisterCallback(t.onPauseUpdate)
-		// A network pause can already be in effect before this registration, so
-		// seed it once. Only the paused case is emitted: not emitting a wake keeps
-		// this off-lock read from racing a real pause into the wrong final state.
+		// A pause can already be in effect before this registration, so seed it
+		// once. Only the paused case is emitted: not emitting a wake keeps this
+		// off-lock read from racing a real pause into the wrong final state.
 		if pm.IsNetworkPaused() {
-			events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+			events.Emit(PauseEvent{EventType: PauseEventNetworkPaused})
+		}
+		if pm.IsDevicePaused() {
+			events.Emit(PauseEvent{EventType: PauseEventDevicePaused})
 		}
 		t.closers = append(t.closers, closerFunc(func() error {
 			pm.UnregisterCallback(cb)
-			// No further events arrive after unregister, so force a wake to release
-			// a NetworkEvent consumer left paused at teardown. UnregisterCallback
-			// serializes with in-flight callbacks via the manager lock, so this
-			// wake lands last.
-			events.Emit(NetworkEvent{EventType: NetworkEventWake})
+			// No further events arrive after unregister, so force wakes to release
+			// consumers left paused at teardown. UnregisterCallback serializes with
+			// in-flight callbacks via the manager lock, so these wakes land last.
+			events.Emit(PauseEvent{EventType: PauseEventNetworkWake})
+			events.Emit(PauseEvent{EventType: PauseEventDeviceWake})
 			return nil
 		}))
 	}
@@ -522,16 +525,16 @@ func resetOnSplitTunnelReload(router adapter.Router, dnsRouter adapter.DNSRouter
 	})
 }
 
-// onPauseUpdate mirrors the pause manager's network-axis transitions onto
-// NetworkEvent. Device-axis events are ignored: only a missing default route
-// (NetworkPause) leaves the tunnel unable to dial, and on resume the box already
-// resets the network itself.
 func (t *tunnel) onPauseUpdate(evt int) {
 	switch evt {
 	case pause.EventNetworkPause:
-		events.Emit(NetworkEvent{EventType: NetworkEventPaused})
+		events.Emit(PauseEvent{EventType: PauseEventNetworkPaused})
 	case pause.EventNetworkWake:
-		events.Emit(NetworkEvent{EventType: NetworkEventWake})
+		events.Emit(PauseEvent{EventType: PauseEventNetworkWake})
+	case pause.EventDevicePaused:
+		events.Emit(PauseEvent{EventType: PauseEventDevicePaused})
+	case pause.EventDeviceWake:
+		events.Emit(PauseEvent{EventType: PauseEventDeviceWake})
 	}
 }
 

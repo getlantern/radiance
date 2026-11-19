@@ -105,6 +105,49 @@ func TestTunnelDevicePauseWake(t *testing.T) {
 	require.False(t, mgr.IsDevicePaused())
 }
 
+func TestTunnelCloseReportsWakes(t *testing.T) {
+	got := make(chan PauseEventType, 4)
+	sub := events.Subscribe(func(evt PauseEvent) {
+		// A host without a default route pauses the network during start.
+		if evt.EventType != PauseEventNetworkPaused {
+			got <- evt.EventType
+		}
+	})
+	defer sub.Unsubscribe()
+
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(probe.Close)
+	tun := &tunnel{dataPath: t.TempDir(), initialMode: AutoSelectTag}
+	options := O.Options{
+		Log: &O.LogOptions{Disabled: true},
+		Outbounds: []O.Outbound{
+			{Type: C.TypeDirect, Tag: "lantern-1", Options: &O.DirectOutboundOptions{}},
+			{Type: lbC.TypeMutableSelector, Tag: ManualSelectTag,
+				Options: &lbO.MutableSelectorOutboundOptions{Outbounds: []string{"lantern-1"}}},
+			{Type: lbC.TypeMutableAutoSelect, Tag: AutoSelectTag,
+				Options: &lbO.MutableAutoSelectOutboundOptions{Outbounds: []string{"lantern-1"}, URL: probe.URL}},
+		},
+		Route: &O.RouteOptions{Rules: []O.Rule{selectModeRule(AutoSelectTag), selectModeRule(ManualSelectTag)}},
+		Experimental: &O.ExperimentalOptions{
+			CacheFile: &O.CacheFileOptions{Enabled: true, Path: filepath.Join(t.TempDir(), "cache.db")},
+		},
+	}
+	require.NoError(t, tun.start(t.Context(), options, nil, false))
+	tun.devicePause()
+	require.NoError(t, tun.close())
+
+	for _, want := range []PauseEventType{PauseEventDevicePaused, PauseEventNetworkWake, PauseEventDeviceWake} {
+		select {
+		case ev := <-got:
+			require.Equal(t, want, ev)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no PauseEvent %q", want)
+		}
+	}
+}
+
 func TestTunnelLifecycleNilManager(t *testing.T) {
 	tn := &tunnel{}
 	require.NotPanics(t, func() {
@@ -511,35 +554,29 @@ func TestTunnelClientInfo(t *testing.T) {
 }
 
 func TestOnPauseUpdate(t *testing.T) {
-	// want == "" means no NetworkEvent should be emitted.
 	cases := []struct {
 		name string
 		evt  int
-		want NetworkEventType
+		want PauseEventType
 	}{
-		{"device paused ignored", pause.EventDevicePaused, ""},
-		{"network paused", pause.EventNetworkPause, NetworkEventPaused},
-		{"network wake", pause.EventNetworkWake, NetworkEventWake},
-		{"device wake ignored", pause.EventDeviceWake, ""},
+		{"network paused", pause.EventNetworkPause, PauseEventNetworkPaused},
+		{"network wake", pause.EventNetworkWake, PauseEventNetworkWake},
+		{"device paused", pause.EventDevicePaused, PauseEventDevicePaused},
+		{"device wake", pause.EventDeviceWake, PauseEventDeviceWake},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := make(chan NetworkEventType, 2)
-			sub := events.Subscribe(func(evt NetworkEvent) { got <- evt.EventType })
+			got := make(chan PauseEventType, 2)
+			sub := events.Subscribe(func(evt PauseEvent) { got <- evt.EventType })
 			defer sub.Unsubscribe()
 
 			(&tunnel{}).onPauseUpdate(tc.evt)
 
-			want := tc.want
-			if want == "" {
-				want = NetworkEventType("test_barrier")
-				events.Emit(NetworkEvent{EventType: want})
-			}
 			select {
 			case ev := <-got:
-				require.Equal(t, want, ev)
+				require.Equal(t, tc.want, ev)
 			case <-time.After(2 * time.Second):
-				t.Fatal("no NetworkEvent emitted")
+				t.Fatal("no PauseEvent emitted")
 			}
 		})
 	}
