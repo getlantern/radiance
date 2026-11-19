@@ -16,12 +16,6 @@ replace github.com/tetratelabs/wazero => github.com/getlantern/wazero v1.11.0-wa
 
 replace github.com/refraction-networking/water => github.com/getlantern/water v0.7.1-alpha.0.20260309190745-bd547c14b4aa
 
-// The Unbounded QUIC fork, which lantern-box and broflake also replace to. A
-// volunteer direct exit terminates consumers' QUIC sessions, so it needs the
-// same fork as the Unbounded egress. Go does not inherit replace directives
-// from dependencies.
-replace github.com/quic-go/quic-go => github.com/getlantern/quic-go-unbounded-fork v0.62.1-unbounded
-
 // replace github.com/getlantern/lantern-box => ../lantern-box
 
 // replace github.com/getlantern/kindling => ../kindling
