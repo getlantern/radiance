@@ -470,6 +470,13 @@ func (c *Client) SetLogLevel(ctx context.Context, level string) error {
 	return err
 }
 
+// SetSendLogsToSigNoz turns uploading the daemon's log to the telemetry
+// collector on or off.
+func (c *Client) SetSendLogsToSigNoz(ctx context.Context, enable bool) error {
+	_, err := c.PatchSettings(ctx, settings.Settings{settings.SendLogsToSigNozKey: enable})
+	return err
+}
+
 /////////
 // Env //
 /////////

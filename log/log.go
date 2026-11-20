@@ -125,7 +125,7 @@ func NewLogger(cfg Config) *slog.Logger {
 		logWriter = io.MultiWriter(logWriter, Publisher())
 	}
 	logWriter = newRedactingWriter(logWriter)
-	logger := slog.New(&Handler{Handler: newHandler(logWriter, leveler), w: logWriter})
+	logger := slog.New(newRootHandler(logWriter, leveler))
 	if toStdout {
 		fmt.Printf("Logging to stdout only, level: %s\n", FormatLogLevel(slevel))
 	} else if !loggingToStdOut {
@@ -138,6 +138,10 @@ func NewLogger(cfg Config) *slog.Logger {
 		fmt.Printf("Logging to file and stdout path: %s, level: %s\n", cfg.LogPath, FormatLogLevel(slevel))
 	}
 	return logger
+}
+
+func newRootHandler(w io.Writer, level slog.Leveler) *Handler {
+	return &Handler{Handler: newTeeHandler(newHandler(w, level)), w: w}
 }
 
 func newHandler(w io.Writer, level slog.Leveler) slog.Handler {

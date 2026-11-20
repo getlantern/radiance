@@ -1,12 +1,17 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"regexp"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/getlantern/radiance/internal/logsafe"
 	"github.com/getlantern/radiance/internal/redact"
 )
 
@@ -209,4 +214,95 @@ func redactValue(kv attribute.KeyValue, helper bool) (attribute.KeyValue, bool) 
 		return attribute.StringSlice(string(kv.Key), vs), true
 	}
 	return kv, false
+}
+
+// redactingLogExporter applies [redactLogText] to each log record's body and
+// attribute values, and [redactText] to attribute keys, before export. It
+// redacts every address, since a log line, unlike a span, rarely says which
+// outbound its addresses belong to.
+type redactingLogExporter struct {
+	sdklog.Exporter
+}
+
+func newRedactingLogExporter(e sdklog.Exporter) sdklog.Exporter {
+	return redactingLogExporter{Exporter: e}
+}
+
+func (e redactingLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
+	out := make([]sdklog.Record, len(records))
+	for i := range records {
+		r := records[i].Clone()
+		r.SetBody(redactLogValue(r.Body()))
+		attrs := make([]attribute.KeyValue, 0, r.AttributesLen())
+		r.WalkAttributes(func(kv attribute.KeyValue) bool {
+			attrs = append(attrs, redactLogKeyValue(kv))
+			return true
+		})
+		r.SetAttributes(attrs...)
+		out[i] = r
+	}
+	return e.Exporter.Export(ctx, out)
+}
+
+func redactLogValue(v attribute.Value) attribute.Value {
+	switch v.Type() {
+	case attribute.STRING:
+		return attribute.StringValue(redactLogText(v.AsString()))
+	case attribute.STRINGSLICE:
+		vs := v.AsStringSlice()
+		for i, s := range vs {
+			vs[i] = redactLogText(s)
+		}
+		return attribute.StringSliceValue(vs)
+	case attribute.SLICE:
+		vs := v.AsSlice()
+		for i, e := range vs {
+			vs[i] = redactLogValue(e)
+		}
+		return attribute.SliceValue(vs...)
+	case attribute.MAP:
+		kvs := v.AsMap()
+		for i, kv := range kvs {
+			kvs[i] = redactLogKeyValue(kv)
+		}
+		return attribute.MapValue(kvs...)
+	}
+	return v
+}
+
+var (
+	// bearerCredential matches any token after "Bearer".
+	bearerCredential = regexp.MustCompile(`(?i)\b(bearer)(\s+)[A-Za-z0-9._~+/=-]+`)
+	// basicToken matches the word after "Basic"; isBasicCredential decides
+	// whether it is a credential.
+	basicToken = regexp.MustCompile(`(?i)\b(basic\s+)([A-Za-z0-9._~+/=-]+)`)
+)
+
+// isBasicCredential reports whether tok may be a Basic credential. It errs
+// toward redacting, so a long word such as "authentication" counts too.
+func isBasicCredential(tok string) bool {
+	if len(tok) >= 12 || strings.ContainsAny(tok, "0123456789+/=") {
+		return true
+	}
+	b, err := base64.RawStdEncoding.DecodeString(tok)
+	return err == nil && bytes.IndexByte(b, ':') >= 0
+}
+
+// redactLogText is redactText for log records, which also carry credentials
+// in free text, such as an Authorization header a dial error quotes.
+func redactLogText(s string) string {
+	// Before redactText: an address placeholder inside a credential would cut its match short.
+	s = bearerCredential.ReplaceAllString(s, "${1}${2}"+logsafe.Redacted)
+	s = basicToken.ReplaceAllStringFunc(s, func(m string) string {
+		sub := basicToken.FindStringSubmatch(m)
+		if !isBasicCredential(sub[2]) {
+			return m
+		}
+		return sub[1] + logsafe.Redacted
+	})
+	return redactText(s, true)
+}
+
+func redactLogKeyValue(kv attribute.KeyValue) attribute.KeyValue {
+	return attribute.KeyValue{Key: attribute.Key(redactText(string(kv.Key), true)), Value: redactLogValue(kv.Value)}
 }

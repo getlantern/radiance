@@ -1010,6 +1010,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 				settings.SplitTunnelPolicyKey, vpn.SplitTunnelPolicyExclude, vpn.SplitTunnelPolicyInclude, v)
 		}
 	}
+	if v, ok := diff[settings.SendLogsToSigNozKey]; ok {
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("invalid %s: want a bool, got %T", settings.SendLogsToSigNozKey, v)
+		}
+	}
 	// An explicit peer toggle is applied whether or not it changes the stored
 	// value, and before any other handler: the stored value can lag the
 	// runtime (a peer that stopped itself, or an "on" still starting), and
@@ -1033,11 +1038,17 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	if len(diff) > 0 {
 		patchErr = settings.Patch(diff)
 	}
-	// A failed save still applies the live value, so the country route and
-	// the proxyless hedge follow it before the error returns: a retry would
-	// be an empty diff.
+	// A failed save still applies the live value, so the country route, the
+	// proxyless hedge and log upload follow it before the error returns: a
+	// retry would be an empty diff.
 	if _, ok := diff[settings.CountryCodeKey]; ok {
 		r.CountryCodeChanged()
+	}
+	_, logUploadChanged := diff[settings.SendLogsToSigNozKey]
+	if _, consentChanged := diff[settings.TelemetryKey]; logUploadChanged || consentChanged {
+		if err := telemetry.UpdateLogUpload(); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 	// The proxyless and smart routing settings switch the running hedge,
 	// without a restart.
