@@ -183,8 +183,10 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
 		return &fakeWidget{stopBlock: block}, nil
 	})
-	// Runs before resetManager's wait on the worker, so a failed assertion
-	// doesn't leave the widget pinned.
+	// Both run before resetManager's wait on the worker, so a failed
+	// assertion can't leave it running: release unpins the widget's Stop,
+	// then stop cancels the worker.
+	t.Cleanup(manager.stop)
 	release := sync.OnceFunc(func() { close(block) })
 	t.Cleanup(release)
 	primeManager(t, nil)
