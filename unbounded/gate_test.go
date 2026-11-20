@@ -181,6 +181,9 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 	prevTimeout := internalStopTimeout
 	internalStopTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { internalStopTimeout = prevTimeout })
+	// Before resetManager, so the logger is restored only after its cleanup
+	// has joined the worker, whose exit evaluation logs through it.
+	logs := captureBlocked(t)
 	block := make(chan struct{})
 	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
 		return &fakeWidget{stopBlock: block}, nil
@@ -195,17 +198,22 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 	require.NoError(t, Apply())
 	waitForRunning(t, manager, true, time.Second)
 	require.Eventually(t, func() bool { return CurrentSnapshot().Running }, time.Second, 10*time.Millisecond)
+	manager.mu.Lock()
+	done := manager.done
+	manager.mu.Unlock()
 
-	logs := captureBlocked(t)
 	require.NoError(t, settings.Set(settings.UnboundedKey, false))
 	require.NoError(t, Apply()) // the stop times out on the pinned widget
 	assert.Equal(t, BlockedDisabled, CurrentSnapshot().Blocked)
 
 	release()
-	waitForRunning(t, manager, false, time.Second)
-	assert.Eventually(t, func() bool {
-		return logs.count(BlockedDisabled) == 1
-	}, time.Second, 10*time.Millisecond, logs.String())
+	// done closes after the worker's exit evaluation, so every log is in.
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the worker didn't exit")
+	}
+	assert.Equal(t, 1, logs.count(BlockedDisabled), "logged once across the timeout and the teardown: %s", logs.String())
 }
 
 // A widget that fails to build leaves nothing running with every condition
