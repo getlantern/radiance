@@ -52,6 +52,12 @@ func (m *unboundedManager) noteBlocked() {
 	m.lastBlocked = reason
 	m.mu.Unlock()
 	if changed && reason != "" {
-		slog.Info("Unbounded: widget not running", "reason", reason)
+		logBlocked(reason)
 	}
+}
+
+// logBlocked logs why the widget isn't running. Tests replace it, since they
+// may not swap the default logger.
+var logBlocked = func(reason string) {
+	slog.Info("Unbounded: widget not running", "reason", reason)
 }

@@ -1,9 +1,7 @@
 package unbounded
 
 import (
-	"bytes"
 	"encoding/json"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -23,31 +21,41 @@ func idleWidgets(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *client
 	return &fakeWidget{}, nil
 }
 
-// syncBuffer is a bytes.Buffer safe to log into from the manager's goroutines.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+// blockedLog records the reasons the manager logs.
+type blockedLog struct {
+	mu      sync.Mutex
+	reasons []string
 }
 
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
+func (l *blockedLog) count(reason string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, r := range l.reasons {
+		if r == reason {
+			n++
+		}
+	}
+	return n
 }
 
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
+func (l *blockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.reasons, ",")
 }
 
-func captureLogs(t *testing.T) *syncBuffer {
+func captureBlocked(t *testing.T) *blockedLog {
 	t.Helper()
-	prev := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	logs := &syncBuffer{}
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
-	return logs
+	l := &blockedLog{}
+	prev := logBlocked
+	logBlocked = func(reason string) {
+		l.mu.Lock()
+		l.reasons = append(l.reasons, reason)
+		l.mu.Unlock()
+	}
+	t.Cleanup(func() { logBlocked = prev })
+	return l
 }
 
 func TestBlocked_Reasons(t *testing.T) {
@@ -84,7 +92,7 @@ func TestBlocked_Reasons(t *testing.T) {
 // A backend that never armed the widget, with sharing on and a usable config,
 // reports and logs not_armed, and Apply can't start it.
 func TestBlocked_NotArmedIsVisible(t *testing.T) {
-	logs := captureLogs(t)
+	logs := captureBlocked(t)
 	resetManager(t, idleWidgets)
 	primeManager(t, nil)
 	manager.mu.Lock()
@@ -95,12 +103,12 @@ func TestBlocked_NotArmedIsVisible(t *testing.T) {
 	s := CurrentSnapshot()
 	assert.False(t, s.Running)
 	assert.Equal(t, BlockedNotArmed, s.Blocked)
-	assert.Contains(t, logs.String(), `msg="Unbounded: widget not running" reason=not_armed`)
+	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
 }
 
 // The reason is logged once per change, not on every evaluation.
 func TestNoteBlocked_LogsOncePerChange(t *testing.T) {
-	logs := captureLogs(t)
+	logs := captureBlocked(t)
 	resetManager(t, idleWidgets)
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 
@@ -111,15 +119,18 @@ func TestNoteBlocked_LogsOncePerChange(t *testing.T) {
 	manager.mu.Unlock()
 	manager.noteBlocked()
 
-	assert.Equal(t, 1, strings.Count(logs.String(), "reason=no_config"), logs.String())
-	assert.Equal(t, 1, strings.Count(logs.String(), "reason=feature_off"), logs.String())
+	assert.Equal(t, 1, logs.count(BlockedNoConfig), logs.String())
+	assert.Equal(t, 1, logs.count(BlockedFeatureOff), logs.String())
 }
 
 // Once the widget runs it reports no reason, and a later block is logged
 // again even if it's the reason logged before it ran.
 func TestBlocked_ClearsWhileRunning(t *testing.T) {
-	logs := captureLogs(t)
+	logs := captureBlocked(t)
 	resetManager(t, idleWidgets)
+	// Registered after resetManager, so it runs first: a failed assertion
+	// mustn't leave resetManager waiting on a worker nothing stopped.
+	t.Cleanup(manager.stop)
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	manager.noteBlocked() // no_config
 
@@ -133,13 +144,13 @@ func TestBlocked_ClearsWhileRunning(t *testing.T) {
 	manager.lastCfg = nil
 	manager.mu.Unlock()
 	manager.noteBlocked()
-	assert.Equal(t, 2, strings.Count(logs.String(), "reason=no_config"), logs.String())
+	assert.Equal(t, 2, logs.count(BlockedNoConfig), logs.String())
 }
 
 // A cold start with no cached config says so, and a config the server turned
 // the feature off in says that.
 func TestBlocked_LoggedFromStartupAndConfig(t *testing.T) {
-	logs := captureLogs(t)
+	logs := captureBlocked(t)
 	resetManager(t, idleWidgets)
 	require.NoError(t, settings.Set(settings.UnboundedKey, true))
 	manager.mu.Lock()
@@ -147,10 +158,10 @@ func TestBlocked_LoggedFromStartupAndConfig(t *testing.T) {
 	manager.mu.Unlock()
 
 	InitSubscription(nil)
-	assert.Contains(t, logs.String(), "reason=no_config")
+	assert.Equal(t, 1, logs.count(BlockedNoConfig), logs.String())
 
 	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: false}, Unbounded: testCfg()})
-	assert.Contains(t, logs.String(), "reason=feature_off")
+	assert.Equal(t, 1, logs.count(BlockedFeatureOff), logs.String())
 }
 
 // The reason reaches IPC clients in the snapshot's JSON.
@@ -172,19 +183,23 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
 		return &fakeWidget{stopBlock: block}, nil
 	})
+	// Runs before resetManager's wait on the worker, so a failed assertion
+	// doesn't leave the widget pinned.
+	release := sync.OnceFunc(func() { close(block) })
+	t.Cleanup(release)
 	primeManager(t, nil)
 	require.NoError(t, Apply())
 	waitForRunning(t, manager, true, time.Second)
 	require.Eventually(t, func() bool { return CurrentSnapshot().Running }, time.Second, 10*time.Millisecond)
 
-	logs := captureLogs(t)
+	logs := captureBlocked(t)
 	require.NoError(t, settings.Set(settings.UnboundedKey, false))
 	require.NoError(t, Apply()) // the stop times out on the pinned widget
 	assert.Equal(t, BlockedDisabled, CurrentSnapshot().Blocked)
 
-	close(block)
+	release()
 	waitForRunning(t, manager, false, time.Second)
 	assert.Eventually(t, func() bool {
-		return strings.Count(logs.String(), "reason=disabled") == 1
+		return logs.count(BlockedDisabled) == 1
 	}, time.Second, 10*time.Millisecond, logs.String())
 }
