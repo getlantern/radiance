@@ -278,10 +278,8 @@ var (
 	basicToken = regexp.MustCompile(`(?i)\b(basic\s+)([A-Za-z0-9._~+/=-]+)`)
 )
 
-// isBasicCredential reports whether tok may be a Basic credential: it holds a
-// digit, "+", "/" or "=", runs to 12 or more characters, or decodes as base64
-// to text with a colon. Short prose such as "basic auth" is left alone, but a
-// long word such as "authentication" counts as a credential.
+// isBasicCredential reports whether tok may be a Basic credential. It errs
+// toward redacting, so a long word such as "authentication" counts too.
 func isBasicCredential(tok string) bool {
 	if len(tok) >= 12 || strings.ContainsAny(tok, "0123456789+/=") {
 		return true
@@ -292,9 +290,8 @@ func isBasicCredential(tok string) bool {
 
 // redactLogText is redactText for log records, which also carry credentials
 // in free text, such as an Authorization header a dial error quotes.
-// Credentials go first, so a placeholder inserted for an address inside one
-// can't stop it matching.
 func redactLogText(s string) string {
+	// Before redactText: an address placeholder inside a credential would cut its match short.
 	s = bearerCredential.ReplaceAllString(s, "${1}${2}"+logsafe.Redacted)
 	s = basicToken.ReplaceAllStringFunc(s, func(m string) string {
 		sub := basicToken.FindStringSubmatch(m)
