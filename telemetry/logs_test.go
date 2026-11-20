@@ -108,6 +108,8 @@ func TestRedactLogValueRedactsAuthCredentials(t *testing.T) {
 		"Basic Zm9vOmJhcjE= sent":                "Basic [REDACTED] sent",
 		"basic auth failed":                      "basic auth failed",
 		"Basic authentication failed":            "Basic [REDACTED] failed",
+		"Authorization: Basic dTpwYXNz":          "Authorization: Basic [REDACTED]",
+		"Bearer 203.0.113.7-privateSuffix":       "Bearer [REDACTED]",
 		"Authorization: bearer abcdefgh":         "Authorization: bearer [REDACTED]",
 	} {
 		assert.Equal(t, want, redactLogValue(attribute.StringValue(in)).AsString())
