@@ -476,6 +476,7 @@ func (r *LocalBackend) Start() {
 		unbounded.SetPlatformInterface(directExitPlatform(r.vpnClient))
 	}
 	unbounded.SetDirectExitAllowed(r.directExitAllowed)
+	slog.Info("Unbounded: arming the widget", "config_cached", cachedCfg != nil)
 	unbounded.InitSubscription(cachedCfg)
 
 	events.SubscribeContext(r.ctx, func(evt config.NewConfigEvent) {

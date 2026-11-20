@@ -195,6 +195,15 @@ type unboundedManager struct {
 	// new config arrives.
 	lastCfg       *C.UnboundedConfig
 	lastFeatureOn bool
+	// lastBlocked is the reason noteBlocked last logged, "" while the
+	// widget runs.
+	lastBlocked string
+	// stopping is set once stop has cancelled the worker, until the worker
+	// exits, so a worker still tearing down isn't taken for one starting.
+	stopping bool
+	// noteMu serializes noteBlocked. It's never held with transitionMu
+	// waiting on it, and m.mu is only taken inside it.
+	noteMu sync.Mutex
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.
@@ -639,6 +648,7 @@ func Apply() error {
 	if h := applyHook; h != nil {
 		h()
 	}
+	defer manager.noteBlocked()
 	if !Enabled() {
 		manager.stop()
 		return nil
@@ -646,24 +656,10 @@ func Apply() error {
 	manager.mu.Lock()
 	armed := manager.armed
 	shouldStart := manager.shouldStart()
-	cfg := manager.lastCfg
-	feature := manager.lastFeatureOn
 	running := manager.cancel != nil
 	manager.mu.Unlock()
-	if !armed {
-		return nil
-	}
-	if shouldStart {
-		if !running {
-			manager.start()
-		}
-		return nil
-	}
-	switch {
-	case cfg == nil:
-		slog.Info("Unbounded: enabled locally, waiting for server config")
-	case !feature:
-		slog.Info("Unbounded: enabled locally, but server feature flag is off")
+	if armed && shouldStart && !running {
+		manager.start()
 	}
 	return nil
 }
@@ -696,11 +692,14 @@ func InitSubscription(initial *config.Config) {
 	manager.mu.Unlock()
 	if initial != nil {
 		applyConfig(*initial)
+		return
 	}
+	manager.noteBlocked()
 }
 
 // applyConfig ignores updates after Stop so late events cannot restart the widget.
 func applyConfig(cfg config.Config) {
+	defer manager.noteBlocked()
 	manager.mu.Lock()
 	if !manager.armed {
 		manager.mu.Unlock()
@@ -810,6 +809,9 @@ func SetApplyHookForTest(h func()) {
 // state is left intact so future transitions see "already running"
 // until the worker clears it.
 func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
+	// Deferred first so it runs after transitionMu is released: a public
+	// Stop disarms, which nothing else would log.
+	defer m.noteBlocked()
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
 	return m.stopLocked(ctx, disarm)
@@ -827,9 +829,14 @@ func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	if cancel == nil {
 		return nil
 	}
-	cancel()
+	// Published with the cancel, under one hold of m.mu: a worker that exits
+	// at once can't evaluate the gate while it still reads as running, and a
+	// worker that finishes starting can't set running after this clears it,
+	// since it reads ctx under m.mu. cancel doesn't block or call back in.
 	m.mu.Lock()
 	m.running = false
+	m.stopping = true
+	cancel()
 	m.fireRunLocked(false)
 	m.releaseAllPeers()
 	m.peers = nil
@@ -896,6 +903,7 @@ func (m *unboundedManager) startLocked() {
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
+	m.stopping = false
 	// Retain the immutable config snapshot to detect changes while this worker runs.
 	m.runningCfg = ucfg
 	m.peers = make(map[int]string)
@@ -906,6 +914,9 @@ func (m *unboundedManager) startLocked() {
 
 	go func() {
 		defer close(done)
+		// However the worker ends, say why nothing is running now: a stop that
+		// timed out leaves this as the only evaluation after the worker exits.
+		defer m.noteBlocked()
 		slog.Info("Unbounded: starting broflake widget proxy")
 
 		bfOpt := clientcore.NewDefaultBroflakeOptions()
@@ -1009,6 +1020,7 @@ func (m *unboundedManager) startLocked() {
 			// Stopped while waiting: don't build a widget only to tear it down.
 			m.mu.Lock()
 			m.cancel = nil
+			m.stopping = false
 			m.done = nil
 			m.runningCfg = nil
 			m.mu.Unlock()
@@ -1044,6 +1056,7 @@ func (m *unboundedManager) startLocked() {
 			m.mu.Lock()
 			m.fireRunLocked(false)
 			m.cancel = nil
+			m.stopping = false
 			m.done = nil
 			m.runningCfg = nil
 			m.mu.Unlock()
@@ -1053,6 +1066,9 @@ func (m *unboundedManager) startLocked() {
 		m.mu.Lock()
 		m.running = ctx.Err() == nil
 		m.exitRun = exitRun
+		if m.running {
+			m.lastBlocked = ""
+		}
 		m.mu.Unlock()
 		if exitRun != nil {
 			exitRun.sync()
@@ -1074,6 +1090,7 @@ func (m *unboundedManager) startLocked() {
 		}
 		m.mu.Lock()
 		m.cancel = nil
+		m.stopping = false
 		m.done = nil
 		m.runningCfg = nil
 		m.exitRun = nil
