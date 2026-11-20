@@ -211,11 +211,20 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 // met. Only the worker's exit sees that, so it must log not_started.
 func TestBlocked_LoggedWhenTheWidgetFailsToBuild(t *testing.T) {
 	logs := captureBlocked(t)
+	// The build fails only after Apply returns, so Apply's own evaluation
+	// sees the widget starting and only the worker's exit can log the failure.
+	fail := make(chan struct{})
 	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		<-fail
 		return nil, errors.New("no widget")
 	})
+	release := sync.OnceFunc(func() { close(fail) })
+	t.Cleanup(release) // before resetManager's wait on the worker
 	primeManager(t, nil)
 	require.NoError(t, Apply())
+	assert.Zero(t, logs.count(BlockedNotStarted), "logged before the build failed: %s", logs.String())
+
+	release()
 	assert.Eventually(t, func() bool { return logs.count(BlockedNotStarted) == 1 }, time.Second, 10*time.Millisecond, logs.String())
 	assert.Equal(t, BlockedNotStarted, CurrentSnapshot().Blocked)
 }
