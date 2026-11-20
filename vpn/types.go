@@ -24,20 +24,25 @@ type ExhaustionEvent struct {
 	events.Event
 }
 
-// NetworkEventType is the availability state carried by a NetworkEvent.
-type NetworkEventType string
+// PauseEventType is the pause manager transition carried by a PauseEvent.
+type PauseEventType string
 
 const (
-	// NetworkEventPaused means the pause manager reports a missing default route.
-	NetworkEventPaused NetworkEventType = "network_paused"
-	// NetworkEventWake means the network pause ended or the tunnel is closing.
-	NetworkEventWake NetworkEventType = "network_wake"
+	// PauseEventNetworkPaused means the pause manager reports a missing default route.
+	PauseEventNetworkPaused PauseEventType = "network_paused"
+	// PauseEventNetworkWake means the network pause ended or the tunnel is closing.
+	PauseEventNetworkWake PauseEventType = "network_wake"
+	// PauseEventDevicePaused means the device is asleep, such as in Android Doze.
+	PauseEventDevicePaused PauseEventType = "device_paused"
+	// PauseEventDeviceWake means the device pause ended, the tunnel is closing,
+	// or, on iOS, the pause timed out.
+	PauseEventDeviceWake PauseEventType = "device_wake"
 )
 
-// NetworkEvent reports network pause transitions and tunnel teardown.
-type NetworkEvent struct {
+// PauseEvent reports the tunnel's pause manager transitions and tunnel teardown.
+type PauseEvent struct {
 	events.Event
-	EventType NetworkEventType `json:"event_type"`
+	EventType PauseEventType `json:"event_type"`
 }
 
 // Selector is helper interface to check if an outbound is a selector or wrapper of selector.
