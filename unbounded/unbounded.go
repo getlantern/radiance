@@ -201,6 +201,9 @@ type unboundedManager struct {
 	// stopping is set once stop has cancelled the worker, until the worker
 	// exits, so a worker still tearing down isn't taken for one starting.
 	stopping bool
+	// noteMu serializes noteBlocked. It's never held with transitionMu
+	// waiting on it, and m.mu is only taken inside it.
+	noteMu sync.Mutex
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.
@@ -806,6 +809,9 @@ func SetApplyHookForTest(h func()) {
 // state is left intact so future transitions see "already running"
 // until the worker clears it.
 func (m *unboundedManager) stopCtx(ctx context.Context, disarm bool) error {
+	// Deferred first so it runs after transitionMu is released: a public
+	// Stop disarms, which nothing else would log.
+	defer m.noteBlocked()
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
 	return m.stopLocked(ctx, disarm)
@@ -823,10 +829,14 @@ func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	if cancel == nil {
 		return nil
 	}
-	cancel()
+	// Published with the cancel, under one hold of m.mu: a worker that exits
+	// at once can't evaluate the gate while it still reads as running, and a
+	// worker that finishes starting can't set running after this clears it,
+	// since it reads ctx under m.mu. cancel doesn't block or call back in.
 	m.mu.Lock()
 	m.running = false
 	m.stopping = true
+	cancel()
 	m.fireRunLocked(false)
 	m.releaseAllPeers()
 	m.peers = nil

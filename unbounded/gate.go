@@ -23,13 +23,13 @@ const (
 )
 
 // blockedLocked is why the widget isn't running, or "" when it is running or
-// starting. A worker that stop has cancelled is neither, so it gets a reason
-// while it tears down. m.mu must be held.
-func (m *unboundedManager) blockedLocked() string {
+// starting, given whether sharing is enabled. A worker that stop has cancelled
+// is neither, so it gets a reason while it tears down. m.mu must be held.
+func (m *unboundedManager) blockedLocked(enabled bool) string {
 	switch {
 	case m.running || (m.cancel != nil && !m.stopping):
 		return ""
-	case !Enabled():
+	case !enabled:
 		return BlockedDisabled
 	case !m.armed:
 		return BlockedNotArmed
@@ -45,10 +45,14 @@ func (m *unboundedManager) blockedLocked() string {
 }
 
 // noteBlocked logs why the widget isn't running, once per change of reason.
-// Callers run it after acting on an evaluation, without m.mu held.
+// Callers run it after acting on an evaluation, without m.mu held. noteMu
+// keeps choosing a reason and logging it together, so concurrent evaluations
+// log in the order they chose and the last line is the current reason.
 func (m *unboundedManager) noteBlocked() {
+	m.noteMu.Lock()
+	defer m.noteMu.Unlock()
 	m.mu.Lock()
-	reason := m.blockedLocked()
+	reason := m.blockedLocked(Enabled())
 	changed := reason != m.lastBlocked
 	m.lastBlocked = reason
 	m.mu.Unlock()

@@ -130,12 +130,13 @@ func (m *unboundedManager) snapshot() Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.prunePeerBytes()
+	enabled := Enabled()
 	s := Snapshot{
 		Epoch:     snapshotEpoch,
 		Arrivals:  m.arrivals,
-		Enabled:   Enabled(),
+		Enabled:   enabled,
 		Running:   m.running,
-		Blocked:   m.blockedLocked(),
+		Blocked:   m.blockedLocked(enabled),
 		Peers:     []string{},
 		BytesDown: m.bytesDown,
 		BytesUp:   m.bytesUp,

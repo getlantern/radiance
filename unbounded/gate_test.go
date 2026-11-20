@@ -1,6 +1,7 @@
 package unbounded
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -227,4 +228,30 @@ func TestBlocked_LoggedWhenTheWidgetFailsToBuild(t *testing.T) {
 	release()
 	assert.Eventually(t, func() bool { return logs.count(BlockedNotStarted) == 1 }, time.Second, 10*time.Millisecond, logs.String())
 	assert.Equal(t, BlockedNotStarted, CurrentSnapshot().Blocked)
+}
+
+// A backend closing stops and disarms the widget, which is logged even when
+// the worker exits before stop has finished.
+func TestBlocked_PublicStopLogsNotArmed(t *testing.T) {
+	logs := captureBlocked(t)
+	resetManager(t, idleWidgets)
+	t.Cleanup(manager.stop)
+	primeManager(t, nil)
+	require.NoError(t, Apply())
+	require.Eventually(t, func() bool { return CurrentSnapshot().Running }, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, Stop(context.Background()))
+	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
+	assert.Equal(t, BlockedNotArmed, CurrentSnapshot().Blocked)
+}
+
+// With no worker to exit, only Stop itself can log that it disarmed the widget.
+func TestBlocked_PublicStopWithoutWorkerLogsNotArmed(t *testing.T) {
+	logs := captureBlocked(t)
+	resetManager(t, idleWidgets)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	manager.noteBlocked() // no_config: armed, waiting for config
+
+	require.NoError(t, Stop(context.Background()))
+	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
 }
