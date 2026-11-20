@@ -22,10 +22,11 @@ const (
 )
 
 // blockedLocked is why the widget isn't running, or "" when it is running or
-// starting. m.mu must be held.
+// starting. A worker that stop has cancelled is neither, so it gets a reason
+// while it tears down. m.mu must be held.
 func (m *unboundedManager) blockedLocked() string {
 	switch {
-	case m.running || m.cancel != nil:
+	case m.running || (m.cancel != nil && !m.stopping):
 		return ""
 	case !Enabled():
 		return BlockedDisabled

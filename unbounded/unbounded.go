@@ -198,6 +198,9 @@ type unboundedManager struct {
 	// lastBlocked is the reason noteBlocked last logged, "" while the
 	// widget runs.
 	lastBlocked string
+	// stopping is set once stop has cancelled the worker, until the worker
+	// exits, so a worker still tearing down isn't taken for one starting.
+	stopping bool
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.
@@ -823,6 +826,7 @@ func (m *unboundedManager) stopLocked(ctx context.Context, disarm bool) error {
 	cancel()
 	m.mu.Lock()
 	m.running = false
+	m.stopping = true
 	m.fireRunLocked(false)
 	m.releaseAllPeers()
 	m.peers = nil
@@ -889,6 +893,7 @@ func (m *unboundedManager) startLocked() {
 	done := make(chan struct{})
 	m.cancel = cancel
 	m.done = done
+	m.stopping = false
 	// Retain the immutable config snapshot to detect changes while this worker runs.
 	m.runningCfg = ucfg
 	m.peers = make(map[int]string)
@@ -899,6 +904,9 @@ func (m *unboundedManager) startLocked() {
 
 	go func() {
 		defer close(done)
+		// However the worker ends, say why nothing is running now: a stop that
+		// timed out leaves this as the only evaluation after the worker exits.
+		defer m.noteBlocked()
 		slog.Info("Unbounded: starting broflake widget proxy")
 
 		bfOpt := clientcore.NewDefaultBroflakeOptions()
@@ -1002,6 +1010,7 @@ func (m *unboundedManager) startLocked() {
 			// Stopped while waiting: don't build a widget only to tear it down.
 			m.mu.Lock()
 			m.cancel = nil
+			m.stopping = false
 			m.done = nil
 			m.runningCfg = nil
 			m.mu.Unlock()
@@ -1037,6 +1046,7 @@ func (m *unboundedManager) startLocked() {
 			m.mu.Lock()
 			m.fireRunLocked(false)
 			m.cancel = nil
+			m.stopping = false
 			m.done = nil
 			m.runningCfg = nil
 			m.mu.Unlock()
@@ -1070,6 +1080,7 @@ func (m *unboundedManager) startLocked() {
 		}
 		m.mu.Lock()
 		m.cancel = nil
+		m.stopping = false
 		m.done = nil
 		m.runningCfg = nil
 		m.exitRun = nil

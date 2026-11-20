@@ -2,6 +2,7 @@ package unbounded
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -133,4 +134,57 @@ func TestBlocked_ClearsWhileRunning(t *testing.T) {
 	manager.mu.Unlock()
 	manager.noteBlocked()
 	assert.Equal(t, 2, strings.Count(logs.String(), "reason=no_config"), logs.String())
+}
+
+// A cold start with no cached config says so, and a config the server turned
+// the feature off in says that.
+func TestBlocked_LoggedFromStartupAndConfig(t *testing.T) {
+	logs := captureLogs(t)
+	resetManager(t, idleWidgets)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	manager.mu.Lock()
+	manager.armed = false
+	manager.mu.Unlock()
+
+	InitSubscription(nil)
+	assert.Contains(t, logs.String(), "reason=no_config")
+
+	applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: false}, Unbounded: testCfg()})
+	assert.Contains(t, logs.String(), "reason=feature_off")
+}
+
+// The reason reaches IPC clients in the snapshot's JSON.
+func TestSnapshot_BlockedOnTheWire(t *testing.T) {
+	resetManager(t, idleWidgets)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	b, err := json.Marshal(CurrentSnapshot())
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"blocked":"no_config"`)
+}
+
+// A worker whose stop outlives the timeout is tearing down, not starting: it
+// reports why nothing runs, and the reason is logged once it exits.
+func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
+	prevTimeout := internalStopTimeout
+	internalStopTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { internalStopTimeout = prevTimeout })
+	block := make(chan struct{})
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return &fakeWidget{stopBlock: block}, nil
+	})
+	primeManager(t, nil)
+	require.NoError(t, Apply())
+	waitForRunning(t, manager, true, time.Second)
+	require.Eventually(t, func() bool { return CurrentSnapshot().Running }, time.Second, 10*time.Millisecond)
+
+	logs := captureLogs(t)
+	require.NoError(t, settings.Set(settings.UnboundedKey, false))
+	require.NoError(t, Apply()) // the stop times out on the pinned widget
+	assert.Equal(t, BlockedDisabled, CurrentSnapshot().Blocked)
+
+	close(block)
+	waitForRunning(t, manager, false, time.Second)
+	assert.Eventually(t, func() bool {
+		return strings.Count(logs.String(), "reason=disabled") == 1
+	}, time.Second, 10*time.Millisecond, logs.String())
 }
