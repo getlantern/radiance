@@ -2,6 +2,7 @@ package unbounded
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -204,4 +205,17 @@ func TestBlocked_StoppingWorkerIsNotStarting(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return logs.count(BlockedDisabled) == 1
 	}, time.Second, 10*time.Millisecond, logs.String())
+}
+
+// A widget that fails to build leaves nothing running with every condition
+// met. Only the worker's exit sees that, so it must log not_started.
+func TestBlocked_LoggedWhenTheWidgetFailsToBuild(t *testing.T) {
+	logs := captureBlocked(t)
+	resetManager(t, func(*clientcore.BroflakeOptions, *clientcore.WebRTCOptions, *clientcore.EgressOptions) (widget, error) {
+		return nil, errors.New("no widget")
+	})
+	primeManager(t, nil)
+	require.NoError(t, Apply())
+	assert.Eventually(t, func() bool { return logs.count(BlockedNotStarted) == 1 }, time.Second, 10*time.Millisecond, logs.String())
+	assert.Equal(t, BlockedNotStarted, CurrentSnapshot().Blocked)
 }

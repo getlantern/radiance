@@ -2,9 +2,10 @@ package unbounded
 
 import "log/slog"
 
-// Why the widget isn't running, in the order start checks them. The snapshot
-// reports one, and the manager logs each change, so a device that should be
-// sharing but isn't says which condition held it back.
+// Why the widget isn't running, most fundamental first: blockedLocked reports
+// the first that applies. The snapshot carries it, and the manager logs each
+// change, so a device that should be sharing but isn't says which condition
+// held it back.
 const (
 	// BlockedDisabled: the local sharing toggle is off.
 	BlockedDisabled = "disabled"
