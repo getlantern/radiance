@@ -195,6 +195,9 @@ type unboundedManager struct {
 	// new config arrives.
 	lastCfg       *C.UnboundedConfig
 	lastFeatureOn bool
+	// lastBlocked is the reason noteBlocked last logged, "" while the
+	// widget runs.
+	lastBlocked string
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.
@@ -639,6 +642,7 @@ func Apply() error {
 	if h := applyHook; h != nil {
 		h()
 	}
+	defer manager.noteBlocked()
 	if !Enabled() {
 		manager.stop()
 		return nil
@@ -646,24 +650,10 @@ func Apply() error {
 	manager.mu.Lock()
 	armed := manager.armed
 	shouldStart := manager.shouldStart()
-	cfg := manager.lastCfg
-	feature := manager.lastFeatureOn
 	running := manager.cancel != nil
 	manager.mu.Unlock()
-	if !armed {
-		return nil
-	}
-	if shouldStart {
-		if !running {
-			manager.start()
-		}
-		return nil
-	}
-	switch {
-	case cfg == nil:
-		slog.Info("Unbounded: enabled locally, waiting for server config")
-	case !feature:
-		slog.Info("Unbounded: enabled locally, but server feature flag is off")
+	if armed && shouldStart && !running {
+		manager.start()
 	}
 	return nil
 }
@@ -696,11 +686,14 @@ func InitSubscription(initial *config.Config) {
 	manager.mu.Unlock()
 	if initial != nil {
 		applyConfig(*initial)
+		return
 	}
+	manager.noteBlocked()
 }
 
 // applyConfig ignores updates after Stop so late events cannot restart the widget.
 func applyConfig(cfg config.Config) {
+	defer manager.noteBlocked()
 	manager.mu.Lock()
 	if !manager.armed {
 		manager.mu.Unlock()
@@ -1053,6 +1046,9 @@ func (m *unboundedManager) startLocked() {
 		m.mu.Lock()
 		m.running = ctx.Err() == nil
 		m.exitRun = exitRun
+		if m.running {
+			m.lastBlocked = ""
+		}
 		m.mu.Unlock()
 		if exitRun != nil {
 			exitRun.sync()

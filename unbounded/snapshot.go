@@ -22,10 +22,13 @@ const peerRetention = 60 * time.Second
 // Snapshot describes the current widget state, including peers missed by event subscribers.
 // Byte counts are cumulative since Epoch, like Arrivals.
 type Snapshot struct {
-	Epoch     string      `json:"epoch"`
-	Arrivals  uint64      `json:"arrivals"`
-	Enabled   bool        `json:"enabled"`
-	Running   bool        `json:"running"`
+	Epoch    string `json:"epoch"`
+	Arrivals uint64 `json:"arrivals"`
+	Enabled  bool   `json:"enabled"`
+	Running  bool   `json:"running"`
+	// Blocked is why the widget isn't running (one of the Blocked*
+	// constants), or "" when it is running or starting.
+	Blocked   string      `json:"blocked,omitempty"`
 	Peers     []string    `json:"peers"`
 	BytesDown uint64      `json:"bytesDown"`
 	BytesUp   uint64      `json:"bytesUp"`
@@ -132,6 +135,7 @@ func (m *unboundedManager) snapshot() Snapshot {
 		Arrivals:  m.arrivals,
 		Enabled:   Enabled(),
 		Running:   m.running,
+		Blocked:   m.blockedLocked(),
 		Peers:     []string{},
 		BytesDown: m.bytesDown,
 		BytesUp:   m.bytesUp,
