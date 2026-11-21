@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"sync"
@@ -131,9 +132,11 @@ type UsageStats struct {
 	stopped bool
 }
 
-// NewUsageStats returns a store that keeps its totals at path.
+// NewUsageStats returns a store that keeps its totals at path. It reads the
+// file's Since now, before it counts anything, so a reset another store makes
+// before this one's first save is seen as one.
 func NewUsageStats(path string) *UsageStats {
-	return &UsageStats{path: path, now: time.Now, loc: helper.LocalZone}
+	return &UsageStats{path: path, now: time.Now, loc: helper.LocalZone, since: readUsage(path).Since}
 }
 
 // count adds n bytes, sent if up, to c's pending total. It runs on the data
@@ -233,17 +236,28 @@ func (s *UsageStats) months(refresh bool) (month, next string) {
 }
 
 func readUsage(path string) Usage {
-	var u Usage
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &u)
-	}
+	u, _ := readUsageChecked(path)
 	return u
 }
 
+// readUsageChecked reads the file, reporting false when it exists but can't
+// be read: a save must not then write totals rebuilt from nothing over it. A
+// file that reads but doesn't parse is lost already, and is replaced.
+func readUsageChecked(path string) (Usage, bool) {
+	var u Usage
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return u, errors.Is(err, fs.ErrNotExist)
+	}
+	_ = json.Unmarshal(data, &u)
+	return u, true
+}
+
 // Usage returns the totals: the file's, which every store on it has added to,
-// plus this store's pending ones.
+// plus this store's pending ones. It resolves the device's zone afresh, since
+// an idle store's saves don't, and the zone decides the month.
 func (s *UsageStats) Usage() Usage {
-	month, next := s.months(false)
+	month, next := s.months(true)
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	u := readUsage(s.path)
@@ -317,7 +331,11 @@ func (s *UsageStats) Flush() {
 	month, next := s.months(true)
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	file := readUsage(s.path)
+	file, ok := readUsageChecked(s.path)
+	if !ok {
+		slog.Debug("vpn: reading usage stats failed; saving later")
+		return
+	}
 	if s.resetElsewhereLocked(file) && s.pendingBeforeLocked(file.Since) {
 		s.take()
 	}

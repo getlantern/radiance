@@ -47,7 +47,7 @@ type record struct {
 	category atomic.Uint32
 	// logID is the connection's sing-box log ID, and hedged whether the
 	// tracker indexed it by that ID for the proxyless hedge's report.
-	logID  uint32
+	logID  sblog.ID
 	hedged bool
 	// While undecided, a hedged connection's bytes wait in heldUp and
 	// heldDown, not in the usage store, until the hedge's report or
@@ -165,7 +165,7 @@ type connTracker struct {
 	isPrivate func(tag string) bool
 	// hedged indexes live connections through the proxyless hedge by log ID,
 	// so the hedge's FirstCommitted reports find them.
-	hedged lsync.TypedMap[uint32, *record]
+	hedged lsync.TypedMap[sblog.ID, *record]
 }
 
 func newConnTracker() *connTracker { return &connTracker{} }
@@ -375,8 +375,9 @@ func (m *connTracker) classify(tag, typ string) usageCategory {
 }
 
 // indexHedged indexes r by its log ID if its chain runs through the proxyless
-// hedge. The IDs are random, so two live connections rarely share one; when
-// they do, the newcomer isn't indexed and counts under its leaf outbound.
+// hedge. An ID is a random number and the time it was made, both compared, so
+// two live connections almost never share one; when they do, the newcomer
+// isn't indexed and counts under its leaf outbound.
 func (m *connTracker) indexHedged(ctx context.Context, r *record) {
 	if !slices.Contains(r.chain, ProxylessHedgeTag) {
 		return
@@ -385,10 +386,10 @@ func (m *connTracker) indexHedged(ctx context.Context, r *record) {
 	if !ok {
 		return
 	}
-	if _, loaded := m.hedged.LoadOrStore(id.ID, r); loaded {
+	if _, loaded := m.hedged.LoadOrStore(id, r); loaded {
 		return
 	}
-	r.logID, r.hedged = id.ID, true
+	r.logID, r.hedged = id, true
 	r.undecided.Store(true)
 }
 
@@ -411,7 +412,7 @@ func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
 	if !ok {
 		return
 	}
-	if r, ok := m.hedged.Load(id.ID); ok {
+	if r, ok := m.hedged.Load(id); ok {
 		r.category.Store(uint32(usageProxyless))
 		m.settleUsage(r)
 	}

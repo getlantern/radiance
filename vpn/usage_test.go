@@ -560,3 +560,62 @@ func TestUsageStatsIdleSaveClearsAnOrphanedStart(t *testing.T) {
 	b.Flush()
 	assert.Equal(t, int64(9), readUsage(path).Lifetime.Lantern.Up, "post-reset bytes don't inherit the orphaned start")
 }
+
+// Log IDs are a random number and a creation time; two connections sharing
+// only the number are told apart.
+func TestUsageLogIDsSharingANumberAreDistinct(t *testing.T) {
+	ct, _, hedge := newUsageTracker(t)
+	at := time.Now()
+	ctxA := sblog.ContextWithID(context.Background(), sblog.ID{ID: 7, CreatedAt: at})
+	ctxB := sblog.ContextWithID(context.Background(), sblog.ID{ID: 7, CreatedAt: at.Add(time.Millisecond)})
+	a, b := routeTCP(t, ct, ctxA, hedge), routeTCP(t, ct, ctxB, hedge)
+	require.True(t, a.rec.hedged)
+	require.True(t, b.rec.hedged)
+
+	ct.FirstCommitted(ctxB, ProxylessHedgeTag, ProxylessTag)
+	assert.Equal(t, usageLantern, usageCategory(a.rec.category.Load()), "b's report must not reach a")
+	assert.Equal(t, usageProxyless, usageCategory(b.rec.category.Load()))
+}
+
+func TestUsageStatsSeesAResetBeforeItsFirstSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	a := newTestUsageStats(path, &now)
+	a.count(usageLantern, true, 1)
+	a.Flush()
+
+	b := newTestUsageStats(path, &now) // reads the file's since as it starts
+	b.count(usageLantern, true, 40)
+	now = now.Add(time.Hour)
+	require.NoError(t, a.Reset())
+	b.Flush()
+	assert.Zero(t, readUsage(path).Lifetime, "b's first save must not restore bytes from before the reset")
+}
+
+func TestUsageStatsReadResolvesTheZone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 30, 23, 30, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.Flush()
+	require.Equal(t, "2026-11", s.Usage().Month)
+
+	s.loc = func() *time.Location { return time.FixedZone("UTC+1", 3600) }
+	s.Flush() // idle: doesn't resolve the zone
+	assert.Equal(t, "2026-12", s.Usage().Month, "a read uses the device's current zone")
+}
+
+func TestUsageStatsDoesNotOverwriteAFileItCantRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.count(usageLantern, true, 100)
+	s.Flush()
+
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	s.count(usageLantern, true, 5)
+	s.Flush()
+	require.NoError(t, os.Chmod(path, 0o600))
+	assert.Equal(t, int64(100), readUsage(path).Lifetime.Lantern.Up, "the saved totals survive")
+	assert.Equal(t, int64(5), s.peek().Lantern.Up, "and the new bytes wait for the next save")
+}

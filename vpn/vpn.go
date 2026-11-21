@@ -351,14 +351,18 @@ func (c *VPNClient) close() error {
 
 	c.logger.Debug("Closing tunnel")
 	c.setStatus(Disconnecting, nil)
-	if err := t.close(); err != nil {
+	err := t.close()
+	// Teardown settles the connections' held bytes even when it reports an
+	// error, and the backend's saver may already be stopped, so save now,
+	// into the store this tunnel counted into.
+	if t.usage != nil {
+		t.usage.stats.Flush()
+	}
+	if err != nil {
 		c.setStatus(ErrorStatus, err)
 		return err
 	}
 	c.setStatus(Disconnected, nil)
-	if c.usage != nil {
-		c.usage.stats.Flush()
-	}
 	if c.platformIfce != nil {
 		c.platformIfce.PostServiceClose()
 	}
