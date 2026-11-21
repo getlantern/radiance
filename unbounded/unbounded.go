@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	C "github.com/getlantern/common"
@@ -204,6 +205,8 @@ type unboundedManager struct {
 	// noteMu serializes noteBlocked. It's never held with transitionMu
 	// waiting on it, and m.mu is only taken inside it.
 	noteMu sync.Mutex
+	// noteQueued is set while a noteBlockedAsync evaluation is pending.
+	noteQueued atomic.Bool
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.

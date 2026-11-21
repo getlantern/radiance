@@ -1,6 +1,9 @@
 package unbounded
 
-import "log/slog"
+import (
+	"log/slog"
+	"sync/atomic"
+)
 
 // Why the widget isn't running, most fundamental first: blockedLocked reports
 // the first that applies. The snapshot carries it, and the manager logs each
@@ -62,9 +65,31 @@ func (m *unboundedManager) noteBlocked() {
 	}
 }
 
+// noteBlockedAsync runs noteBlocked in the background, at most one at a time,
+// for a caller that mustn't wait on logging: noteBlocked holds noteMu while
+// it writes, so a stalled log sink would otherwise stall snapshot reads.
+func (m *unboundedManager) noteBlockedAsync() {
+	if !m.noteQueued.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer m.noteQueued.Store(false)
+		m.noteBlocked()
+	}()
+}
+
+// blockedHook, when set, replaces logBlocked's logging. Tests set it, since
+// they may not swap the default logger. It's atomic because background
+// evaluations can log while a test swaps it.
+var blockedHook atomic.Pointer[func(reason string)]
+
 // logBlocked logs why the widget isn't running, or, for "", that it runs
-// again. Tests replace it, since they may not swap the default logger.
-var logBlocked = func(reason string) {
+// again.
+func logBlocked(reason string) {
+	if h := blockedHook.Load(); h != nil {
+		(*h)(reason)
+		return
+	}
 	if reason == "" {
 		slog.Info("Unbounded: widget running")
 		return

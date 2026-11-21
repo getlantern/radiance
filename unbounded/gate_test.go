@@ -50,13 +50,13 @@ func (l *blockedLog) String() string {
 func captureBlocked(t *testing.T) *blockedLog {
 	t.Helper()
 	l := &blockedLog{}
-	prev := logBlocked
-	logBlocked = func(reason string) {
+	record := func(reason string) {
 		l.mu.Lock()
 		l.reasons = append(l.reasons, reason)
 		l.mu.Unlock()
 	}
-	t.Cleanup(func() { logBlocked = prev })
+	prev := blockedHook.Swap(&record)
+	t.Cleanup(func() { blockedHook.Store(prev) })
 	return l
 }
 
@@ -275,8 +275,34 @@ func TestBlocked_SnapshotReadLogsNotArmed(t *testing.T) {
 	manager.mu.Unlock()
 
 	assert.Equal(t, BlockedNotArmed, CurrentSnapshot().Blocked)
+	assert.Eventually(t, func() bool { return logs.count(BlockedNotArmed) == 1 }, time.Second, 10*time.Millisecond, logs.String())
 	CurrentSnapshot()
-	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, logs.count(BlockedNotArmed), "logged once across polls: %s", logs.String())
+}
+
+// A stalled log sink mustn't stall snapshot reads: the app polls them, and
+// the backend's activity tracker reads them under its own lock.
+func TestBlocked_SnapshotReadDoesNotWaitOnLogging(t *testing.T) {
+	captureBlocked(t)
+	resetManager(t, idleWidgets)
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+	stall := make(chan struct{})
+	release := sync.OnceFunc(func() { close(stall) })
+	t.Cleanup(release)
+	stalled := func(string) { <-stall }
+	blockedHook.Store(&stalled)
+
+	go manager.noteBlocked() // holds noteMu, stuck in the log sink
+	time.Sleep(20 * time.Millisecond)
+	read := make(chan Snapshot, 1)
+	go func() { read <- CurrentSnapshot() }()
+	select {
+	case s := <-read:
+		assert.Equal(t, BlockedNoConfig, s.Blocked)
+	case <-time.After(time.Second):
+		t.Fatal("a snapshot read waited on a stalled log write")
+	}
 }
 
 // An evaluation that chose no_config but hadn't logged it when the widget
@@ -284,16 +310,17 @@ func TestBlocked_SnapshotReadLogsNotArmed(t *testing.T) {
 // then logs that the widget runs.
 func TestBlocked_StaleReasonIsNotTheLastLog(t *testing.T) {
 	logs := captureBlocked(t)
-	record := logBlocked
+	record := *blockedHook.Load()
 	held := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	logBlocked = func(reason string) {
+	holding := func(reason string) {
 		if reason == BlockedNoConfig {
 			once.Do(func() { close(held); <-release })
 		}
 		record(reason)
 	}
+	blockedHook.Store(&holding)
 	resetManager(t, idleWidgets)
 	t.Cleanup(manager.stop)
 	releaseOnce := sync.OnceFunc(func() { close(release) })
