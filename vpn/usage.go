@@ -254,16 +254,15 @@ func readUsageChecked(path string) (Usage, bool) {
 }
 
 // usageReadWait and usageResetWait bound how long Usage and Reset, which IPC
-// handlers call, wait for a save in progress, so a stalled disk can't hang the
-// request. A save can spend usageLockWait on the file lock and then read and
-// write the file, so a reset waits longer than that.
+// handlers call, wait behind a save in progress. They don't bound the
+// request's own read or write of the file. A save can spend usageLockWait on
+// the file lock and then read and write the file, so a reset waits longer.
 var (
 	usageReadWait  = 250 * time.Millisecond
 	usageResetWait = 3 * time.Second
 )
 
-// lockWithin locks mu, giving up after d. It polls, which only a request that
-// finds a save in progress does.
+// lockWithin locks mu, giving up after d. It polls while mu is held.
 func lockWithin(mu *sync.Mutex, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for !mu.TryLock() {
@@ -395,12 +394,14 @@ func (s *UsageStats) Reset() error {
 	defer s.writeMu.Unlock()
 	l, ok := s.lock()
 	if !ok {
-		return errUsageLocked
+		return ErrUsageBusy // another process is saving
 	}
 	defer func() { _ = l.Unlock() }()
 
 	month, _ := s.months(true)
-	s.saveMu.Lock()
+	if !lockWithin(&s.saveMu, usageReadWait) {
+		return ErrUsageBusy
+	}
 	defer s.saveMu.Unlock()
 	pending, from := s.take()
 	since := s.now()
@@ -412,18 +413,15 @@ func (s *UsageStats) Reset() error {
 	return nil
 }
 
-// ErrUsageBusy is returned when a save in progress outlasts a request's wait;
-// the request can be retried.
+// ErrUsageBusy means a save, in this process or another, outlasted the
+// request's wait; the request can be retried.
 var ErrUsageBusy = errors.New("usage stats are being saved")
 
-var (
-	errUsageLocked = errors.New("usage stats file is locked")
-	errUsageWrite  = errors.New("could not save usage stats")
-)
+var errUsageWrite = errors.New("could not save usage stats")
 
 // Run saves every interval until ctx ends or Stop is called. It returns at
-// once if Stop was called, or if another Run is saving: one runs at a time,
-// so Stop joins the only one. A Run whose ctx ended lets a later one start.
+// once if Stop was called, or if another Run hasn't returned yet: one runs at
+// a time, so Stop joins the only one.
 func (s *UsageStats) Run(ctx context.Context, every time.Duration) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

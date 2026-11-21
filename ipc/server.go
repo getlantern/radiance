@@ -582,7 +582,7 @@ func (s *localapi) vpnUsageResetHandler(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
-// usageErrorStatus is 503 for a save in progress, which the app can retry.
+// usageErrorStatus is 503 for vpn.ErrUsageBusy and 500 otherwise.
 func usageErrorStatus(err error) int {
 	if errors.Is(err, vpn.ErrUsageBusy) {
 		return http.StatusServiceUnavailable

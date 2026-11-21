@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	A "github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	sblog "github.com/sagernet/sing-box/log"
@@ -720,4 +721,27 @@ func TestUsageStatsRunAfterACancelledRunSaves(t *testing.T) {
 	assert.Eventually(t, func() bool { return readUsage(path).Lifetime.Lantern.Up == 6 }, 5*time.Second, 10*time.Millisecond,
 		"a Run after a cancelled one saves")
 	s.Stop()
+}
+
+// A reset is retryable however it finds a save in its way: another process
+// holding the file lock, or a read holding the store.
+func TestUsageStatsResetIsBusyBehindAnyStall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	defer func(l, r time.Duration) { usageLockWait, usageReadWait = l, r }(usageLockWait, usageReadWait)
+	usageLockWait, usageReadWait = 50*time.Millisecond, 50*time.Millisecond
+
+	other := flock.New(path + ".lock")
+	locked, err := other.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	assert.ErrorIs(t, s.Reset(), ErrUsageBusy, "another process saving")
+	require.NoError(t, other.Unlock())
+
+	s.saveMu.Lock() // a read holding the store
+	err = s.Reset()
+	s.saveMu.Unlock()
+	assert.ErrorIs(t, err, ErrUsageBusy)
+	require.NoError(t, s.Reset())
 }
