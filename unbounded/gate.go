@@ -48,7 +48,7 @@ func (m *unboundedManager) blockedLocked(enabled bool) string {
 }
 
 // noteBlocked logs why the widget isn't running, once per change of reason,
-// and logs when it runs again after a reason was logged. Callers run it after
+// and logs when it's running or starting again after a reason was logged. Callers run it after
 // acting on an evaluation, without m.mu held. noteMu keeps choosing a reason
 // and logging it together, so concurrent evaluations log in the order they
 // chose and the last line is the current state.
@@ -83,15 +83,16 @@ func (m *unboundedManager) noteBlockedAsync() {
 // evaluations can log while a test swaps it.
 var blockedHook atomic.Pointer[func(reason string)]
 
-// logBlocked logs why the widget isn't running, or, for "", that it runs
-// again.
+// logBlocked logs why the widget isn't running, or, for "", that it's
+// running or starting: blockedLocked doesn't tell those apart, and a start
+// that then fails is logged as not_started when its worker exits.
 func logBlocked(reason string) {
 	if h := blockedHook.Load(); h != nil {
 		(*h)(reason)
 		return
 	}
 	if reason == "" {
-		slog.Info("Unbounded: widget running")
+		slog.Info("Unbounded: widget running or starting")
 		return
 	}
 	slog.Info("Unbounded: widget not running", "reason", reason)

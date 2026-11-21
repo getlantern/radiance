@@ -1072,7 +1072,7 @@ func (m *unboundedManager) startLocked() {
 		m.mu.Unlock()
 		// Through noteBlocked, not by clearing lastBlocked here: a reason an
 		// earlier evaluation chose but hasn't logged yet is then logged before
-		// this, so the last line says the widget runs.
+		// this, so it can't be the last line once the widget runs.
 		m.noteBlocked()
 		if exitRun != nil {
 			exitRun.sync()

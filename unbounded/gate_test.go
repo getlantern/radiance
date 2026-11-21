@@ -298,7 +298,16 @@ func TestBlocked_SnapshotReadDoesNotWaitOnLogging(t *testing.T) {
 	}
 	blockedHook.Store(&stalled)
 
-	go manager.noteBlocked() // holds noteMu, stuck in the log sink
+	direct := make(chan struct{})
+	go func() {
+		defer close(direct)
+		manager.noteBlocked() // holds noteMu, stuck in the log sink
+	}()
+	// Before resetManager restores anything: unstall it, then let it finish.
+	t.Cleanup(func() {
+		release()
+		<-direct
+	})
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
