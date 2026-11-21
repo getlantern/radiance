@@ -175,6 +175,13 @@ func (s *throughputTracker) sample(now time.Time) {
 
 		s.applyDelta(id, rec.outbound, up, down)
 		s.nextSeen[id] = byteTotals{up: up, down: down}
+
+		// A hedged connection that went quiet before the hedge reported
+		// would hold its bytes until it closed; this walk already visits it
+		// every tick, so it settles here at no extra wakeup.
+		if rec.undecided.Load() && now.Sub(rec.createdAt) >= usageHedgeWait {
+			s.manager.settleUsage(rec)
+		}
 	}
 
 	// Drain pending after the active walk. A connection that closes during the walk may already

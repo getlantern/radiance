@@ -508,3 +508,35 @@ func TestUsageChunkHeldAfterSettleIsReleased(t *testing.T) {
 	assert.Equal(t, UsageBytes{Up: 9}, stats.peek().Proxyless)
 	assert.Zero(t, c.rec.heldUp.Load())
 }
+
+func TestUsageQuietHedgedConnectionSettlesOnTheSamplerTick(t *testing.T) {
+	ct, stats, hedge := newUsageTracker(t)
+	c := routeTCP(t, ct, sblog.ContextWithNewID(context.Background()), hedge)
+	transfer(t, c, 5, 6)
+	tp := newThroughputTracker(ct, time.Hour)
+	tp.lastTickAt = time.Now()
+
+	tp.sample(time.Now().Add(time.Second))
+	assert.Zero(t, stats.peek(), "within the wait the bytes are still held")
+	tp.sample(c.rec.createdAt.Add(usageHedgeWait))
+	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, stats.peek().Lantern, "the tick settles a quiet connection")
+}
+
+func TestUsageStatsKeepsBytesCountedAfterAnotherStoresReset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	a, b := newTestUsageStats(path, &now), newTestUsageStats(path, &now)
+	b.count(usageLantern, true, 2)
+	b.Flush()
+	a.Flush()
+
+	now = now.Add(time.Hour)
+	require.NoError(t, a.Reset())
+	b.Flush() // idle: b doesn't see the reset yet
+
+	now = now.Add(5 * time.Hour)
+	b.count(usageLantern, true, 9)
+	assert.Equal(t, int64(9), b.Usage().Lifetime.Lantern.Up, "counted after the reset, so it shows")
+	b.Flush()
+	assert.Equal(t, int64(9), readUsage(path).Lifetime.Lantern.Up, "and it is saved, not dropped")
+}

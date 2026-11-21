@@ -108,7 +108,11 @@ type UsageStats struct {
 	loc  func() *time.Location
 
 	pending [usageCategories]struct{ up, down atomic.Int64 }
-	zone    atomic.Pointer[time.Location]
+	// pendingFrom is when the pending totals last went from empty to not,
+	// in Unix nanoseconds, or 0 while they're empty. A save compares it with
+	// a reset another store made, to keep bytes counted after the reset.
+	pendingFrom atomic.Int64
+	zone        atomic.Pointer[time.Location]
 
 	// writeMu serializes this store's saves and resets, across the wait for
 	// the file lock. saveMu is held across a save's read, take and write of
@@ -118,8 +122,7 @@ type UsageStats struct {
 	saveMu  sync.Mutex
 	// since is the file's Since when this store last read or wrote it,
 	// guarded by saveMu. Since changes only on a reset, so a file whose
-	// Since differs was reset by another store, and the bytes pending here
-	// were counted before it.
+	// Since differs was reset by another store.
 	since time.Time
 
 	runMu   sync.Mutex
@@ -141,6 +144,19 @@ func (s *UsageStats) count(c usageCategory, up bool, n int64) {
 	} else {
 		s.pending[c].down.Add(n)
 	}
+	// Only the first chunk after a save reads the clock.
+	if s.pendingFrom.Load() == 0 {
+		s.pendingFrom.CompareAndSwap(0, s.now().UnixNano())
+	}
+}
+
+// pendingBeforeLocked reports whether the pending totals started before
+// reset, so they belong to the totals that reset cleared. Bytes counted
+// between the reset and the first chunk after it are dropped with them, at
+// most one save interval's worth. Caller holds saveMu.
+func (s *UsageStats) pendingBeforeLocked(reset time.Time) bool {
+	from := s.pendingFrom.Load()
+	return from != 0 && from <= reset.UnixNano()
 }
 
 // idle reports whether nothing is pending and the store already saw the file,
@@ -161,20 +177,31 @@ func (s *UsageStats) peek() UsageTotals {
 	return t
 }
 
-func (s *UsageStats) take() UsageTotals {
+// take empties the pending totals and returns them with when they started.
+// pendingFrom is cleared first, so a chunk counted meanwhile restarts it no
+// later than the chunk itself.
+func (s *UsageStats) take() (UsageTotals, int64) {
+	from := s.pendingFrom.Swap(0)
 	var t UsageTotals
 	for c := usageNone + 1; c < usageCategories; c++ {
 		b := t.at(c)
 		b.Up, b.Down = s.pending[c].up.Swap(0), s.pending[c].down.Swap(0)
 	}
-	return t
+	return t, from
 }
 
-func (s *UsageStats) giveBack(t UsageTotals) {
+// giveBack returns totals that take took, keeping the earlier start.
+func (s *UsageStats) giveBack(t UsageTotals, from int64) {
 	for c := usageNone + 1; c < usageCategories; c++ {
 		b := t.at(c)
 		s.pending[c].up.Add(b.Up)
 		s.pending[c].down.Add(b.Down)
+	}
+	for from != 0 {
+		cur := s.pendingFrom.Load()
+		if cur != 0 && cur <= from || s.pendingFrom.CompareAndSwap(cur, from) {
+			return
+		}
 	}
 }
 
@@ -207,7 +234,7 @@ func (s *UsageStats) Usage() Usage {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	u := readUsage(s.path)
-	stale := s.resetElsewhereLocked(u)
+	stale := s.resetElsewhereLocked(u) && s.pendingBeforeLocked(u.Since)
 	if u.Since.IsZero() {
 		u.Since = s.now()
 	}
@@ -278,9 +305,7 @@ func (s *UsageStats) Flush() {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	file := readUsage(s.path)
-	if s.resetElsewhereLocked(file) {
-		// The pending bytes were counted before that reset, give or take
-		// one save interval, so they go with it.
+	if s.resetElsewhereLocked(file) && s.pendingBeforeLocked(file.Since) {
 		s.take()
 	}
 	s.since = file.Since
@@ -289,14 +314,14 @@ func (s *UsageStats) Flush() {
 		u.Since = s.now()
 	}
 	u.rollTo(month, next)
-	pending := s.take()
+	pending, from := s.take()
 	u.Lifetime.add(pending)
 	u.ThisMonth.add(pending)
 	if u == file {
 		return
 	}
 	if !s.write(u) {
-		s.giveBack(pending)
+		s.giveBack(pending, from)
 		return
 	}
 	s.since = u.Since
@@ -315,10 +340,10 @@ func (s *UsageStats) Reset() error {
 	month, _ := s.months(true)
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	pending := s.take()
+	pending, from := s.take()
 	since := s.now()
 	if !s.write(Usage{Since: since, Month: month}) {
-		s.giveBack(pending)
+		s.giveBack(pending, from)
 		return errUsageWrite
 	}
 	s.since = since
