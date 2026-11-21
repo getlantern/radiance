@@ -290,11 +290,20 @@ func TestBlocked_SnapshotReadDoesNotWaitOnLogging(t *testing.T) {
 	stall := make(chan struct{})
 	release := sync.OnceFunc(func() { close(stall) })
 	t.Cleanup(release)
-	stalled := func(string) { <-stall }
+	entered := make(chan struct{})
+	var enter sync.Once
+	stalled := func(string) {
+		enter.Do(func() { close(entered) })
+		<-stall
+	}
 	blockedHook.Store(&stalled)
 
 	go manager.noteBlocked() // holds noteMu, stuck in the log sink
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("the evaluation never reached the log sink")
+	}
 	read := make(chan Snapshot, 1)
 	go func() { read <- CurrentSnapshot() }()
 	select {
