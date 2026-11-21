@@ -28,12 +28,11 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 // replace github.com/sagernet/wireguard-go => ../wireguard-go
 
-// x/v0.3.0 plus a one-line fix so x/httpconnect builds against quic-go >= v0.53
-// (quic.EarlyConnection became *quic.Conn), and getlantern/outline-sdk#2, so
-// disorder finds the TCP socket under sing-box's tracked connections.
-// lantern-box and kindling carry the same replace, but a replace only applies
-// in the main module. Drop once an upstream x release includes both
-// OutlineFoundation/outline-sdk#657 and that fix.
+// x/v0.3.0 plus two fixes: x/httpconnect builds against quic-go >= v0.53
+// (quic.EarlyConnection became *quic.Conn), and disorder finds the TCP socket
+// under sing-box's tracked connections. A replace only applies in the main
+// module, so radiance carries its own. Drop once an upstream x release has
+// both fixes.
 replace golang.getoutline.org/sdk/x => github.com/getlantern/outline-sdk/x v0.3.0-lantern.2
 
 // sing-box/sing-tun/tailscale need gvisor's v0.0.0-20260727.0-sing-box-mod.1
