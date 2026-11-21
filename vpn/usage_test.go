@@ -540,3 +540,23 @@ func TestUsageStatsKeepsBytesCountedAfterAnotherStoresReset(t *testing.T) {
 	b.Flush()
 	assert.Equal(t, int64(9), readUsage(path).Lifetime.Lantern.Up, "and it is saved, not dropped")
 }
+
+// A chunk counted while a save drained can leave a start time with no bytes
+// behind it; an idle save must clear it before a later reset makes it stale.
+func TestUsageStatsIdleSaveClearsAnOrphanedStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	a, b := newTestUsageStats(path, &now), newTestUsageStats(path, &now)
+	b.Flush()
+	a.Flush()
+	b.pendingFrom.Store(now.UnixNano()) // as a count racing take leaves it
+
+	now = now.Add(time.Minute)
+	b.Flush() // idle
+	now = now.Add(time.Hour)
+	require.NoError(t, a.Reset())
+	now = now.Add(time.Hour)
+	b.count(usageLantern, true, 9)
+	b.Flush()
+	assert.Equal(t, int64(9), readUsage(path).Lifetime.Lantern.Up, "post-reset bytes don't inherit the orphaned start")
+}

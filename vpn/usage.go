@@ -161,11 +161,24 @@ func (s *UsageStats) pendingBeforeLocked(reset time.Time) bool {
 
 // idle reports whether nothing is pending and the store already saw the file,
 // so a save has nothing to do.
+//
+// A chunk counted while take drains can leave pendingFrom set with its bytes
+// already taken. With nothing pending, idle clears it, so bytes counted after
+// a later reset don't inherit it and get dropped. A chunk counted between the
+// check and the clear keeps its bytes and loses only its start time, so it
+// counts as after any reset: at most one interval's worth, like the other
+// reset bounds.
 func (s *UsageStats) idle() bool {
 	s.saveMu.Lock()
 	seen := !s.since.IsZero()
 	s.saveMu.Unlock()
-	return seen && s.peek() == UsageTotals{}
+	if s.peek() != (UsageTotals{}) {
+		return false
+	}
+	if from := s.pendingFrom.Load(); from != 0 {
+		s.pendingFrom.CompareAndSwap(from, 0)
+	}
+	return seen
 }
 
 func (s *UsageStats) peek() UsageTotals {
