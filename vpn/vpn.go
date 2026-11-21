@@ -151,6 +151,10 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 func (c *VPNClient) SetUsageStats(stats *UsageStats, isPrivate func(tag string) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if stats == nil {
+		c.usage = nil
+		return
+	}
 	c.usage = &usageSink{stats: stats, isPrivate: isPrivate}
 }
 

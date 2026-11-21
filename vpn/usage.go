@@ -125,6 +125,9 @@ type UsageStats struct {
 	// guarded by saveMu. Since changes only on a reset, so a file whose
 	// Since differs was reset by another store.
 	since time.Time
+	// last is the totals the last Usage returned, for a read that can't get
+	// saveMu in time.
+	last atomic.Pointer[Usage]
 
 	runMu   sync.Mutex
 	stopRun context.CancelFunc
@@ -253,13 +256,41 @@ func readUsageChecked(path string) (Usage, bool) {
 	return u, true
 }
 
+// usageReadWait bounds how long Usage, which an IPC handler calls, waits for
+// a save in progress; a stalled disk must not hang the request.
+var usageReadWait = 250 * time.Millisecond
+
+// lockWithin locks mu, giving up after d.
+func lockWithin(mu *sync.Mutex, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for !mu.TryLock() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
+}
+
 // Usage returns the totals: the file's, which every store on it has added to,
 // plus this store's pending ones. It resolves the device's zone afresh, since
-// an idle store's saves don't, and the zone decides the month.
+// an idle store's saves don't, and the zone decides the month. If a save holds
+// the store past usageReadWait, it returns the totals it last returned.
 func (s *UsageStats) Usage() Usage {
 	month, next := s.months(true)
-	s.saveMu.Lock()
+	if !lockWithin(&s.saveMu, usageReadWait) {
+		if last := s.last.Load(); last != nil {
+			return *last
+		}
+		return Usage{Since: s.now(), Month: month}
+	}
 	defer s.saveMu.Unlock()
+	u := s.usageLocked(month, next)
+	s.last.Store(&u)
+	return u
+}
+
+func (s *UsageStats) usageLocked(month, next string) Usage {
 	u := readUsage(s.path)
 	stale := s.resetElsewhereLocked(u) && s.pendingBeforeLocked(u.Since)
 	if u.Since.IsZero() {
@@ -360,7 +391,10 @@ func (s *UsageStats) Flush() {
 
 // Reset clears the totals, here and in the file, and counts from now.
 func (s *UsageStats) Reset() error {
-	s.writeMu.Lock()
+	// An IPC handler calls Reset, so a save in progress gets a bounded wait.
+	if !lockWithin(&s.writeMu, usageLockWait) {
+		return errUsageLocked
+	}
 	defer s.writeMu.Unlock()
 	l, ok := s.lock()
 	if !ok {
@@ -393,12 +427,21 @@ func (s *UsageStats) Run(ctx context.Context, every time.Duration) {
 	done := make(chan struct{})
 	defer close(done)
 	s.runMu.Lock()
-	if s.stopped {
+	if s.stopped || s.stopRun != nil {
+		// Stopped, or another Run is saving: one at a time, so Stop
+		// joins the only one.
 		s.runMu.Unlock()
 		return
 	}
 	s.stopRun, s.runDone = cancel, done
 	s.runMu.Unlock()
+	defer func() {
+		s.runMu.Lock()
+		if s.runDone == done {
+			s.stopRun, s.runDone = nil, nil
+		}
+		s.runMu.Unlock()
+	}()
 	tk := time.NewTicker(every)
 	defer tk.Stop()
 	for {

@@ -484,7 +484,9 @@ func BenchmarkCountUpload(b *testing.B) {
 			if bc.usage {
 				ct.usage = NewUsageStats(filepath.Join(b.TempDir(), "usage-stats.json"))
 			}
-			r := &record{createdAt: time.Now()}
+			// Made in the future, so a long -benchtime never reaches
+			// usageHedgeWait and settles the held case.
+			r := &record{createdAt: time.Now().Add(time.Hour)}
 			r.category.Store(uint32(usageLantern))
 			r.undecided.Store(bc.hedged)
 			b.ReportAllocs()
@@ -645,4 +647,45 @@ func TestTunnelSavesUsageAfterSlowTeardown(t *testing.T) {
 	require.Error(t, tn.close(), "close times out")
 	assert.Eventually(t, func() bool { return readUsage(path).Lifetime.Lantern.Down == 12 }, 5*time.Second, 10*time.Millisecond,
 		"the bytes settled during the slow teardown are saved")
+}
+
+func TestUsageStatsReadDoesNotWaitOnAStalledSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.count(usageDirect, true, 3)
+	first := s.Usage()
+
+	s.saveMu.Lock() // a save stuck writing
+	defer s.saveMu.Unlock()
+	start := time.Now()
+	got := s.Usage()
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.Equal(t, first, got, "it returns the last totals it read")
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	assert.ErrorIs(t, s.Reset(), errUsageLocked, "a reset gives up rather than hang the request")
+}
+
+func TestUsageStatsRunsOneSaverAtATime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	s := NewUsageStats(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx, time.Hour)
+	require.Eventually(t, func() bool {
+		s.runMu.Lock()
+		defer s.runMu.Unlock()
+		return s.stopRun != nil
+	}, 5*time.Second, 5*time.Millisecond)
+
+	returned := make(chan struct{})
+	go func() { s.Run(ctx, time.Hour); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second Run must return while the first is saving")
+	}
+	s.Stop()
 }
