@@ -49,6 +49,11 @@ type record struct {
 	// tracker indexed it by that ID for the proxyless hedge's report.
 	logID  uint32
 	hedged bool
+	// While undecided, a hedged connection's bytes wait in heldUp and
+	// heldDown, not in the usage store, until the hedge's report or
+	// usageHedgeWait settles which path they took (settleUsage).
+	undecided        atomic.Bool
+	heldUp, heldDown atomic.Int64
 
 	// closed is the exactly-once gate for leave: Close may fire more than once (half-close,
 	// error/abort, ctx-cancel then explicit close), but the accounting must fold only once.
@@ -244,6 +249,7 @@ func (m *connTracker) leave(r *record) {
 	if r.hedged {
 		m.hedged.CompareAndDelete(r.logID, r)
 	}
+	m.settleUsage(r)
 
 	if o := m.currentObserver(); o != nil {
 		o.OnClose(ConnClose{
@@ -383,11 +389,20 @@ func (m *connTracker) indexHedged(ctx context.Context, r *record) {
 		return
 	}
 	r.logID, r.hedged = id.ID, true
+	r.undecided.Store(true)
 }
 
+// usageHedgeWait is how long a hedged connection's bytes wait for the hedge
+// to report that First carries it. It is well past the hedge's commit timeout
+// and a move's dial, so a connection still unreported has gone to the
+// fallback, or First was slow to reply; either way its bytes count under the
+// fallback from then on.
+const usageHedgeWait = 10 * time.Second
+
 // FirstCommitted satisfies lbA.HedgeObserver: a connection the proxyless
-// hedge committed to proxyless counts as proxyless, including the bytes it
-// sent before First replied, which the hedge also sent through First.
+// hedge committed to proxyless counts as proxyless, with the bytes it held
+// while undecided, which the hedge also sent through First. A report after
+// usageHedgeWait changes only the bytes still to come.
 func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
 	if hedge != ProxylessHedgeTag || first != ProxylessTag {
 		return
@@ -396,20 +411,62 @@ func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
 	if !ok {
 		return
 	}
-	r, ok := m.hedged.Load(id.ID)
-	if !ok {
+	if r, ok := m.hedged.Load(id.ID); ok {
+		r.category.Store(uint32(usageProxyless))
+		m.settleUsage(r)
+	}
+}
+
+// settleUsage ends r's wait, if it was waiting, and adds the bytes it held to
+// its category. The category is set before the wait ends, so a chunk counted
+// after sees the right one.
+func (m *connTracker) settleUsage(r *record) {
+	if r.undecided.CompareAndSwap(true, false) {
+		m.releaseHeld(r)
+	}
+}
+
+// releaseHeld adds r's held bytes to its category. Swapping them out makes
+// each byte released once, whether the settler or a chunk that raced it
+// releases it.
+func (m *connTracker) releaseHeld(r *record) {
+	if m.usage == nil {
 		return
 	}
-	// Read the counts before switching the category: countUpload and
-	// countDownload add to the category before the record, so a chunk
-	// racing the switch is either in these counts and counted under the
-	// old category, or counted under proxyless and not in them. It is never
-	// moved twice.
-	up, down := r.upload.Load(), r.download.Load()
-	old := usageCategory(r.category.Swap(uint32(usageProxyless)))
-	if m.usage != nil && old != usageProxyless {
-		m.usage.move(old, usageProxyless, up, down)
+	c := usageCategory(r.category.Load())
+	if up := r.heldUp.Swap(0); up != 0 {
+		m.usage.count(c, true, up)
 	}
+	if down := r.heldDown.Swap(0); down != 0 {
+		m.usage.count(c, false, down)
+	}
+}
+
+// countUsage adds n bytes, sent if up, to r's category, or holds them while
+// the hedge hasn't said which path r took.
+func (m *connTracker) countUsage(r *record, up bool, n int64) {
+	if m.usage == nil {
+		return
+	}
+	if r.undecided.Load() {
+		if time.Since(r.createdAt) >= usageHedgeWait {
+			m.settleUsage(r)
+		} else {
+			held := &r.heldDown
+			if up {
+				held = &r.heldUp
+			}
+			held.Add(n)
+			if r.undecided.Load() {
+				return
+			}
+			// Settled while this chunk was being held: release it here,
+			// since the settler may have released before it was added.
+			m.releaseHeld(r)
+			return
+		}
+	}
+	m.usage.count(usageCategory(r.category.Load()), up, n)
 }
 
 func (m *connTracker) resolveChain(matchOutbound A.Outbound) (outbound, outboundType string, chain []string) {
@@ -461,22 +518,16 @@ func formatRule(rule A.Rule) string {
 	return rule.String() + " => " + rule.Action().String()
 }
 
-// countUpload and countDownload add to the usage category before the record:
-// FirstCommitted relies on that order.
 func (m *connTracker) countUpload(r *record, n int64) {
-	if m.usage != nil {
-		m.usage.count(usageCategory(r.category.Load()), true, n)
-	}
 	r.upload.Add(n)
 	m.pushUploaded(n)
+	m.countUsage(r, true, n)
 }
 
 func (m *connTracker) countDownload(r *record, n int64) {
-	if m.usage != nil {
-		m.usage.count(usageCategory(r.category.Load()), false, n)
-	}
 	r.download.Add(n)
 	m.pushDownloaded(n)
+	m.countUsage(r, false, n)
 }
 
 func (m *connTracker) uploadCounter(r *record) N.CountFunc {

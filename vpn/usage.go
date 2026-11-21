@@ -143,14 +143,13 @@ func (s *UsageStats) count(c usageCategory, up bool, n int64) {
 	}
 }
 
-// move recounts up and down bytes from one category to another. The bytes
-// may already be saved under from, so its pending total can go below zero;
-// the next save then takes them back out of the file.
-func (s *UsageStats) move(from, to usageCategory, up, down int64) {
-	s.pending[from].up.Add(-up)
-	s.pending[from].down.Add(-down)
-	s.pending[to].up.Add(up)
-	s.pending[to].down.Add(down)
+// idle reports whether nothing is pending and the store already saw the file,
+// so a save has nothing to do.
+func (s *UsageStats) idle() bool {
+	s.saveMu.Lock()
+	seen := !s.since.IsZero()
+	s.saveMu.Unlock()
+	return seen && s.peek() == UsageTotals{}
 }
 
 func (s *UsageStats) peek() UsageTotals {
@@ -257,9 +256,17 @@ func (s *UsageStats) write(u Usage) bool {
 // Flush adds the pending totals to the file, rolling its month forward. It
 // writes nothing when the file would not change. Without the file lock, or if
 // the write fails, the totals stay pending for the next save.
+//
+// With nothing pending, once the store has seen the file, it returns without
+// touching the disk: Run calls it every interval, and an idle device should
+// pay no more than that check. A month that ended meanwhile rolls on the next
+// read or save.
 func (s *UsageStats) Flush() {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.idle() {
+		return
+	}
 	l, ok := s.lock()
 	if !ok {
 		slog.Debug("vpn: usage stats file lock unavailable; saving later")

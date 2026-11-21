@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,20 +117,64 @@ func TestUsageHedgeCommitFlipsToProxyless(t *testing.T) {
 	assert.False(t, indexed, "leave drops the index")
 }
 
-func TestUsageHedgeCommitMovesBytesAlreadySaved(t *testing.T) {
+func TestUsageHedgedBytesWaitForTheReport(t *testing.T) {
 	ct, stats, hedge := newUsageTracker(t)
 	ctx := sblog.ContextWithNewID(context.Background())
 
 	c := routeTCP(t, ct, ctx, hedge)
 	transfer(t, c, 5, 6)
 	stats.Flush()
+	assert.Zero(t, readUsage(stats.path).Lifetime, "undecided bytes aren't saved under any path")
 	ct.FirstCommitted(ctx, ProxylessHedgeTag, ProxylessTag)
 	stats.Flush()
 
 	file := readUsage(stats.path)
-	assert.Zero(t, file.Lifetime.Lantern, "the saved bytes leave the fallback's total")
+	assert.Zero(t, file.Lifetime.Lantern)
 	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, file.Lifetime.Proxyless)
 	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, file.ThisMonth.Proxyless)
+}
+
+func TestUsageUnreportedHedgedBytesGoToTheFallback(t *testing.T) {
+	ct, stats, hedge := newUsageTracker(t)
+	c := routeTCP(t, ct, sblog.ContextWithNewID(context.Background()), hedge)
+	transfer(t, c, 5, 6)
+	assert.Zero(t, stats.peek())
+
+	c.rec.createdAt = time.Now().Add(-usageHedgeWait)
+	transfer(t, c, 1, 1)
+	assert.Equal(t, UsageBytes{Up: 6, Down: 7}, stats.peek().Lantern, "past the wait, held bytes and new ones count under the fallback")
+}
+
+func TestUsageCloseSettlesHeldBytes(t *testing.T) {
+	ct, stats, hedge := newUsageTracker(t)
+	c := routeTCP(t, ct, sblog.ContextWithNewID(context.Background()), hedge)
+	transfer(t, c, 5, 6)
+	require.NoError(t, c.Close())
+	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, stats.peek().Lantern)
+}
+
+func TestUsageCommitRacingCountsLosesNothing(t *testing.T) {
+	for range 50 {
+		ct, stats, hedge := newUsageTracker(t)
+		ctx := sblog.ContextWithNewID(context.Background())
+		c := routeTCP(t, ct, ctx, hedge)
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range 200 {
+					ct.countUpload(c.rec, 1)
+				}
+			}()
+		}
+		ct.FirstCommitted(ctx, ProxylessHedgeTag, ProxylessTag)
+		wg.Wait()
+		require.NoError(t, c.Close())
+		got := stats.peek()
+		require.Equal(t, int64(800), got.Proxyless.Up+got.Lantern.Up, "every byte counted exactly once")
+		require.Zero(t, got.Lantern.Up, "the report came before the wait ran out, so every byte is proxyless")
+	}
 }
 
 func TestUsageIgnoresOtherReports(t *testing.T) {
@@ -143,6 +188,7 @@ func TestUsageIgnoresOtherReports(t *testing.T) {
 	ct.FirstCommitted(context.Background(), ProxylessHedgeTag, ProxylessTag)
 	ct.FirstCommitted(sblog.ContextWithNewID(context.Background()), ProxylessHedgeTag, ProxylessTag)
 	transfer(t, c, 3, 4)
+	require.NoError(t, c.Close()) // settles the held bytes
 	assert.Equal(t, UsageBytes{Up: 3, Down: 4}, stats.peek().Lantern)
 	assert.Zero(t, stats.peek().Proxyless)
 }
@@ -290,11 +336,13 @@ func TestUsageStatsMonthRollover(t *testing.T) {
 	assert.Equal(t, int64(6), readUsage(path).ThisMonth.Direct.Down)
 
 	now = time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	assert.Equal(t, "2026-10", s.Usage().Month, "a read rolls back a month saved while the clock ran ahead")
+	s.count(usageDirect, false, 2)
 	s.Flush()
 	file = readUsage(path)
 	assert.Equal(t, "2026-10", file.Month, "a month saved while the clock ran ahead gives way")
-	assert.Zero(t, file.ThisMonth)
-	assert.Equal(t, int64(16), file.Lifetime.Direct.Down)
+	assert.Equal(t, int64(2), file.ThisMonth.Direct.Down)
+	assert.Equal(t, int64(18), file.Lifetime.Direct.Down)
 }
 
 func TestUsageStatsReset(t *testing.T) {
@@ -406,4 +454,42 @@ func TestVPNClientGivesTunnelsUsage(t *testing.T) {
 	require.NotNil(t, tun.usage)
 	assert.Same(t, stats, tun.usage.stats)
 	assert.True(t, tun.usage.isPrivate("any"))
+}
+
+func TestUsageStatsIdleSaveSkipsTheDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.Flush()
+	require.FileExists(t, path, "the first save pins since")
+	require.NoError(t, os.Remove(path))
+	s.Flush()
+	assert.NoFileExists(t, path, "an idle save doesn't read or write the file")
+	s.count(usageDirect, true, 1)
+	s.Flush()
+	assert.FileExists(t, path)
+}
+
+// The per-chunk cost on the data path, with and without usage counting, and
+// while a hedged connection's bytes are held.
+func BenchmarkCountUpload(b *testing.B) {
+	for _, bc := range []struct {
+		name   string
+		usage  bool
+		hedged bool
+	}{{"no-usage", false, false}, {"usage", true, false}, {"usage-held", true, true}} {
+		b.Run(bc.name, func(b *testing.B) {
+			ct := newConnTracker()
+			if bc.usage {
+				ct.usage = NewUsageStats(filepath.Join(b.TempDir(), "usage-stats.json"))
+			}
+			r := &record{createdAt: time.Now()}
+			r.category.Store(uint32(usageLantern))
+			r.undecided.Store(bc.hedged)
+			b.ReportAllocs()
+			for b.Loop() {
+				ct.countUpload(r, 1500)
+			}
+		})
+	}
 }
