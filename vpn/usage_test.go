@@ -493,3 +493,18 @@ func BenchmarkCountUpload(b *testing.B) {
 		})
 	}
 }
+
+// A settle between a chunk's undecided check and its hold has already
+// released; the chunk must release itself rather than wait forever.
+func TestUsageChunkHeldAfterSettleIsReleased(t *testing.T) {
+	ct, stats, hedge := newUsageTracker(t)
+	ctx := sblog.ContextWithNewID(context.Background())
+	c := routeTCP(t, ct, ctx, hedge)
+	beforeHoldHook = func(*record) { ct.FirstCommitted(ctx, ProxylessHedgeTag, ProxylessTag) }
+	t.Cleanup(func() { beforeHoldHook = nil })
+
+	ct.countUpload(c.rec, 9)
+	beforeHoldHook = nil
+	assert.Equal(t, UsageBytes{Up: 9}, stats.peek().Proxyless)
+	assert.Zero(t, c.rec.heldUp.Load())
+}

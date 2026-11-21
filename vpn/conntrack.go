@@ -442,6 +442,10 @@ func (m *connTracker) releaseHeld(r *record) {
 	}
 }
 
+// beforeHoldHook, set only by tests, runs between countUsage's check that r
+// is undecided and its hold of the chunk, where a settle can slip in.
+var beforeHoldHook func(*record)
+
 // countUsage adds n bytes, sent if up, to r's category, or holds them while
 // the hedge hasn't said which path r took.
 func (m *connTracker) countUsage(r *record, up bool, n int64) {
@@ -455,6 +459,9 @@ func (m *connTracker) countUsage(r *record, up bool, n int64) {
 			held := &r.heldDown
 			if up {
 				held = &r.heldUp
+			}
+			if beforeHoldHook != nil {
+				beforeHoldHook(r)
 			}
 			held.Add(n)
 			if r.undecided.Load() {
