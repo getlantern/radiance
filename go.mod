@@ -30,10 +30,9 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 // x/v0.3.0 plus two fixes: x/httpconnect builds against quic-go >= v0.53
 // (quic.EarlyConnection became *quic.Conn), and disorder finds the TCP socket
-// under sing-box's tracked connections through NetConn. The first is proposed
-// upstream; the second exists only in the fork. A replace only applies in the
-// main module, so radiance carries its own. Drop only once an upstream x
-// release builds against our quic-go and its disorder accepts a wrapped conn.
+// through NetConn, which lantern-box's outline stream wrapper provides. A
+// replace only applies in the main module. Drop once an upstream x release has
+// both.
 replace golang.getoutline.org/sdk/x => github.com/getlantern/outline-sdk/x v0.3.0-lantern.2
 
 // sing-box/sing-tun/tailscale need gvisor's v0.0.0-20260727.0-sing-box-mod.1
