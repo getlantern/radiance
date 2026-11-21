@@ -32,13 +32,19 @@ func TestIsPrivateServer(t *testing.T) {
 
 func TestUsageStatsWithoutStore(t *testing.T) {
 	r := &LocalBackend{}
-	assert.Zero(t, r.UsageStats())
+	u, err := r.UsageStats()
+	require.NoError(t, err)
+	assert.Zero(t, u)
 	assert.NoError(t, r.ResetUsageStats())
 
 	path := filepath.Join(t.TempDir(), "usage-stats.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{"lifetime":{"direct":{"up":1,"down":2}}}`), 0o600))
 	r.UseUsageStatsForTest(vpn.NewUsageStats(path))
-	assert.Equal(t, int64(2), r.UsageStats().Lifetime.Direct.Down)
+	u, err = r.UsageStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), u.Lifetime.Direct.Down)
 	require.NoError(t, r.ResetUsageStats())
-	assert.Zero(t, r.UsageStats().Lifetime)
+	u, err = r.UsageStats()
+	require.NoError(t, err)
+	assert.Zero(t, u.Lifetime)
 }

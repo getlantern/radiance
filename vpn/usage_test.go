@@ -264,7 +264,7 @@ func TestUsageStatsPersist(t *testing.T) {
 	assert.Zero(t, s.peek(), "a save takes the pending totals")
 
 	want := UsageTotals{Proxyless: UsageBytes{Up: 7}, Private: UsageBytes{Down: 9}}
-	u := newTestUsageStats(path, &now).Usage()
+	u := usageOf(t, newTestUsageStats(path, &now))
 	assert.True(t, u.Since.Equal(now))
 	assert.Equal(t, "2026-11", u.Month)
 	assert.Equal(t, want, u.Lifetime)
@@ -306,8 +306,8 @@ func TestUsageStatsAddsAcrossStores(t *testing.T) {
 	a.Flush()
 	b.Flush()
 	b.count(usageLantern, true, 4)
-	assert.Equal(t, int64(7), b.Usage().Lifetime.Lantern.Up, "the file's totals plus pending")
-	assert.Equal(t, int64(3), a.Usage().Lifetime.Lantern.Up)
+	assert.Equal(t, int64(7), usageOf(t, b).Lifetime.Lantern.Up, "the file's totals plus pending")
+	assert.Equal(t, int64(3), usageOf(t, a).Lifetime.Lantern.Up)
 }
 
 func TestUsageStatsMonthRollover(t *testing.T) {
@@ -318,7 +318,7 @@ func TestUsageStatsMonthRollover(t *testing.T) {
 	s.Flush()
 
 	now = time.Date(2026, 12, 1, 1, 0, 0, 0, time.UTC)
-	u := s.Usage()
+	u := usageOf(t, s)
 	assert.Equal(t, "2026-12", u.Month, "a read rolls the month")
 	assert.Zero(t, u.ThisMonth)
 	assert.Equal(t, int64(10), u.Lifetime.Direct.Down)
@@ -337,7 +337,7 @@ func TestUsageStatsMonthRollover(t *testing.T) {
 	assert.Equal(t, int64(6), readUsage(path).ThisMonth.Direct.Down)
 
 	now = time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
-	assert.Equal(t, "2026-10", s.Usage().Month, "a read rolls back a month saved while the clock ran ahead")
+	assert.Equal(t, "2026-10", usageOf(t, s).Month, "a read rolls back a month saved while the clock ran ahead")
 	s.count(usageDirect, false, 2)
 	s.Flush()
 	file = readUsage(path)
@@ -356,7 +356,7 @@ func TestUsageStatsReset(t *testing.T) {
 
 	now = now.Add(time.Hour)
 	require.NoError(t, s.Reset())
-	u := s.Usage()
+	u := usageOf(t, s)
 	assert.True(t, u.Since.Equal(now))
 	assert.Zero(t, u.Lifetime)
 	assert.Zero(t, u.ThisMonth)
@@ -375,7 +375,7 @@ func TestUsageStatsResetByAnotherStoreDropsPending(t *testing.T) {
 
 	now = now.Add(time.Hour)
 	require.NoError(t, a.Reset())
-	assert.Zero(t, b.Usage().Lifetime, "b's pending bytes predate the reset")
+	assert.Zero(t, usageOf(t, b).Lifetime, "b's pending bytes predate the reset")
 	b.Flush()
 	assert.Zero(t, readUsage(path).Lifetime, "b's save must not bring them back")
 
@@ -539,7 +539,7 @@ func TestUsageStatsKeepsBytesCountedAfterAnotherStoresReset(t *testing.T) {
 
 	now = now.Add(5 * time.Hour)
 	b.count(usageLantern, true, 9)
-	assert.Equal(t, int64(9), b.Usage().Lifetime.Lantern.Up, "counted after the reset, so it shows")
+	assert.Equal(t, int64(9), usageOf(t, b).Lifetime.Lantern.Up, "counted after the reset, so it shows")
 	b.Flush()
 	assert.Equal(t, int64(9), readUsage(path).Lifetime.Lantern.Up, "and it is saved, not dropped")
 }
@@ -600,11 +600,11 @@ func TestUsageStatsReadResolvesTheZone(t *testing.T) {
 	now := time.Date(2026, 11, 30, 23, 30, 0, 0, time.UTC)
 	s := newTestUsageStats(path, &now)
 	s.Flush()
-	require.Equal(t, "2026-11", s.Usage().Month)
+	require.Equal(t, "2026-11", usageOf(t, s).Month)
 
 	s.loc = func() *time.Location { return time.FixedZone("UTC+1", 3600) }
 	s.Flush() // idle: doesn't resolve the zone
-	assert.Equal(t, "2026-12", s.Usage().Month, "a read uses the device's current zone")
+	assert.Equal(t, "2026-12", usageOf(t, s).Month, "a read uses the device's current zone")
 }
 
 func TestUsageStatsDoesNotOverwriteAFileItCantRead(t *testing.T) {
@@ -649,23 +649,32 @@ func TestTunnelSavesUsageAfterSlowTeardown(t *testing.T) {
 		"the bytes settled during the slow teardown are saved")
 }
 
-func TestUsageStatsReadDoesNotWaitOnAStalledSave(t *testing.T) {
+func usageOf(t *testing.T, s *UsageStats) Usage {
+	t.Helper()
+	u, err := s.Usage()
+	require.NoError(t, err)
+	return u
+}
+
+// A save stuck on the disk mustn't hang a request: a read or a reset gives
+// up with ErrUsageBusy, which the app retries, rather than answer with
+// totals it couldn't read.
+func TestUsageStatsRequestsDoNotWaitOnAStalledSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage-stats.json")
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 	s := newTestUsageStats(path, &now)
-	s.count(usageDirect, true, 3)
-	first := s.Usage()
+	defer func(r, w time.Duration) { usageReadWait, usageResetWait = r, w }(usageReadWait, usageResetWait)
+	usageReadWait, usageResetWait = 50*time.Millisecond, 50*time.Millisecond
 
-	s.saveMu.Lock() // a save stuck writing
+	s.writeMu.Lock() // a save stuck writing holds both
+	s.saveMu.Lock()
+	defer s.writeMu.Unlock()
 	defer s.saveMu.Unlock()
 	start := time.Now()
-	got := s.Usage()
+	_, err := s.Usage()
+	assert.ErrorIs(t, err, ErrUsageBusy)
+	assert.ErrorIs(t, s.Reset(), ErrUsageBusy)
 	assert.Less(t, time.Since(start), 2*time.Second)
-	assert.Equal(t, first, got, "it returns the last totals it read")
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	assert.ErrorIs(t, s.Reset(), errUsageLocked, "a reset gives up rather than hang the request")
 }
 
 func TestUsageStatsRunsOneSaverAtATime(t *testing.T) {
@@ -687,5 +696,28 @@ func TestUsageStatsRunsOneSaverAtATime(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a second Run must return while the first is saving")
 	}
+	s.Stop()
+}
+
+func TestUsageStatsRunAfterACancelledRunSaves(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	s := NewUsageStats(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan struct{})
+	go func() { s.Run(ctx, time.Hour); close(first) }()
+	require.Eventually(t, func() bool {
+		s.runMu.Lock()
+		defer s.runMu.Unlock()
+		return s.stopRun != nil
+	}, 5*time.Second, 5*time.Millisecond)
+	cancel()
+	<-first
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go s.Run(ctx2, 10*time.Millisecond)
+	s.count(usageLantern, true, 6)
+	assert.Eventually(t, func() bool { return readUsage(path).Lifetime.Lantern.Up == 6 }, 5*time.Second, 10*time.Millisecond,
+		"a Run after a cancelled one saves")
 	s.Stop()
 }

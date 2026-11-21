@@ -125,9 +125,6 @@ type UsageStats struct {
 	// guarded by saveMu. Since changes only on a reset, so a file whose
 	// Since differs was reset by another store.
 	since time.Time
-	// last is the totals the last Usage returned, for a read that can't get
-	// saveMu in time.
-	last atomic.Pointer[Usage]
 
 	runMu   sync.Mutex
 	stopRun context.CancelFunc
@@ -256,38 +253,39 @@ func readUsageChecked(path string) (Usage, bool) {
 	return u, true
 }
 
-// usageReadWait bounds how long Usage, which an IPC handler calls, waits for
-// a save in progress; a stalled disk must not hang the request.
-var usageReadWait = 250 * time.Millisecond
+// usageReadWait and usageResetWait bound how long Usage and Reset, which IPC
+// handlers call, wait for a save in progress, so a stalled disk can't hang the
+// request. A save can spend usageLockWait on the file lock and then read and
+// write the file, so a reset waits longer than that.
+var (
+	usageReadWait  = 250 * time.Millisecond
+	usageResetWait = 3 * time.Second
+)
 
-// lockWithin locks mu, giving up after d.
+// lockWithin locks mu, giving up after d. It polls, which only a request that
+// finds a save in progress does.
 func lockWithin(mu *sync.Mutex, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for !mu.TryLock() {
 		if time.Now().After(deadline) {
 			return false
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	return true
 }
 
 // Usage returns the totals: the file's, which every store on it has added to,
 // plus this store's pending ones. It resolves the device's zone afresh, since
-// an idle store's saves don't, and the zone decides the month. If a save holds
-// the store past usageReadWait, it returns the totals it last returned.
-func (s *UsageStats) Usage() Usage {
+// an idle store's saves don't, and the zone decides the month. It returns
+// ErrUsageBusy if a save holds the store past usageReadWait.
+func (s *UsageStats) Usage() (Usage, error) {
 	month, next := s.months(true)
 	if !lockWithin(&s.saveMu, usageReadWait) {
-		if last := s.last.Load(); last != nil {
-			return *last
-		}
-		return Usage{Since: s.now(), Month: month}
+		return Usage{}, ErrUsageBusy
 	}
 	defer s.saveMu.Unlock()
-	u := s.usageLocked(month, next)
-	s.last.Store(&u)
-	return u
+	return s.usageLocked(month, next), nil
 }
 
 func (s *UsageStats) usageLocked(month, next string) Usage {
@@ -391,9 +389,8 @@ func (s *UsageStats) Flush() {
 
 // Reset clears the totals, here and in the file, and counts from now.
 func (s *UsageStats) Reset() error {
-	// An IPC handler calls Reset, so a save in progress gets a bounded wait.
-	if !lockWithin(&s.writeMu, usageLockWait) {
-		return errUsageLocked
+	if !lockWithin(&s.writeMu, usageResetWait) {
+		return ErrUsageBusy
 	}
 	defer s.writeMu.Unlock()
 	l, ok := s.lock()
@@ -415,12 +412,18 @@ func (s *UsageStats) Reset() error {
 	return nil
 }
 
+// ErrUsageBusy is returned when a save in progress outlasts a request's wait;
+// the request can be retried.
+var ErrUsageBusy = errors.New("usage stats are being saved")
+
 var (
 	errUsageLocked = errors.New("usage stats file is locked")
 	errUsageWrite  = errors.New("could not save usage stats")
 )
 
-// Run saves every interval until ctx ends or Stop is called.
+// Run saves every interval until ctx ends or Stop is called. It returns at
+// once if Stop was called, or if another Run is saving: one runs at a time,
+// so Stop joins the only one. A Run whose ctx ended lets a later one start.
 func (s *UsageStats) Run(ctx context.Context, every time.Duration) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -428,8 +431,6 @@ func (s *UsageStats) Run(ctx context.Context, every time.Duration) {
 	defer close(done)
 	s.runMu.Lock()
 	if s.stopped || s.stopRun != nil {
-		// Stopped, or another Run is saving: one at a time, so Stop
-		// joins the only one.
 		s.runMu.Unlock()
 		return
 	}

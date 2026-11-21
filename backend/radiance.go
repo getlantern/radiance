@@ -2616,10 +2616,10 @@ func (r *LocalBackend) isPrivateServer(tag string) bool {
 }
 
 // UsageStats is the bytes the tunnel carried along each path, for the app's
-// usage stats screen.
-func (r *LocalBackend) UsageStats() vpn.Usage {
+// usage stats screen. It returns vpn.ErrUsageBusy if a save is in progress.
+func (r *LocalBackend) UsageStats() (vpn.Usage, error) {
 	if r.usageStats == nil {
-		return vpn.Usage{}
+		return vpn.Usage{}, nil
 	}
 	return r.usageStats.Usage()
 }

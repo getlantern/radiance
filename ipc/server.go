@@ -566,15 +566,28 @@ func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *localapi) vpnUsageHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.backend(r.Context()).UsageStats())
+	u, err := s.backend(r.Context()).UsageStats()
+	if err != nil {
+		http.Error(w, err.Error(), usageErrorStatus(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *localapi) vpnUsageResetHandler(w http.ResponseWriter, r *http.Request) {
 	if err := s.backend(r.Context()).ResetUsageStats(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), usageErrorStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// usageErrorStatus is 503 for a save in progress, which the app can retry.
+func usageErrorStatus(err error) int {
+	if errors.Is(err, vpn.ErrUsageBusy) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
 }
 
 func (s *localapi) vpnClearTunnelCacheHandler(w http.ResponseWriter, r *http.Request) {

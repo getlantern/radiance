@@ -3,6 +3,8 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,4 +78,9 @@ func TestVPNUsageWithoutStore(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	w = serveHelper(t, api, http.MethodPost, vpnUsageResetEndpoint, nil)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestUsageErrorStatus(t *testing.T) {
+	assert.Equal(t, http.StatusServiceUnavailable, usageErrorStatus(fmt.Errorf("read: %w", vpn.ErrUsageBusy)), "a save in progress is retryable")
+	assert.Equal(t, http.StatusInternalServerError, usageErrorStatus(errors.New("disk")))
 }
