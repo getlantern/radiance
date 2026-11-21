@@ -386,7 +386,8 @@ func (m *connTracker) indexHedged(ctx context.Context, r *record) {
 }
 
 // FirstCommitted satisfies lbA.HedgeObserver: a connection the proxyless
-// hedge committed to proxyless counts as proxyless from then on.
+// hedge committed to proxyless counts as proxyless, including the bytes it
+// sent before First replied, which the hedge also sent through First.
 func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
 	if hedge != ProxylessHedgeTag || first != ProxylessTag {
 		return
@@ -395,8 +396,19 @@ func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
 	if !ok {
 		return
 	}
-	if r, ok := m.hedged.Load(id.ID); ok {
-		r.category.Store(uint32(usageProxyless))
+	r, ok := m.hedged.Load(id.ID)
+	if !ok {
+		return
+	}
+	// Read the counts before switching the category: countUpload and
+	// countDownload add to the category before the record, so a chunk
+	// racing the switch is either in these counts and counted under the
+	// old category, or counted under proxyless and not in them. It is never
+	// moved twice.
+	up, down := r.upload.Load(), r.download.Load()
+	old := usageCategory(r.category.Swap(uint32(usageProxyless)))
+	if m.usage != nil && old != usageProxyless {
+		m.usage.move(old, usageProxyless, up, down)
 	}
 }
 
@@ -449,20 +461,22 @@ func formatRule(rule A.Rule) string {
 	return rule.String() + " => " + rule.Action().String()
 }
 
+// countUpload and countDownload add to the usage category before the record:
+// FirstCommitted relies on that order.
 func (m *connTracker) countUpload(r *record, n int64) {
-	r.upload.Add(n)
-	m.pushUploaded(n)
 	if m.usage != nil {
 		m.usage.count(usageCategory(r.category.Load()), true, n)
 	}
+	r.upload.Add(n)
+	m.pushUploaded(n)
 }
 
 func (m *connTracker) countDownload(r *record, n int64) {
-	r.download.Add(n)
-	m.pushDownloaded(n)
 	if m.usage != nil {
 		m.usage.count(usageCategory(r.category.Load()), false, n)
 	}
+	r.download.Add(n)
+	m.pushDownloaded(n)
 }
 
 func (m *connTracker) uploadCounter(r *record) N.CountFunc {

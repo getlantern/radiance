@@ -116,6 +116,11 @@ type UsageStats struct {
 	// file, never both or neither.
 	writeMu sync.Mutex
 	saveMu  sync.Mutex
+	// since is the file's Since when this store last read or wrote it,
+	// guarded by saveMu. Since changes only on a reset, so a file whose
+	// Since differs was reset by another store, and the bytes pending here
+	// were counted before it.
+	since time.Time
 
 	runMu   sync.Mutex
 	stopRun context.CancelFunc
@@ -136,6 +141,16 @@ func (s *UsageStats) count(c usageCategory, up bool, n int64) {
 	} else {
 		s.pending[c].down.Add(n)
 	}
+}
+
+// move recounts up and down bytes from one category to another. The bytes
+// may already be saved under from, so its pending total can go below zero;
+// the next save then takes them back out of the file.
+func (s *UsageStats) move(from, to usageCategory, up, down int64) {
+	s.pending[from].up.Add(-up)
+	s.pending[from].down.Add(-down)
+	s.pending[to].up.Add(up)
+	s.pending[to].down.Add(down)
 }
 
 func (s *UsageStats) peek() UsageTotals {
@@ -193,14 +208,23 @@ func (s *UsageStats) Usage() Usage {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	u := readUsage(s.path)
+	stale := s.resetElsewhereLocked(u)
 	if u.Since.IsZero() {
 		u.Since = s.now()
 	}
 	u.rollTo(month, next)
-	pending := s.peek()
-	u.Lifetime.add(pending)
-	u.ThisMonth.add(pending)
+	if !stale {
+		pending := s.peek()
+		u.Lifetime.add(pending)
+		u.ThisMonth.add(pending)
+	}
 	return u
+}
+
+// resetElsewhereLocked reports whether another store reset file since this
+// one last saw it. Caller holds saveMu.
+func (s *UsageStats) resetElsewhereLocked(file Usage) bool {
+	return !s.since.IsZero() && !file.Since.IsZero() && !file.Since.Equal(s.since)
 }
 
 // usageLockWait bounds how long a save or reset waits for the cross-process
@@ -247,6 +271,12 @@ func (s *UsageStats) Flush() {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	file := readUsage(s.path)
+	if s.resetElsewhereLocked(file) {
+		// The pending bytes were counted before that reset, give or take
+		// one save interval, so they go with it.
+		s.take()
+	}
+	s.since = file.Since
 	u := file
 	if u.Since.IsZero() {
 		u.Since = s.now()
@@ -260,7 +290,9 @@ func (s *UsageStats) Flush() {
 	}
 	if !s.write(u) {
 		s.giveBack(pending)
+		return
 	}
+	s.since = u.Since
 }
 
 // Reset clears the totals, here and in the file, and counts from now.
@@ -276,10 +308,13 @@ func (s *UsageStats) Reset() error {
 	month, _ := s.months(true)
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	s.take()
-	if !s.write(Usage{Since: s.now(), Month: month}) {
+	pending := s.take()
+	since := s.now()
+	if !s.write(Usage{Since: since, Month: month}) {
+		s.giveBack(pending)
 		return errUsageWrite
 	}
+	s.since = since
 	return nil
 }
 

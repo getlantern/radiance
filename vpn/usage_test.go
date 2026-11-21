@@ -108,12 +108,28 @@ func TestUsageHedgeCommitFlipsToProxyless(t *testing.T) {
 	transfer(t, c, 100, 200)
 
 	got := stats.peek()
-	assert.Equal(t, UsageBytes{Up: 1, Down: 2}, got.Lantern, "bytes before the commit stay where they were")
-	assert.Equal(t, UsageBytes{Up: 100, Down: 200}, got.Proxyless)
+	assert.Zero(t, got.Lantern, "bytes before the commit went through First too")
+	assert.Equal(t, UsageBytes{Up: 101, Down: 202}, got.Proxyless)
 
 	require.NoError(t, c.Close())
 	_, indexed := ct.hedged.Load(c.rec.logID)
 	assert.False(t, indexed, "leave drops the index")
+}
+
+func TestUsageHedgeCommitMovesBytesAlreadySaved(t *testing.T) {
+	ct, stats, hedge := newUsageTracker(t)
+	ctx := sblog.ContextWithNewID(context.Background())
+
+	c := routeTCP(t, ct, ctx, hedge)
+	transfer(t, c, 5, 6)
+	stats.Flush()
+	ct.FirstCommitted(ctx, ProxylessHedgeTag, ProxylessTag)
+	stats.Flush()
+
+	file := readUsage(stats.path)
+	assert.Zero(t, file.Lifetime.Lantern, "the saved bytes leave the fallback's total")
+	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, file.Lifetime.Proxyless)
+	assert.Equal(t, UsageBytes{Up: 5, Down: 6}, file.ThisMonth.Proxyless)
 }
 
 func TestUsageIgnoresOtherReports(t *testing.T) {
@@ -296,6 +312,37 @@ func TestUsageStatsReset(t *testing.T) {
 	assert.Zero(t, u.Lifetime)
 	assert.Zero(t, u.ThisMonth)
 	assert.Zero(t, readUsage(path).Lifetime)
+}
+
+func TestUsageStatsResetByAnotherStoreDropsPending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	a, b := newTestUsageStats(path, &now), newTestUsageStats(path, &now)
+	a.count(usageLantern, true, 1)
+	b.count(usageLantern, true, 2)
+	a.Flush()
+	b.Flush()
+	b.count(usageLantern, true, 40) // counted before a's reset
+
+	now = now.Add(time.Hour)
+	require.NoError(t, a.Reset())
+	assert.Zero(t, b.Usage().Lifetime, "b's pending bytes predate the reset")
+	b.Flush()
+	assert.Zero(t, readUsage(path).Lifetime, "b's save must not bring them back")
+
+	b.count(usageLantern, true, 7)
+	b.Flush()
+	assert.Equal(t, int64(7), readUsage(path).Lifetime.Lantern.Up, "b counts again after the reset")
+}
+
+func TestUsageStatsResetKeepsPendingWhenWriteFails(t *testing.T) {
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	require.NoError(t, os.Mkdir(path, 0o700))
+	s := newTestUsageStats(path, &now)
+	s.count(usageLantern, false, 8)
+	require.Error(t, s.Reset())
+	assert.Equal(t, int64(8), s.peek().Lantern.Down, "a failed reset loses nothing")
 }
 
 func TestUsageStatsKeepsPendingWhenSaveFails(t *testing.T) {
