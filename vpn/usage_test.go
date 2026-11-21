@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -749,13 +750,14 @@ func TestUsageStatsResetIsBusyBehindAnyStall(t *testing.T) {
 // A lock file that can't be opened won't open on a retry either, so a reset
 // fails outright rather than answer busy.
 func TestUsageStatsResetFailsWhenTheLockFileIsUnusable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a read-only directory doesn't stop root, or Windows, from creating the lock file")
+	}
 	dir := filepath.Join(t.TempDir(), "ro")
 	require.NoError(t, os.Mkdir(dir, 0o500)) // the lock file can't be created
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	path := filepath.Join(dir, "usage-stats.json")
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 	s := newTestUsageStats(path, &now)
-	err := s.Reset()
-	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrUsageBusy)
+	assert.ErrorIs(t, s.Reset(), errUsageLock)
 }

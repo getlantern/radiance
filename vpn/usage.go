@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -125,6 +126,8 @@ type UsageStats struct {
 	// guarded by saveMu. Since changes only on a reset, so a file whose
 	// Since differs was reset by another store.
 	since time.Time
+
+	warnLockOnce sync.Once
 
 	runMu   sync.Mutex
 	stopRun context.CancelFunc
@@ -253,12 +256,9 @@ func readUsageChecked(path string) (Usage, bool) {
 	return u, true
 }
 
-// usageReadWait and usageResetWait bound how long the IPC handlers' calls wait
-// behind other work on the stats: Usage waits usageReadWait for the store;
-// Reset waits usageResetWait for this store's save, which can spend
-// usageLockWait on the file lock and then read and write the file, then
-// usageLockWait for the file lock and usageReadWait for a read. Neither
-// bounds the request's own read or write of the file.
+// usageReadWait bounds Usage's wait for the store, and usageResetWait Reset's
+// for this store's save, which can spend usageLockWait on the file lock and
+// then do its I/O. Neither bounds a request's own I/O.
 var (
 	usageReadWait  = 250 * time.Millisecond
 	usageResetWait = 3 * time.Second
@@ -279,7 +279,7 @@ func lockWithin(mu *sync.Mutex, d time.Duration) bool {
 // Usage returns the totals: the file's, which every store on it has added to,
 // plus this store's pending ones. It resolves the device's zone afresh, since
 // an idle store's saves don't, and the zone decides the month. It returns
-// ErrUsageBusy if a save holds the store past usageReadWait.
+// ErrUsageBusy if a save or reset holds the store past usageReadWait.
 func (s *UsageStats) Usage() (Usage, error) {
 	month, next := s.months(true)
 	if !lockWithin(&s.saveMu, usageReadWait) {
@@ -314,21 +314,23 @@ func (s *UsageStats) resetElsewhereLocked(file Usage) bool {
 // lock; see activityLockWait in package helper.
 var usageLockWait = 500 * time.Millisecond
 
-// lock takes the cross-process file lock. It returns ErrUsageBusy if another
-// process held it for all of usageLockWait, and another error if the lock
-// file can't be used at all.
+// lock takes the cross-process file lock. It returns errUsageLock if the lock
+// file can't be created or opened for good (no permission, a read-only or
+// missing directory), and ErrUsageBusy otherwise: for a lock another process
+// held past usageLockWait, or an error that may clear, such as running out of
+// file descriptors.
 func (s *UsageStats) lock() (*flock.Flock, error) {
 	l := flock.New(s.path + ".lock")
 	ctx, cancel := context.WithTimeout(context.Background(), usageLockWait)
 	defer cancel()
 	locked, err := l.TryLockContext(ctx, 25*time.Millisecond)
 	switch {
-	case errors.Is(err, context.DeadlineExceeded) || err == nil && !locked:
-		return nil, ErrUsageBusy
-	case err != nil:
+	case err == nil && locked:
+		return l, nil
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EROFS):
 		return nil, errUsageLock
 	}
-	return l, nil
+	return nil, ErrUsageBusy
 }
 
 // write replaces the file. Errors are fixed text: the path can name the
@@ -361,8 +363,12 @@ func (s *UsageStats) Flush() {
 		return
 	}
 	l, err := s.lock()
+	if errors.Is(err, errUsageLock) {
+		s.warnLockOnce.Do(func() { slog.Warn("vpn: usage stats lock file unusable; not saving") })
+		return
+	}
 	if err != nil {
-		slog.Debug("vpn: usage stats file lock unavailable; saving later")
+		slog.Debug("vpn: usage stats file lock busy; saving later")
 		return
 	}
 	defer func() { _ = l.Unlock() }()
@@ -424,11 +430,13 @@ func (s *UsageStats) Reset() error {
 	return nil
 }
 
-// ErrUsageBusy means another save, reset or read, in this process or another,
-// held the stats past the request's wait; the request can be retried.
+// ErrUsageBusy means another save or reset, in this process or another, or a
+// read in this one, held the stats past the request's wait; the request can be
+// retried.
 var ErrUsageBusy = errors.New("usage stats are busy")
 
 var (
+	// errUsageLock means the lock file can't be used; a retry won't help.
 	errUsageLock  = errors.New("could not lock usage stats")
 	errUsageWrite = errors.New("could not save usage stats")
 )
