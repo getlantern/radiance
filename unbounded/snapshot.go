@@ -123,6 +123,9 @@ func chunkCounter(slots *slotTable, down bool) clientcore.ChunkFunc {
 
 // CurrentSnapshot returns an independent copy of the live widget state.
 func CurrentSnapshot() Snapshot {
+	// The app polls this, so a backend that never armed the widget, and so
+	// never evaluates the gate itself, still logs why it isn't running.
+	manager.noteBlocked()
 	return manager.snapshot()
 }
 

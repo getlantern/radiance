@@ -44,10 +44,11 @@ func (m *unboundedManager) blockedLocked(enabled bool) string {
 	}
 }
 
-// noteBlocked logs why the widget isn't running, once per change of reason.
-// Callers run it after acting on an evaluation, without m.mu held. noteMu
-// keeps choosing a reason and logging it together, so concurrent evaluations
-// log in the order they chose and the last line is the current reason.
+// noteBlocked logs why the widget isn't running, once per change of reason,
+// and logs when it runs again after a reason was logged. Callers run it after
+// acting on an evaluation, without m.mu held. noteMu keeps choosing a reason
+// and logging it together, so concurrent evaluations log in the order they
+// chose and the last line is the current state.
 func (m *unboundedManager) noteBlocked() {
 	m.noteMu.Lock()
 	defer m.noteMu.Unlock()
@@ -56,13 +57,17 @@ func (m *unboundedManager) noteBlocked() {
 	changed := reason != m.lastBlocked
 	m.lastBlocked = reason
 	m.mu.Unlock()
-	if changed && reason != "" {
+	if changed {
 		logBlocked(reason)
 	}
 }
 
-// logBlocked logs why the widget isn't running. Tests replace it, since they
-// may not swap the default logger.
+// logBlocked logs why the widget isn't running, or, for "", that it runs
+// again. Tests replace it, since they may not swap the default logger.
 var logBlocked = func(reason string) {
+	if reason == "" {
+		slog.Info("Unbounded: widget running")
+		return
+	}
 	slog.Info("Unbounded: widget not running", "reason", reason)
 }

@@ -263,3 +263,68 @@ func TestBlocked_PublicStopWithoutWorkerLogsNotArmed(t *testing.T) {
 	require.NoError(t, Stop(context.Background()))
 	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
 }
+
+// A backend that never reaches InitSubscription never evaluates the gate
+// itself; the app's snapshot polling still gets not_armed logged.
+func TestBlocked_SnapshotReadLogsNotArmed(t *testing.T) {
+	logs := captureBlocked(t)
+	resetManager(t, idleWidgets)
+	primeManager(t, nil)
+	manager.mu.Lock()
+	manager.armed = false
+	manager.mu.Unlock()
+
+	assert.Equal(t, BlockedNotArmed, CurrentSnapshot().Blocked)
+	CurrentSnapshot()
+	assert.Equal(t, 1, logs.count(BlockedNotArmed), logs.String())
+}
+
+// An evaluation that chose no_config but hadn't logged it when the widget
+// started must not have the last word: the start's evaluation waits for it,
+// then logs that the widget runs.
+func TestBlocked_StaleReasonIsNotTheLastLog(t *testing.T) {
+	logs := captureBlocked(t)
+	record := logBlocked
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	logBlocked = func(reason string) {
+		if reason == BlockedNoConfig {
+			once.Do(func() { close(held); <-release })
+		}
+		record(reason)
+	}
+	resetManager(t, idleWidgets)
+	t.Cleanup(manager.stop)
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce) // before resetManager's wait, if an assertion fails
+	require.NoError(t, settings.Set(settings.UnboundedKey, true))
+
+	go manager.noteBlocked() // chooses no_config, then waits in the logger
+	<-held
+	// applyConfig starts the widget, then its own evaluation waits for the
+	// held one, so it runs alongside.
+	applied := make(chan struct{})
+	go func() {
+		defer close(applied)
+		applyConfig(config.Config{Features: map[string]bool{C.UNBOUNDED: true}, Unbounded: testCfg()})
+	}()
+	require.Eventually(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return manager.running
+	}, time.Second, 10*time.Millisecond)
+
+	releaseOnce()
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("applyConfig didn't return")
+	}
+	assert.Eventually(t, func() bool {
+		logs.mu.Lock()
+		defer logs.mu.Unlock()
+		n := len(logs.reasons)
+		return n > 0 && logs.reasons[n-1] == ""
+	}, time.Second, 10*time.Millisecond, logs.String())
+}
