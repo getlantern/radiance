@@ -97,6 +97,11 @@ type tunnel struct {
 	// inviterTickets, if non-nil, supplies the Unbounded consumer's helper
 	// inviter tickets.
 	inviterTickets InviterTickets
+	// usage, if non-nil, is where connTracker counts bytes by path.
+	usage *usageSink
+	// hedgeReports passes the hedges' reports to connTracker, which the box
+	// is built before.
+	hedgeReports hedgeReports
 	// personalProxy is the friend tag the rooms consumer's tickets are
 	// narrowed to, while the personal proxy group exists. Written under
 	// outboundMu; read lock-free on the signaling path.
@@ -255,6 +260,8 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 	}
 	service.MustRegister[lbA.AutoSelectHistoryStorage](t.ctx, t.selectionHistory)
 	t.closers = append(t.closers, t.selectionHistory)
+	// The hedges look the observer up when sbox.New builds them.
+	service.MustRegister[lbA.HedgeObserver](t.ctx, &t.hedgeReports)
 
 	// Must install before sbox.New, which creates the outbounds.
 	// Non-selectable outbounds are infrastructure, never user traffic, so they
@@ -288,6 +295,10 @@ func (t *tunnel) init(ctx context.Context, options O.Options, platformIfce libbo
 		return fmt.Errorf("create clash mode manager: %w", err)
 	}
 	t.connTracker = startConnTracker(t.ctx, instance.Outbound())
+	if t.usage != nil {
+		t.connTracker.usage, t.connTracker.isPrivate = t.usage.stats, t.usage.isPrivate
+	}
+	t.hedgeReports.tracker.Store(t.connTracker)
 	instance.Router().AppendTracker(t.connTracker)
 	t.closers = append(t.closers, t.connTracker)
 

@@ -12,6 +12,8 @@ import (
 	"github.com/gofrs/uuid/v5"
 	A "github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/trafficcontrol"
+	C "github.com/sagernet/sing-box/constant"
+	sblog "github.com/sagernet/sing-box/log"
 	R "github.com/sagernet/sing-box/route/rule"
 	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common"
@@ -19,12 +21,14 @@ import (
 	N "github.com/sagernet/sing/common/network"
 
 	lsync "github.com/getlantern/common/sync"
+	lbA "github.com/getlantern/lantern-box/adapter"
 	"github.com/getlantern/lantern-box/adapter/groups"
 )
 
 var (
 	_ groups.ConnectionManager = (*connTracker)(nil)
 	_ A.ConnectionTracker      = (*connTracker)(nil)
+	_ lbA.HedgeObserver        = (*connTracker)(nil)
 )
 
 // record holds the lean per-connection state radiance actually reads. It is built once when a
@@ -36,6 +40,15 @@ type record struct {
 	createdAt time.Time
 	upload    atomic.Int64
 	download  atomic.Int64
+
+	// category is the usageCategory the connection's bytes count under. It
+	// starts from the leaf outbound and becomes usageProxyless if the hedge
+	// commits the connection to proxyless.
+	category atomic.Uint32
+	// logID is the connection's sing-box log ID, and hedged whether the
+	// tracker indexed it by that ID for the proxyless hedge's report.
+	logID  uint32
+	hedged bool
 
 	// closed is the exactly-once gate for leave: Close may fire more than once (half-close,
 	// error/abort, ctx-cancel then explicit close), but the accounting must fold only once.
@@ -140,6 +153,14 @@ type connTracker struct {
 	admissionGate atomic.Value // dialAdmissionGate; set once before the box routes, read lock-free on the dial path
 
 	sampler io.Closer
+
+	// usage, if set, counts each connection's bytes by path; isPrivate tells
+	// a user-added server's tag from a Lantern server's.
+	usage     *UsageStats
+	isPrivate func(tag string) bool
+	// hedged indexes live connections through the proxyless hedge by log ID,
+	// so the hedge's FirstCommitted reports find them.
+	hedged lsync.TypedMap[uint32, *record]
 }
 
 func newConnTracker() *connTracker { return &connTracker{} }
@@ -220,6 +241,9 @@ func (m *connTracker) leave(r *record) {
 	}
 	m.conns.Delete(r.id)
 	m.activeCount.Add(-1)
+	if r.hedged {
+		m.hedged.CompareAndDelete(r.logID, r)
+	}
 
 	if o := m.currentObserver(); o != nil {
 		o.OnClose(ConnClose{
@@ -304,7 +328,7 @@ func (m *connTracker) closeMatchedTo(tag string) {
 func (m *connTracker) newRecord(metadata A.InboundContext, matchedRule A.Rule, matchOutbound A.Outbound) *record {
 	id, _ := uuid.NewV4()
 	outbound, outboundType, chain := m.resolveChain(matchOutbound)
-	return &record{
+	r := &record{
 		id:            id,
 		createdAt:     time.Now(),
 		outbound:      outbound,
@@ -321,6 +345,58 @@ func (m *connTracker) newRecord(metadata A.InboundContext, matchedRule A.Rule, m
 		protocol:     metadata.Protocol,
 		fromOutbound: metadata.Outbound,
 		ruleStr:      formatRule(matchedRule),
+	}
+	r.category.Store(uint32(m.classify(outbound, outboundType)))
+	return r
+}
+
+// classify returns the path a connection to the leaf outbound tag, of type
+// typ, counts under.
+func (m *connTracker) classify(tag, typ string) usageCategory {
+	switch {
+	case typ == "" || typ == C.TypeBlock || typ == C.TypeDNS:
+		return usageNone
+	case typ == C.TypeDirect:
+		return usageDirect
+	case tag == ProxylessTag:
+		return usageProxyless
+	case isHelperOutboundTag(tag):
+		return usagePersonal
+	case m.isPrivate != nil && m.isPrivate(tag):
+		return usagePrivate
+	}
+	return usageLantern
+}
+
+// indexHedged indexes r by its log ID if its chain runs through the proxyless
+// hedge. The IDs are random, so two live connections rarely share one; when
+// they do, the newcomer isn't indexed and counts under its leaf outbound.
+func (m *connTracker) indexHedged(ctx context.Context, r *record) {
+	if !slices.Contains(r.chain, ProxylessHedgeTag) {
+		return
+	}
+	id, ok := sblog.IDFromContext(ctx)
+	if !ok {
+		return
+	}
+	if _, loaded := m.hedged.LoadOrStore(id.ID, r); loaded {
+		return
+	}
+	r.logID, r.hedged = id.ID, true
+}
+
+// FirstCommitted satisfies lbA.HedgeObserver: a connection the proxyless
+// hedge committed to proxyless counts as proxyless from then on.
+func (m *connTracker) FirstCommitted(ctx context.Context, hedge, first string) {
+	if hedge != ProxylessHedgeTag || first != ProxylessTag {
+		return
+	}
+	id, ok := sblog.IDFromContext(ctx)
+	if !ok {
+		return
+	}
+	if r, ok := m.hedged.Load(id.ID); ok {
+		r.category.Store(uint32(usageProxyless))
 	}
 }
 
@@ -351,9 +427,9 @@ func (m *connTracker) resolveChain(matchOutbound A.Outbound) (outbound, outbound
 			// connection is decided only when it dials. Follow its fallback,
 			// the auto group, so auto-mode traffic stays attributed to the
 			// selected server as before. A connection the hedge serves
-			// proxyless is attributed to that server too, and nothing here
-			// tells the two apart; per-path accounting needs the hedge to
-			// report the path it took.
+			// proxyless is attributed to that server too; only usage
+			// counting tells them apart, from the hedge's report of the
+			// commit (FirstCommitted).
 			if detour.Tag() == ProxylessHedgeTag {
 				next = AutoSelectTag
 				continue
@@ -376,11 +452,17 @@ func formatRule(rule A.Rule) string {
 func (m *connTracker) countUpload(r *record, n int64) {
 	r.upload.Add(n)
 	m.pushUploaded(n)
+	if m.usage != nil {
+		m.usage.count(usageCategory(r.category.Load()), true, n)
+	}
 }
 
 func (m *connTracker) countDownload(r *record, n int64) {
 	r.download.Add(n)
 	m.pushDownloaded(n)
+	if m.usage != nil {
+		m.usage.count(usageCategory(r.category.Load()), false, n)
+	}
 }
 
 func (m *connTracker) uploadCounter(r *record) N.CountFunc {
@@ -411,6 +493,7 @@ func (m *connTracker) RoutedConnection(ctx context.Context, conn net.Conn, metad
 		ct:  m,
 	}
 	r.closer = c
+	m.indexHedged(ctx, r)
 	m.join(r)
 	return c
 }
@@ -429,6 +512,7 @@ func (m *connTracker) RoutedPacketConnection(ctx context.Context, conn N.PacketC
 		ct:  m,
 	}
 	r.closer = c
+	m.indexHedged(ctx, r)
 	m.join(r)
 	return c
 }

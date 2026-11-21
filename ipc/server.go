@@ -44,6 +44,8 @@ const (
 	vpnOfflineTestsEndpoint     = "/vpn/offline-tests"
 	vpnStatusEventsEndpoint     = "/vpn/status/events"
 	vpnSessionsEndpoint         = "/vpn/sessions"
+	vpnUsageEndpoint            = "/vpn/usage"
+	vpnUsageResetEndpoint       = "/vpn/usage/reset"
 	vpnClearTunnelCacheEndpoint = "/vpn/cache/clear"
 	vpnResetNetworkEndpoint     = "/vpn/network/reset"
 	vpnPauseEndpoint            = "/vpn/pause"
@@ -247,6 +249,8 @@ func newLocalAPI(b *backend.LocalBackend, withAuth bool) *localapi {
 	mux.HandleFunc("GET "+vpnThroughputEndpoint, traced(s.vpnThroughputHandler))
 	mux.HandleFunc("POST "+vpnOfflineTestsEndpoint, traced(s.vpnOfflineTestsHandler))
 	mux.HandleFunc("GET "+vpnSessionsEndpoint, traced(s.vpnSessionsHandler))
+	mux.HandleFunc("GET "+vpnUsageEndpoint, traced(s.vpnUsageHandler))
+	mux.HandleFunc("POST "+vpnUsageResetEndpoint, traced(s.vpnUsageResetHandler))
 	mux.HandleFunc("POST "+vpnClearTunnelCacheEndpoint, traced(s.vpnClearTunnelCacheHandler))
 	mux.HandleFunc("POST "+vpnResetNetworkEndpoint, traced(s.vpnResetNetworkHandler))
 	mux.HandleFunc("POST "+vpnPauseEndpoint, traced(s.vpnPauseHandler))
@@ -559,6 +563,18 @@ func (s *localapi) vpnSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, s.backend(r.Context()).Sessions(limit))
+}
+
+func (s *localapi) vpnUsageHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.backend(r.Context()).UsageStats())
+}
+
+func (s *localapi) vpnUsageResetHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.backend(r.Context()).ResetUsageStats(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *localapi) vpnClearTunnelCacheHandler(w http.ResponseWriter, r *http.Request) {

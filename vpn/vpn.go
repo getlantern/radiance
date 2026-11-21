@@ -100,6 +100,8 @@ type VPNClient struct {
 	// inviterTickets, if set, gives each tunnel's Unbounded consumer this
 	// device's helper inviter tickets. Guarded by mu.
 	inviterTickets InviterTickets
+	// usage, if set, counts each tunnel's bytes by path. Guarded by mu.
+	usage *usageSink
 
 	// reversePortal, reverseMasquerade and reverseTags are the reverse direct
 	// state each tunnel is given when it comes up. Written under mu;
@@ -143,6 +145,15 @@ func (c *VPNClient) SetInviterTickets(src InviterTickets) {
 	c.inviterTickets = src
 }
 
+// SetUsageStats makes tunnels started from now on count their bytes by path
+// into stats. isPrivate reports whether an outbound tag is a server the user
+// added rather than one of Lantern's.
+func (c *VPNClient) SetUsageStats(stats *UsageStats, isPrivate func(tag string) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.usage = &usageSink{stats: stats, isPrivate: isPrivate}
+}
+
 // newTunnel returns an unstarted tunnel for boxOptions. Caller holds c.mu.
 func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel {
 	t := &tunnel{
@@ -154,6 +165,7 @@ func (c *VPNClient) newTunnel(boxOptions BoxOptions, initialMode string) *tunnel
 		portalMasquerade:     boxOptions.reverseMasquerade,
 		connObserver:         c.connObserver,
 		inviterTickets:       c.inviterTickets,
+		usage:                c.usage,
 		staleSource:          &c.staleSource,
 	}
 	t.restartForStaleSource = c.staleSourceRestart(t)
@@ -344,6 +356,9 @@ func (c *VPNClient) close() error {
 		return err
 	}
 	c.setStatus(Disconnected, nil)
+	if c.usage != nil {
+		c.usage.stats.Flush()
+	}
 	if c.platformIfce != nil {
 		c.platformIfce.PostServiceClose()
 	}

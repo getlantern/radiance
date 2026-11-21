@@ -180,6 +180,9 @@ type LocalBackend struct {
 	helperRelay *helper.Relayer
 	// helperActivity is today's sharing time and bytes, kept on the device.
 	helperActivity *helper.ActivityTracker
+	// usageStats is the bytes the tunnel carried along each path, kept on
+	// the device.
+	usageStats *vpn.UsageStats
 	// helperPairingKeys is the K_pair of each helper pairing, pushed by
 	// lantern-core over IPC.
 	helperPairingKeys *helper.PairingKeys
@@ -329,6 +332,8 @@ func NewLocalBackend(ctx context.Context, opts Options) (*LocalBackend, error) {
 	})
 	backend = r
 	r.helperActivity = helper.NewActivityTracker(filepath.Join(dataDir, "helper-activity.json"), r.sharingCounters)
+	r.usageStats = vpn.NewUsageStats(filepath.Join(dataDir, "usage-stats.json"))
+	vpnClient.SetUsageStats(r.usageStats, r.isPrivateServer)
 	r.sessionHistory = vpn.NewSessionHistory(slog.Default().With("service", "session_history"), r.sessionInfo())
 	r.shutdownFuncs = append(r.shutdownFuncs, func() error { r.sessionHistory.Close(); return nil })
 	r.userMessages = loadUserMessageService(opts.UserMessageCapabilities, dataDir)
@@ -442,6 +447,7 @@ func (r *LocalBackend) Start() {
 	r.resumePeerShareIfEnabled()
 	r.syncPairingRoute()
 	go r.helperActivity.Run(r.ctx, time.Minute)
+	go r.usageStats.Run(r.ctx, time.Minute)
 
 	// Wire the broflake / Unbounded widget proxy lifecycle to config
 	// updates. This single subscription handles all three start/stop
@@ -747,6 +753,10 @@ func (r *LocalBackend) Close() {
 		if r.helperActivity != nil {
 			r.helperActivity.Stop()
 			r.helperActivity.Flush()
+		}
+		if r.usageStats != nil {
+			r.usageStats.Stop()
+			r.usageStats.Flush()
 		}
 		r.closePeerClient()
 		r.stopReverse()
@@ -2597,6 +2607,35 @@ func (r *LocalBackend) HelperActivity() helper.Activity {
 		return helper.Activity{Day: time.Now().In(helper.LocalZone()).Format("2006-01-02")}
 	}
 	return r.helperActivity.Today()
+}
+
+// isPrivateServer reports whether tag is a server the user added.
+func (r *LocalBackend) isPrivateServer(tag string) bool {
+	srv, ok := r.srvManager.GetServerByTag(tag)
+	return ok && !srv.IsLantern
+}
+
+// UsageStats is the bytes the tunnel carried along each path, for the app's
+// usage stats screen.
+func (r *LocalBackend) UsageStats() vpn.Usage {
+	if r.usageStats == nil {
+		return vpn.Usage{}
+	}
+	return r.usageStats.Usage()
+}
+
+// ResetUsageStats clears the usage stats.
+func (r *LocalBackend) ResetUsageStats() error {
+	if r.usageStats == nil {
+		return nil
+	}
+	return r.usageStats.Reset()
+}
+
+// UseUsageStatsForTest sets the store UsageStats reads, for tests of the IPC
+// route, which cannot build a full backend.
+func (r *LocalBackend) UseUsageStatsForTest(s *vpn.UsageStats) {
+	r.usageStats = s
 }
 
 // HelperLive is whether each helper pairing's friend is connected to this
