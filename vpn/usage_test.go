@@ -745,3 +745,17 @@ func TestUsageStatsResetIsBusyBehindAnyStall(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUsageBusy)
 	require.NoError(t, s.Reset())
 }
+
+// A lock file that can't be opened won't open on a retry either, so a reset
+// fails outright rather than answer busy.
+func TestUsageStatsResetFailsWhenTheLockFileIsUnusable(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	require.NoError(t, os.Mkdir(dir, 0o500)) // the lock file can't be created
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	path := filepath.Join(dir, "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	err := s.Reset()
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrUsageBusy)
+}

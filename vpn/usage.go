@@ -253,10 +253,12 @@ func readUsageChecked(path string) (Usage, bool) {
 	return u, true
 }
 
-// usageReadWait and usageResetWait bound how long Usage and Reset, which IPC
-// handlers call, wait behind a save in progress. They don't bound the
-// request's own read or write of the file. A save can spend usageLockWait on
-// the file lock and then read and write the file, so a reset waits longer.
+// usageReadWait and usageResetWait bound how long the IPC handlers' calls wait
+// behind other work on the stats: Usage waits usageReadWait for the store;
+// Reset waits usageResetWait for this store's save, which can spend
+// usageLockWait on the file lock and then read and write the file, then
+// usageLockWait for the file lock and usageReadWait for a read. Neither
+// bounds the request's own read or write of the file.
 var (
 	usageReadWait  = 250 * time.Millisecond
 	usageResetWait = 3 * time.Second
@@ -312,12 +314,21 @@ func (s *UsageStats) resetElsewhereLocked(file Usage) bool {
 // lock; see activityLockWait in package helper.
 var usageLockWait = 500 * time.Millisecond
 
-func (s *UsageStats) lock() (*flock.Flock, bool) {
+// lock takes the cross-process file lock. It returns ErrUsageBusy if another
+// process held it for all of usageLockWait, and another error if the lock
+// file can't be used at all.
+func (s *UsageStats) lock() (*flock.Flock, error) {
 	l := flock.New(s.path + ".lock")
 	ctx, cancel := context.WithTimeout(context.Background(), usageLockWait)
 	defer cancel()
 	locked, err := l.TryLockContext(ctx, 25*time.Millisecond)
-	return l, err == nil && locked
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || err == nil && !locked:
+		return nil, ErrUsageBusy
+	case err != nil:
+		return nil, errUsageLock
+	}
+	return l, nil
 }
 
 // write replaces the file. Errors are fixed text: the path can name the
@@ -349,8 +360,8 @@ func (s *UsageStats) Flush() {
 	if s.idle() {
 		return
 	}
-	l, ok := s.lock()
-	if !ok {
+	l, err := s.lock()
+	if err != nil {
 		slog.Debug("vpn: usage stats file lock unavailable; saving later")
 		return
 	}
@@ -392,9 +403,9 @@ func (s *UsageStats) Reset() error {
 		return ErrUsageBusy
 	}
 	defer s.writeMu.Unlock()
-	l, ok := s.lock()
-	if !ok {
-		return ErrUsageBusy // another process is saving
+	l, err := s.lock()
+	if err != nil {
+		return err
 	}
 	defer func() { _ = l.Unlock() }()
 
@@ -413,11 +424,14 @@ func (s *UsageStats) Reset() error {
 	return nil
 }
 
-// ErrUsageBusy means a save, in this process or another, outlasted the
-// request's wait; the request can be retried.
-var ErrUsageBusy = errors.New("usage stats are being saved")
+// ErrUsageBusy means another save, reset or read, in this process or another,
+// held the stats past the request's wait; the request can be retried.
+var ErrUsageBusy = errors.New("usage stats are busy")
 
-var errUsageWrite = errors.New("could not save usage stats")
+var (
+	errUsageLock  = errors.New("could not lock usage stats")
+	errUsageWrite = errors.New("could not save usage stats")
+)
 
 // Run saves every interval until ctx ends or Stop is called. It returns at
 // once if Stop was called, or if another Run hasn't returned yet: one runs at
