@@ -866,6 +866,12 @@ func (t *tunnel) close() error {
 			errs = append(errs, closer.Close())
 		}
 		err := errors.Join(errs...)
+		// Closing the connections settled their held bytes. Save them here,
+		// once every closer has finished, even if close timed out: the
+		// backend's saver may already have stopped.
+		if t.usage != nil {
+			t.usage.stats.Flush()
+		}
 		bypass.ProxyStateChanged()
 		done <- err
 		slog.Log(nil, rlog.LevelTrace, "Tunnel closers finished", "error", err)

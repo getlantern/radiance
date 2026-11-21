@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -618,4 +619,30 @@ func TestUsageStatsDoesNotOverwriteAFileItCantRead(t *testing.T) {
 	require.NoError(t, os.Chmod(path, 0o600))
 	assert.Equal(t, int64(100), readUsage(path).Lifetime.Lantern.Up, "the saved totals survive")
 	assert.Equal(t, int64(5), s.peek().Lantern.Up, "and the new bytes wait for the next save")
+}
+
+type slowCloser struct {
+	delay time.Duration
+	fn    func()
+}
+
+func (c slowCloser) Close() error {
+	time.Sleep(c.delay)
+	c.fn()
+	return nil
+}
+
+// Closing connections settles their held bytes; the tunnel saves them once
+// its closers finish, even after close has timed out.
+func TestTunnelSavesUsageAfterSlowTeardown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	stats := NewUsageStats(path)
+	tn := &tunnel{
+		usage:        &usageSink{stats: stats},
+		closeTimeout: 10 * time.Millisecond,
+		closers:      []io.Closer{slowCloser{delay: 100 * time.Millisecond, fn: func() { stats.count(usageLantern, false, 12) }}},
+	}
+	require.Error(t, tn.close(), "close times out")
+	assert.Eventually(t, func() bool { return readUsage(path).Lifetime.Lantern.Down == 12 }, 5*time.Second, 10*time.Millisecond,
+		"the bytes settled during the slow teardown are saved")
 }
