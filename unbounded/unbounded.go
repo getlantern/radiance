@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	C "github.com/getlantern/common"
@@ -204,6 +205,8 @@ type unboundedManager struct {
 	// noteMu serializes noteBlocked. It's never held with transitionMu
 	// waiting on it, and m.mu is only taken inside it.
 	noteMu sync.Mutex
+	// noteQueued is set while a noteBlockedAsync evaluation is pending.
+	noteQueued atomic.Bool
 
 	// tickets supplies the volunteer tickets for this device's helper
 	// pairings. nil: the widget joins no rooms.
@@ -1066,10 +1069,11 @@ func (m *unboundedManager) startLocked() {
 		m.mu.Lock()
 		m.running = ctx.Err() == nil
 		m.exitRun = exitRun
-		if m.running {
-			m.lastBlocked = ""
-		}
 		m.mu.Unlock()
+		// Through noteBlocked, not by clearing lastBlocked here: a reason an
+		// earlier evaluation chose but hasn't logged yet is then logged before
+		// this, so it can't be the last line once the widget runs.
+		m.noteBlocked()
 		if exitRun != nil {
 			exitRun.sync()
 		}

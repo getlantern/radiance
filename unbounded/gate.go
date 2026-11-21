@@ -1,6 +1,9 @@
 package unbounded
 
-import "log/slog"
+import (
+	"log/slog"
+	"sync/atomic"
+)
 
 // Why the widget isn't running, most fundamental first: blockedLocked reports
 // the first that applies. The snapshot carries it, and the manager logs each
@@ -44,10 +47,11 @@ func (m *unboundedManager) blockedLocked(enabled bool) string {
 	}
 }
 
-// noteBlocked logs why the widget isn't running, once per change of reason.
-// Callers run it after acting on an evaluation, without m.mu held. noteMu
-// keeps choosing a reason and logging it together, so concurrent evaluations
-// log in the order they chose and the last line is the current reason.
+// noteBlocked logs why the widget isn't running, once per change of reason,
+// and logs when it's running or starting again after a reason was logged. Callers run it after
+// acting on an evaluation, without m.mu held. noteMu keeps choosing a reason
+// and logging it together, so concurrent evaluations log in the order they
+// chose and the last line is the current state.
 func (m *unboundedManager) noteBlocked() {
 	m.noteMu.Lock()
 	defer m.noteMu.Unlock()
@@ -56,13 +60,40 @@ func (m *unboundedManager) noteBlocked() {
 	changed := reason != m.lastBlocked
 	m.lastBlocked = reason
 	m.mu.Unlock()
-	if changed && reason != "" {
+	if changed {
 		logBlocked(reason)
 	}
 }
 
-// logBlocked logs why the widget isn't running. Tests replace it, since they
-// may not swap the default logger.
-var logBlocked = func(reason string) {
+// noteBlockedAsync runs noteBlocked in the background, at most one at a time,
+// for a caller that mustn't wait on logging: noteBlocked holds noteMu while
+// it writes, so a stalled log sink would otherwise stall snapshot reads.
+func (m *unboundedManager) noteBlockedAsync() {
+	if !m.noteQueued.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer m.noteQueued.Store(false)
+		m.noteBlocked()
+	}()
+}
+
+// blockedHook, when set, replaces logBlocked's logging. Tests set it, since
+// they may not swap the default logger. It's atomic because background
+// evaluations can log while a test swaps it.
+var blockedHook atomic.Pointer[func(reason string)]
+
+// logBlocked logs why the widget isn't running, or, for "", that it's
+// running or starting: blockedLocked doesn't tell those apart, and a start
+// that then fails is logged as not_started when its worker exits.
+func logBlocked(reason string) {
+	if h := blockedHook.Load(); h != nil {
+		(*h)(reason)
+		return
+	}
+	if reason == "" {
+		slog.Info("Unbounded: widget running or starting")
+		return
+	}
 	slog.Info("Unbounded: widget not running", "reason", reason)
 }

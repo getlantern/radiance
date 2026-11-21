@@ -110,6 +110,10 @@ func resetManager(t *testing.T, build func(*clientcore.BroflakeOptions, *clientc
 		if done != nil {
 			<-done
 		}
+		// A snapshot read leaves a gate evaluation running in the background;
+		// let it finish, or it logs into the next test's capture.
+		require.Eventually(t, func() bool { return !manager.noteQueued.Load() },
+			5*time.Second, time.Millisecond, "a background gate evaluation didn't finish")
 		manager = prevManager
 		newWidget = prevWidget
 		newDirectExit, runDirectExit, directExitUnsupported = prevNewExit, prevRunExit, prevUnsupported
