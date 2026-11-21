@@ -761,3 +761,48 @@ func TestUsageStatsResetFailsWhenTheLockFileIsUnusable(t *testing.T) {
 	s := newTestUsageStats(path, &now)
 	assert.ErrorIs(t, s.Reset(), errUsageLock)
 }
+
+func TestUsageStatsLockThroughAFileIsUnusable(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parent, nil, 0o600))
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(filepath.Join(parent, "usage-stats.json"), &now)
+	assert.ErrorIs(t, s.Reset(), errUsageLock, "ENOTDIR won't clear on a retry")
+}
+
+func TestUsageStatsReadFailsWhenTheFileCantBeRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't stop root, or Windows, from reading")
+	}
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.count(usageLantern, true, 100)
+	s.Flush()
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	_, err := s.Usage()
+	assert.ErrorIs(t, err, errUsageRead, "not a 200 with only the pending bytes")
+}
+
+// Neither store found a file at startup: a reset still drops the bytes the
+// other counted before it, while another store's ordinary first save, which
+// also starts the file, doesn't.
+func TestUsageStatsResetSeenWithoutABaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	a, b := newTestUsageStats(path, &now), newTestUsageStats(path, &now)
+	b.count(usageLantern, true, 40)
+	now = now.Add(time.Minute)
+	require.NoError(t, a.Reset())
+	b.Flush()
+	assert.Zero(t, readUsage(path).Lifetime, "b's pre-reset bytes stay dropped")
+
+	path2 := filepath.Join(t.TempDir(), "usage-stats.json")
+	c, d := newTestUsageStats(path2, &now), newTestUsageStats(path2, &now)
+	d.count(usageLantern, true, 7)
+	now = now.Add(time.Minute)
+	c.Flush() // c's first save starts the file; it isn't a reset
+	d.Flush()
+	assert.Equal(t, int64(7), readUsage(path2).Lifetime.Lantern.Up)
+}

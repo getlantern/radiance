@@ -81,6 +81,9 @@ type Usage struct {
 	Month     string      `json:"month"`
 	Lifetime  UsageTotals `json:"lifetime"`
 	ThisMonth UsageTotals `json:"this_month"`
+	// ResetAt is when the totals were last reset, if ever. It tells a reset
+	// from a store's first save, which also starts a file's Since.
+	ResetAt time.Time `json:"reset_at,omitzero"`
 }
 
 // rollTo moves u to month if month replaces u.Month, starting the month's
@@ -286,11 +289,14 @@ func (s *UsageStats) Usage() (Usage, error) {
 		return Usage{}, ErrUsageBusy
 	}
 	defer s.saveMu.Unlock()
-	return s.usageLocked(month, next), nil
+	return s.usageLocked(month, next)
 }
 
-func (s *UsageStats) usageLocked(month, next string) Usage {
-	u := readUsage(s.path)
+func (s *UsageStats) usageLocked(month, next string) (Usage, error) {
+	u, ok := readUsageChecked(s.path)
+	if !ok {
+		return Usage{}, errUsageRead
+	}
 	stale := s.resetElsewhereLocked(u) && s.pendingBeforeLocked(u.Since)
 	if u.Since.IsZero() {
 		u.Since = s.now()
@@ -301,13 +307,18 @@ func (s *UsageStats) usageLocked(month, next string) Usage {
 		u.Lifetime.add(pending)
 		u.ThisMonth.add(pending)
 	}
-	return u
+	return u, nil
 }
 
 // resetElsewhereLocked reports whether another store reset file since this
 // one last saw it. Caller holds saveMu.
 func (s *UsageStats) resetElsewhereLocked(file Usage) bool {
-	return !s.since.IsZero() && !file.Since.IsZero() && !file.Since.Equal(s.since)
+	if s.since.IsZero() {
+		// No baseline: the file was missing when this store started, so
+		// only a reset's own mark says the file was reset.
+		return !file.ResetAt.IsZero()
+	}
+	return !file.Since.IsZero() && !file.Since.Equal(s.since)
 }
 
 // usageLockWait bounds how long a save or reset waits for the cross-process
@@ -316,7 +327,8 @@ var usageLockWait = 500 * time.Millisecond
 
 // lock takes the cross-process file lock. It returns errUsageLock if the lock
 // file can't be created or opened for good (no permission, a read-only or
-// missing directory), and ErrUsageBusy otherwise: for a lock another process
+// missing directory, a path through a file or onto a directory), and
+// ErrUsageBusy otherwise: for a lock another process
 // held past usageLockWait, or an error that may clear, such as running out of
 // file descriptors.
 func (s *UsageStats) lock() (*flock.Flock, error) {
@@ -327,7 +339,8 @@ func (s *UsageStats) lock() (*flock.Flock, error) {
 	switch {
 	case err == nil && locked:
 		return l, nil
-	case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EROFS):
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, syscall.EROFS) || errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.ENOTDIR):
 		return nil, errUsageLock
 	}
 	return nil, ErrUsageBusy
@@ -422,7 +435,7 @@ func (s *UsageStats) Reset() error {
 	defer s.saveMu.Unlock()
 	pending, from := s.take()
 	since := s.now()
-	if !s.write(Usage{Since: since, Month: month}) {
+	if !s.write(Usage{Since: since, Month: month, ResetAt: since}) {
 		s.giveBack(pending, from)
 		return errUsageWrite
 	}
@@ -438,6 +451,7 @@ var ErrUsageBusy = errors.New("usage stats are busy")
 var (
 	// errUsageLock means the lock file can't be used; a retry won't help.
 	errUsageLock  = errors.New("could not lock usage stats")
+	errUsageRead  = errors.New("could not read usage stats")
 	errUsageWrite = errors.New("could not save usage stats")
 )
 
