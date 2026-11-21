@@ -610,6 +610,9 @@ func TestUsageStatsReadResolvesTheZone(t *testing.T) {
 }
 
 func TestUsageStatsDoesNotOverwriteAFileItCantRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes don't stop root, or Windows, from reading")
+	}
 	path := filepath.Join(t.TempDir(), "usage-stats.json")
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 	s := newTestUsageStats(path, &now)
