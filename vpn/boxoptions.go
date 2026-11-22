@@ -58,7 +58,7 @@ var (
 	personalProxiesProbeInterval = urlTestInterval
 )
 
-var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block", ProxylessHedgeTag}
+var reservedTags = []string{AutoSelectTag, ManualSelectTag, PersonalProxiesTag, PersonalProxyTag, "direct", "block", ProxylessTag, ProxylessHedgeTag}
 
 func ReservedTags() []string {
 	return slices.Clone(reservedTags)
@@ -423,10 +423,10 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	if initial == PersonalProxiesTag && len(helpers) == 0 {
 		initial = AutoSelectTag
 	}
-	// A user server saved under proxyless-hedge, before that tag was
-	// reserved, isn't selectable any more, so a saved selection of it
-	// starts on auto-select rather than failing to connect.
-	if initial == ProxylessHedgeTag {
+	// A user server saved under proxyless-hedge or proxyless, before those
+	// tags were reserved, isn't selectable any more, so a saved selection of
+	// it starts on auto-select rather than failing to connect.
+	if initial == ProxylessHedgeTag || initial == ProxylessTag {
 		initial = AutoSelectTag
 	}
 	mode := modeForServer(initial)
