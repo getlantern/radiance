@@ -68,9 +68,14 @@ const (
 	// ProxylessKey lets smart routing reach sites directly, without a proxy,
 	// when they aren't blocked. Unset means true. It applies only with
 	// smart routing and the server's proxyless feature flag.
-	ProxylessKey        _key = "proxyless"          // bool (unset = true)
-	AutoConnectKey      _key = "auto_connect"       // bool
-	PeerShareEnabledKey _key = "peer_share_enabled" // bool
+	ProxylessKey _key = "proxyless" // bool (unset = true)
+	// SmartRoutingSkipDirectKey drops the server's smart-routing rules that
+	// send sites direct, so they go through the proxyless hedge or a proxy
+	// instead. It's for testing proxyless on sites a country's direct list
+	// covers, such as YouTube from the US.
+	SmartRoutingSkipDirectKey _key = "smart_routing_skip_direct" // bool
+	AutoConnectKey            _key = "auto_connect"              // bool
+	PeerShareEnabledKey       _key = "peer_share_enabled"        // bool
 	// PeerManualPortKey is the TCP port number the user has manually
 	// forwarded on their router for the peer-proxy inbound (single-
 	// port 1:1 NAT). Valid range is 1..65535; 0 means unset.

@@ -1149,6 +1149,9 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) error {
 	_, adBlockChanged := updates[settings.AdBlockKey]
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
+	if _, skipDirectChanged := updates[settings.SmartRoutingSkipDirectKey]; skipDirectChanged {
+		smartRoutingChanged = true
+	}
 	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
 		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
 		if err := r.RestartVPN(); err != nil {
@@ -2107,6 +2110,9 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
+			if settings.GetBool(settings.SmartRoutingSkipDirectKey) {
+				bOptions.SmartRouting = withoutDirectRules(cfg.SmartRouting)
+			}
 			// Full tunnel sends everything through the proxy, so only smart
 			// routing builds the proxyless hedge; the flag and the setting
 			// switch it.
