@@ -23,6 +23,8 @@ import (
 
 	lbA "github.com/getlantern/lantern-box/adapter"
 	lbC "github.com/getlantern/lantern-box/constant"
+
+	"github.com/getlantern/radiance/common/fileperm"
 )
 
 func TestUsageClassify(t *testing.T) {
@@ -808,4 +810,73 @@ func TestUsageStatsResetSeenWithoutABaseline(t *testing.T) {
 	c.Flush() // c's first save starts the file; it isn't a reset
 	d.Flush()
 	assert.Equal(t, int64(7), readUsage(path2).Lifetime.Lantern.Up)
+}
+
+// otherUsageMode is a mode that isn't fileperm.File, as a file the root
+// network extension saved before usage stats took fileperm.File has.
+func otherUsageMode() os.FileMode {
+	if fileperm.File == 0o600 {
+		return 0o640
+	}
+	return 0o600
+}
+
+func TestUsageStatsSavedInTheSharedFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.count(usageLantern, true, 10)
+	s.Flush()
+
+	for _, p := range []string{path, path + ".lock"} {
+		info, err := os.Stat(p)
+		require.NoError(t, err)
+		assert.Equal(t, fileperm.File, info.Mode().Perm(), p)
+	}
+}
+
+// A file and lock left in another mode, which on macOS kept the app from
+// reading what the root network extension saved, take fileperm.File when a
+// store opens them, keeping the totals.
+func TestUsageStatsRepairsTheFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	s := newTestUsageStats(path, &now)
+	s.count(usageLantern, true, 10)
+	s.Flush()
+	for _, p := range []string{path, path + ".lock"} {
+		require.NoError(t, os.Chmod(p, otherUsageMode()))
+	}
+
+	u := usageOf(t, newTestUsageStats(path, &now))
+	assert.Equal(t, UsageBytes{Up: 10}, u.Lifetime.Lantern)
+	for _, p := range []string{path, path + ".lock"} {
+		info, err := os.Stat(p)
+		require.NoError(t, err)
+		assert.Equal(t, fileperm.File, info.Mode().Perm(), p)
+	}
+}
+
+// The repair changes only a regular file: a link's target keeps its mode.
+func TestUsageStatsRepairLeavesALinkedFileAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix file modes")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.json")
+	require.NoError(t, os.WriteFile(target, []byte("{}"), otherUsageMode()))
+	require.NoError(t, os.Chmod(target, otherUsageMode()))
+	path := filepath.Join(dir, "usage-stats.json")
+	require.NoError(t, os.Symlink(target, path))
+
+	NewUsageStats(path)
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, otherUsageMode(), info.Mode().Perm())
 }

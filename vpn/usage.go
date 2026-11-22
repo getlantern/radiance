@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -142,7 +143,25 @@ type UsageStats struct {
 // file's Since now, before it counts anything, so a reset another store makes
 // before this one's first save is seen as one.
 func NewUsageStats(path string) *UsageStats {
+	repairUsageModes(path)
 	return &UsageStats{path: path, now: time.Now, loc: helper.LocalZone, since: readUsage(path).Since}
+}
+
+// repairUsageModes gives the file and its lock fileperm.File. A store that
+// saved them in another mode, such as the root network extension on macOS,
+// left them unreadable to the app, which serves usage itself while the VPN
+// is off. Only the owner or root can change a mode, which is the process that
+// left it wrong. Only a regular file is changed, not a link's target.
+func repairUsageModes(path string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for _, p := range []string{path, path + ".lock"} {
+		if info, err := os.Lstat(p); err == nil && info.Mode().IsRegular() &&
+			info.Mode().Perm() != fileperm.File {
+			_ = os.Chmod(p, fileperm.File)
+		}
+	}
 }
 
 // count adds n bytes, sent if up, to c's pending total. It runs on the data
@@ -332,7 +351,9 @@ var usageLockWait = 500 * time.Millisecond
 // held past usageLockWait, or an error that may clear, such as running out of
 // file descriptors.
 func (s *UsageStats) lock() (*flock.Flock, error) {
-	l := flock.New(s.path + ".lock")
+	// fileperm.File, like the totals: the app and the root network extension
+	// on macOS both take the lock.
+	l := flock.New(s.path+".lock", flock.SetPermissions(fileperm.File))
 	ctx, cancel := context.WithTimeout(context.Background(), usageLockWait)
 	defer cancel()
 	locked, err := l.TryLockContext(ctx, 25*time.Millisecond)
@@ -353,8 +374,10 @@ func (s *UsageStats) write(u Usage) bool {
 	if err != nil {
 		return false
 	}
-	// Private: only the backend reads the file; the app asks over IPC.
-	if atomicfile.WriteFile(s.path, data, fileperm.Private) != nil {
+	// fileperm.File, not Private: on macOS the app and the root network
+	// extension both read it from the shared data dir, the app while the VPN
+	// is off.
+	if atomicfile.WriteFile(s.path, data, fileperm.File) != nil {
 		slog.Debug("vpn: saving usage stats failed")
 		return false
 	}
