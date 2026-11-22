@@ -64,7 +64,8 @@ func TestOwnerCanPatchOrdinaryPreferences(t *testing.T) {
 	preferences := settings.Settings{
 		settings.LocaleKey: "en-US", settings.TimeZoneKey: "UTC", settings.LogLevelKey: "info",
 		settings.TelemetryKey: false, settings.SmartRoutingKey: true, settings.AdBlockKey: false,
-		settings.SplitTunnelKey: false, settings.SplitTunnelPolicyKey: "exclude",
+		settings.SmartRoutingSkipDirectKey: true,
+		settings.SplitTunnelKey:            false, settings.SplitTunnelPolicyKey: "exclude",
 		settings.AutoConnectKey: false, settings.PeerShareEnabledKey: false,
 		settings.PeerManualPortKey: float64(0), settings.PeerServePoolKey: true,
 		settings.UnboundedKey: false,

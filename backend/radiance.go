@@ -1026,6 +1026,11 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 			return fmt.Errorf("invalid %s: want a bool, got %T", settings.SendLogsToSigNozKey, v)
 		}
 	}
+	if v, ok := diff[settings.SmartRoutingSkipDirectKey]; ok {
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("invalid %s: want a bool, got %T", settings.SmartRoutingSkipDirectKey, v)
+		}
+	}
 	// An explicit peer toggle is applied whether or not it changes the stored
 	// value, and before any other handler: the stored value can lag the
 	// runtime (a peer that stopped itself, or an "on" still starting), and
@@ -1143,18 +1148,21 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	return errs
 }
 
-// maybeRestartVPN restarts the VPN connection if either the ad block or smart routing settings
-// were changed and the VPN is currently connected. Returns an error if the VPN restart fails;
-// otherwise returns nil.
+// maybeRestartVPN restarts the VPN connection if the ad block or smart routing setting changed,
+// or the skip-direct setting changed with smart routing on, and the VPN is currently connected.
+// Returns an error if the VPN restart fails; otherwise returns nil.
 func (r *LocalBackend) maybeRestartVPN(updates settings.Settings) error {
 	_, adBlockChanged := updates[settings.AdBlockKey]
 	_, smartRoutingChanged := updates[settings.SmartRoutingKey]
-	if (adBlockChanged || smartRoutingChanged) && r.vpnClient.Status() == vpn.Connected {
-		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged, "smart_routing_changed", smartRoutingChanged)
+	_, skipDirectChanged := updates[settings.SmartRoutingSkipDirectKey]
+	skipDirectChanged = skipDirectChanged && settings.GetBool(settings.SmartRoutingKey)
+	if (adBlockChanged || smartRoutingChanged || skipDirectChanged) && r.vpnClient.Status() == vpn.Connected {
+		slog.Info("Restarting VPN to apply new settings", "ad_block_changed", adBlockChanged,
+			"smart_routing_changed", smartRoutingChanged, "skip_direct_changed", skipDirectChanged)
 		if err := r.RestartVPN(); err != nil {
 			return fmt.Errorf(
-				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v): %w",
-				adBlockChanged, smartRoutingChanged, err,
+				"failed to restart VPN (ad_block_changed=%v, smart_routing_changed=%v, skip_direct_changed=%v): %w",
+				adBlockChanged, smartRoutingChanged, skipDirectChanged, err,
 			)
 		}
 	}
@@ -2107,6 +2115,9 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
+			if settings.GetBool(settings.SmartRoutingSkipDirectKey) {
+				bOptions.SmartRouting = withoutDirectRules(cfg.SmartRouting)
+			}
 			// Full tunnel sends everything through the proxy, so only smart
 			// routing builds the proxyless hedge; the flag and the setting
 			// switch it.

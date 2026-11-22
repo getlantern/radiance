@@ -25,7 +25,7 @@ func runFeatures(ctx context.Context, c *ipc.Client) error {
 }
 
 var settingNames = []string{
-	"smart-routing", "proxyless", "ad-block", "telemetry", "split-tunnel", "split-tunnel-policy",
+	"smart-routing", "proxyless", "skip-direct-rules", "ad-block", "telemetry", "split-tunnel", "split-tunnel-policy",
 	"fetch-config", "log-level", "feature-overrides", "country",
 }
 
@@ -39,6 +39,8 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 			return orBool(v), true
 		}
 		return true, true
+	case "skip-direct-rules":
+		return orBool(s[settings.SmartRoutingSkipDirectKey]), true
 	case "ad-block":
 		return orBool(s[settings.AdBlockKey]), true
 	case "telemetry":
@@ -66,6 +68,7 @@ func settingValue(name string, s settings.Settings) (any, bool) {
 type SetCmd struct {
 	SmartRouting      *bool   `arg:"--smart-routing" help:"enable or disable smart routing (true|false)"`
 	Proxyless         *bool   `arg:"--proxyless" help:"with smart routing, reach unblocked sites directly, without a proxy (true|false)"`
+	SkipDirectRules   *bool   `arg:"--skip-direct-rules" help:"with smart routing, ignore the server's rules that send sites direct, so they go through proxyless or a proxy (testing; true|false)"`
 	AdBlock           *bool   `arg:"--ad-block" help:"enable or disable ad blocking (true|false)"`
 	Telemetry         *bool   `arg:"--telemetry" help:"enable or disable telemetry (true|false)"`
 	SplitTunnel       *bool   `arg:"--split-tunnel" help:"enable or disable split tunneling (true|false)"`
@@ -83,6 +86,9 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 	}
 	if cmd.Proxyless != nil {
 		updates[settings.ProxylessKey] = *cmd.Proxyless
+	}
+	if cmd.SkipDirectRules != nil {
+		updates[settings.SmartRoutingSkipDirectKey] = *cmd.SkipDirectRules
 	}
 	if cmd.AdBlock != nil {
 		updates[settings.AdBlockKey] = *cmd.AdBlock
@@ -133,7 +139,7 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 }
 
 type GetCmd struct {
-	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, split-tunnel-policy, fetch-config, log-level, feature-overrides, country); omit to list all"`
+	Name string `arg:"positional" help:"setting name (smart-routing, proxyless, skip-direct-rules, ad-block, telemetry, split-tunnel, split-tunnel-policy, fetch-config, log-level, feature-overrides, country); omit to list all"`
 }
 
 func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {
