@@ -48,3 +48,59 @@ func TestUsageStatsRepairLeavesAHardLinkedFileAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, otherUsageMode(), info.Mode().Perm())
 }
+
+// A relative link in the file's place is refused, not followed to a file
+// beside it, for the totals and the lock.
+func TestUsageStatsRepairRefusesARelativeLink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage-stats.json")
+	for _, p := range []string{path, path + ".lock"} {
+		target := p + ".target"
+		require.NoError(t, os.WriteFile(target, []byte("{}"), 0o600))
+		require.NoError(t, os.Chmod(target, otherUsageMode()))
+		require.NoError(t, os.Symlink(filepath.Base(target), p))
+	}
+
+	NewUsageStats(path)
+	for _, p := range []string{path, path + ".lock"} {
+		info, err := os.Stat(p + ".target")
+		require.NoError(t, err)
+		assert.Equal(t, otherUsageMode(), info.Mode().Perm(), p)
+	}
+}
+
+// A FIFO in the file's place neither blocks the repair nor changes mode.
+func TestShareUsageFileLeavesAFIFOAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	require.NoError(t, syscall.Mkfifo(path, uint32(otherUsageMode())))
+	require.NoError(t, os.Chmod(path, otherUsageMode()))
+
+	done := make(chan struct{})
+	go func() {
+		shareUsageFile(path, false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the repair blocked on a FIFO")
+	}
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	assert.Equal(t, otherUsageMode(), info.Mode().Perm())
+}
+
+// A file another user owns keeps its mode, so root never widens it.
+func TestUsageStatsRepairLeavesAnotherUsersFileAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage-stats.json")
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	require.NoError(t, os.Chmod(path, otherUsageMode()))
+	euid := usageEUID
+	usageEUID = func() int { return os.Geteuid() + 1 }
+	t.Cleanup(func() { usageEUID = euid })
+
+	NewUsageStats(path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, otherUsageMode(), info.Mode().Perm())
+}
