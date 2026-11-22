@@ -142,6 +142,10 @@ type UsageStats struct {
 // file's Since now, before it counts anything, so a reset another store makes
 // before this one's first save is seen as one.
 func NewUsageStats(path string) *UsageStats {
+	// A store that saved them in another mode, such as the root network
+	// extension on macOS, left them unreadable to the app.
+	shareUsageFile(path, false)
+	shareUsageFile(path+".lock", false)
 	return &UsageStats{path: path, now: time.Now, loc: helper.LocalZone, since: readUsage(path).Since}
 }
 
@@ -332,7 +336,11 @@ var usageLockWait = 500 * time.Millisecond
 // held past usageLockWait, or an error that may clear, such as running out of
 // file descriptors.
 func (s *UsageStats) lock() (*flock.Flock, error) {
-	l := flock.New(s.path + ".lock")
+	// fileperm.File, like the totals: the app and the root network extension
+	// on macOS both take the lock. Creating it here sets the mode whatever the
+	// umask, which flock's own create doesn't.
+	shareUsageFile(s.path+".lock", true)
+	l := flock.New(s.path+".lock", flock.SetPermissions(fileperm.File))
 	ctx, cancel := context.WithTimeout(context.Background(), usageLockWait)
 	defer cancel()
 	locked, err := l.TryLockContext(ctx, 25*time.Millisecond)
@@ -353,8 +361,10 @@ func (s *UsageStats) write(u Usage) bool {
 	if err != nil {
 		return false
 	}
-	// Private: only the backend reads the file; the app asks over IPC.
-	if atomicfile.WriteFile(s.path, data, fileperm.Private) != nil {
+	// fileperm.File, not Private: on macOS the app and the root network
+	// extension both read it from the shared data dir, the app while the VPN
+	// is off.
+	if atomicfile.WriteFile(s.path, data, fileperm.File) != nil {
 		slog.Debug("vpn: saving usage stats failed")
 		return false
 	}
