@@ -446,3 +446,20 @@ func TestBuildOptions_AutoSelectOptions(t *testing.T) {
 		"an unset interval keeps radiance's default")
 	assert.Equal(t, []string{"server-sent"}, base.Outbounds, "the shared options are not modified")
 }
+
+// A saved selection of a tag reserved since, which only a user server saved
+// before the reservation could carry, starts on auto-select rather than
+// failing to connect.
+func TestSavedSelectionOfANewlyReservedTagStartsOnAuto(t *testing.T) {
+	for _, tag := range []string{ProxylessHedgeTag, ProxylessTag} {
+		options, _ := testBoxOptions(t)
+		_, mode, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options, InitialServer: tag})
+		require.NoError(t, err, tag)
+		assert.Equal(t, AutoSelectTag, mode, tag)
+	}
+}
+
+func TestProxylessTagIsReserved(t *testing.T) {
+	assert.Contains(t, ReservedTags(), ProxylessTag, "the proxyless outbound is identified by its tag")
+	assert.Contains(t, ReservedTags(), ProxylessHedgeTag)
+}
