@@ -2,6 +2,7 @@ package backend
 
 import (
 	"slices"
+	"strings"
 
 	C "github.com/getlantern/common"
 )
@@ -11,6 +12,17 @@ import (
 // proxyless hedge, or a proxy.
 func withoutDirectRules(rules C.SmartRoutingRules) C.SmartRoutingRules {
 	return slices.DeleteFunc(slices.Clone(rules), func(r C.SmartRoutingRule) bool {
-		return len(r.Outbounds) > 0 && !slices.ContainsFunc(r.Outbounds, func(o string) bool { return o != "direct" })
+		// Matches the outbounds the tunnel uses, which drops blank tags.
+		direct := false
+		for _, o := range r.Outbounds {
+			switch strings.TrimSpace(o) {
+			case "":
+			case "direct":
+				direct = true
+			default:
+				return false
+			}
+		}
+		return direct
 	})
 }

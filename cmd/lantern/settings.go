@@ -139,7 +139,7 @@ func runSet(ctx context.Context, c *ipc.Client, cmd *SetCmd) error {
 }
 
 type GetCmd struct {
-	Name string `arg:"positional" help:"setting name (smart-routing, ad-block, telemetry, split-tunnel, split-tunnel-policy, fetch-config, log-level, feature-overrides, country); omit to list all"`
+	Name string `arg:"positional" help:"setting name (smart-routing, proxyless, skip-direct-rules, ad-block, telemetry, split-tunnel, split-tunnel-policy, fetch-config, log-level, feature-overrides, country); omit to list all"`
 }
 
 func runGet(ctx context.Context, c *ipc.Client, cmd *GetCmd) error {

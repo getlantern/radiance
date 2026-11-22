@@ -15,16 +15,17 @@ func TestWithoutDirectRules(t *testing.T) {
 	direct := C.SmartRoutingRule{Category: "direct", Outbounds: []string{"direct"}}
 	proxied := C.SmartRoutingRule{Category: "streaming", Outbounds: []string{"srv-a", "srv-b"}}
 	mixed := C.SmartRoutingRule{Category: "mixed", Outbounds: []string{"direct", "srv-a"}}
-	rules := C.SmartRoutingRules{direct, proxied, mixed}
+	padded := C.SmartRoutingRule{Category: "padded", Outbounds: []string{" direct", ""}}
+	blank := C.SmartRoutingRule{Category: "blank", Outbounds: []string{" "}}
+	rules := C.SmartRoutingRules{direct, proxied, mixed, padded, blank}
 
 	got := withoutDirectRules(rules)
-	assert.Equal(t, C.SmartRoutingRules{proxied, mixed}, got, "only rules that go only direct are dropped")
-	assert.Equal(t, C.SmartRoutingRules{direct, proxied, mixed}, rules, "the config's rules are left as they were")
+	assert.Equal(t, C.SmartRoutingRules{proxied, mixed, blank}, got,
+		"rules whose outbounds are only direct, blank tags aside, are dropped")
+	assert.Equal(t, C.SmartRoutingRules{direct, proxied, mixed, padded, blank}, rules, "the config's rules are left as they were")
 	assert.Empty(t, withoutDirectRules(C.SmartRoutingRules{direct}))
 }
 
-// With the setting on, the tunnel gets no direct rules but keeps the
-// proxyless hedge, so sites a direct list covers go through it.
 func TestSkipDirectRulesSetting(t *testing.T) {
 	cfg := cachedConfig()
 	cfg.Features = map[string]bool{proxylessFeature: true}
@@ -43,4 +44,12 @@ func TestSkipDirectRulesSetting(t *testing.T) {
 	assert.Empty(t, opts.SmartRouting, "on: the direct rule is dropped")
 	require.NotNil(t, opts.Proxyless, "the hedge is still built")
 	assert.True(t, opts.Proxyless.Enabled)
+}
+
+func TestSkipDirectRulesMustBeABool(t *testing.T) {
+	r := proxylessBackend(t, t.TempDir(), cachedConfig())
+	require.Error(t, r.PatchSettings(settings.Settings{settings.SmartRoutingSkipDirectKey: "on"}))
+	assert.False(t, settings.GetBool(settings.SmartRoutingSkipDirectKey), "a non-bool isn't saved")
+	require.NoError(t, r.PatchSettings(settings.Settings{settings.SmartRoutingSkipDirectKey: true}))
+	assert.True(t, settings.GetBool(settings.SmartRoutingSkipDirectKey))
 }
