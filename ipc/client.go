@@ -186,6 +186,20 @@ func (c *Client) VPNSessions(ctx context.Context, limit int) ([]vpn.Session, err
 	return sessions, err
 }
 
+// VPNUsage returns the bytes the tunnel carried along each path (see
+// vpn.Usage).
+func (c *Client) VPNUsage(ctx context.Context) (vpn.Usage, error) {
+	var u vpn.Usage
+	err := c.doJSON(ctx, http.MethodGet, vpnUsageEndpoint, nil, &u)
+	return u, err
+}
+
+// ResetVPNUsage clears the usage stats.
+func (c *Client) ResetVPNUsage(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, vpnUsageResetEndpoint, nil)
+	return err
+}
+
 // ClearTunnelCache removes the tunnel cache. If the tunnel is connected, the
 // backend restarts it to apply the removal, since the cache cannot be deleted
 // while in use.
