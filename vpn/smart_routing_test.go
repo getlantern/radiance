@@ -106,6 +106,19 @@ func TestUpdateOutboundsKeepsReservedSmartRoutingMembers(t *testing.T) {
 		"direct isn't an auto member but stays in the group")
 }
 
+func TestUpdateOutboundsKeepsSmartRoutingMembersWhenNothingLoads(t *testing.T) {
+	tun := startSmartRoutingTestTunnel(t, []string{"lantern-1", "lantern-2"}, []string{"lantern-1"})
+
+	bogus := O.Outbound{Type: "bogus", Tag: "bogus-1"}
+	list := servers.ServerList{
+		Servers:      []*servers.Server{{Tag: bogus.Tag, Type: bogus.Type, IsLantern: true, Options: bogus}},
+		SmartRouting: map[string][]string{testSmartRoutingTag: {C.TypeDirect, "lantern-2", bogus.Tag}},
+	}
+	require.Error(t, tun.updateOutbounds(list), "nothing in the list loads")
+	assert.Equal(t, []string{"lantern-1"}, selectorMembers(t, tun, testSmartRoutingTag),
+		"a refresh in which no server loads leaves the group alone")
+}
+
 func TestUpdateOutboundsSkipsRemovedSmartRoutingMembers(t *testing.T) {
 	tun := startSmartRoutingTestTunnel(t, []string{"lantern-1", "lantern-2"}, []string{"lantern-2"})
 

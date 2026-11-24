@@ -1353,21 +1353,21 @@ func (t *tunnel) updateOutbounds(list servers.ServerList) error {
 		}
 	}
 
-	if !hasNewOutbound {
+	if hasNewOutbound {
+		// Before the removal, so a group whose members all leave gets its new ones first.
+		if err := t.addToSmartRoutingGroupsLocked(list.SmartRouting, toRemove); errors.Is(err, lbA.ErrGroupClosed) {
+			return errLibboxClosed
+		} else if err != nil {
+			errs = append(errs, err)
+		}
+		if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
+			return err
+		} else if err != nil {
+			errs = append(errs, err)
+		}
+	} else {
 		slog.Warn("All new outbounds failed to load, keeping old outbounds",
 			"failed_tags", newTags, "would_remove_tags", toRemove)
-		toRemove = nil
-	}
-	// Before the removal, so a group whose members all leave gets its new ones first.
-	if err := t.addToSmartRoutingGroupsLocked(list.SmartRouting, toRemove); errors.Is(err, lbA.ErrGroupClosed) {
-		return errLibboxClosed
-	} else if err != nil {
-		errs = append(errs, err)
-	}
-	if err := t.removeOutboundsLocked(toRemove); errors.Is(err, errLibboxClosed) {
-		return err
-	} else if err != nil {
-		errs = append(errs, err)
 	}
 
 	if err := t.syncPersonalProxiesLocked(); err != nil {
