@@ -888,6 +888,18 @@ type PersonalProxyFallbackEvent struct {
 	Fallback string `json:"fallback"`
 }
 
+// SelectedServerFallbackEvent is emitted when the selected Lantern server was
+// withdrawn, as when it is hard-demoted, and the selection moved without the
+// user choosing it.
+type SelectedServerFallbackEvent struct {
+	events.Event
+	// Tag is the withdrawn server's tag.
+	Tag string `json:"tag"`
+	// Fallback is the selection now in effect: a server in the same location,
+	// or AutoSelectTag.
+	Fallback string `json:"fallback"`
+}
+
 // AutoSelectedEvent is emitted when the auto-selected server changes.
 type AutoSelectedEvent struct {
 	events.Event

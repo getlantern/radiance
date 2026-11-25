@@ -2522,3 +2522,87 @@ func TestServerListFromConfig_AutoSelectOptions(t *testing.T) {
 	require.NotNil(t, list.AutoSelectOptions, "a config without the field must still clear earlier timeouts")
 	assert.Empty(t, list.AutoSelectOptions.ProbeTimeoutsMs)
 }
+
+func addLocatedServer(t *testing.T, r *LocalBackend, tag, city, countryCode string) {
+	t.Helper()
+	require.NoError(t, r.srvManager.AddServers(servers.ServerList{Servers: []*servers.Server{{
+		Tag: tag, Type: "direct", IsLantern: true,
+		Options:  option.Outbound{Tag: tag, Type: "direct", Options: &option.DirectOutboundOptions{}},
+		Location: C.ServerLocation{City: city, CountryCode: countryCode},
+	}}}, false))
+}
+
+func selectedServerFallbackEvents(t *testing.T) <-chan vpn.SelectedServerFallbackEvent {
+	ch := make(chan vpn.SelectedServerFallbackEvent, 8)
+	sub := events.Subscribe(func(evt vpn.SelectedServerFallbackEvent) { ch <- evt })
+	t.Cleanup(sub.Unsubscribe)
+	return ch
+}
+
+// A withdrawn pin (as when hard-demoted, engineering#3918) moves to a server
+// in the same location before auto, so the user's exit country holds, and
+// the app is told either way.
+func TestWithdrawnPinFallsBackToSameLocation(t *testing.T) {
+	tests := []struct {
+		name    string
+		others  [][3]string // tag, city, country code
+		demoted []string
+		want    string
+	}{
+		{
+			name:   "same city first",
+			others: [][3]string{{"sf", "San Francisco", "US"}, {"la-2", "Los Angeles", "US"}, {"fra", "Frankfurt", "DE"}},
+			want:   "la-2",
+		},
+		{
+			name:   "then same country",
+			others: [][3]string{{"sf", "San Francisco", "US"}, {"fra", "Frankfurt", "DE"}},
+			want:   "sf",
+		},
+		{
+			name:    "hard-demoted servers are skipped",
+			others:  [][3]string{{"la-2", "Los Angeles", "US"}, {"sf", "San Francisco", "US"}},
+			demoted: []string{"la-2"},
+			want:    "sf",
+		},
+		{
+			name:   "auto when no server shares the country",
+			others: [][3]string{{"fra", "Frankfurt", "DE"}},
+			want:   vpn.AutoSelectTag,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			evts := selectedServerFallbackEvents(t)
+			addLocatedServer(t, r, "la-1", "Los Angeles", "US")
+			for _, o := range tt.others {
+				addLocatedServer(t, r, o[0], o[1], o[2])
+			}
+			history := map[string]servers.SelectionHistory{}
+			for _, tag := range tt.demoted {
+				history[tag] = servers.SelectionHistory{HardDemoted: true}
+			}
+			require.NoError(t, r.srvManager.UpdateSelectionHistory(history))
+			r.persistSelection("la-1")
+
+			_, err := r.srvManager.RemoveServers([]string{"la-1"})
+			require.NoError(t, err)
+			r.clearSelectedIfMissing()
+
+			if tt.want == vpn.AutoSelectTag {
+				assert.True(t, settings.GetBool(settings.AutoConnectKey))
+			} else {
+				assert.False(t, settings.GetBool(settings.AutoConnectKey), "stays a manual pin")
+				assert.Equal(t, tt.want, selectedTag(t))
+			}
+			select {
+			case got := <-evts:
+				assert.Equal(t, "la-1", got.Tag)
+				assert.Equal(t, tt.want, got.Fallback)
+			case <-time.After(2 * time.Second):
+				t.Fatal("no selected-server fallback event")
+			}
+		})
+	}
+}

@@ -1760,7 +1760,7 @@ func selectionUpdatedAt(srv *servers.Server) time.Time {
 }
 
 // clearSelectedIfMissing reverts the persisted selection to its fallback (see
-// fallbackFor) when the selected server is no longer present in the manager.
+// fallBackLocked) when the selected server is no longer present in the manager.
 func (r *LocalBackend) clearSelectedIfMissing() {
 	r.selectionMu.Lock()
 	defer r.selectionMu.Unlock()

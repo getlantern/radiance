@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	lbA "github.com/getlantern/lantern-box/adapter"
@@ -194,19 +195,88 @@ func (r *LocalBackend) fallbackFor(tag string) string {
 }
 
 // fallBackLocked persists and selects tag's fallback (see fallbackFor), and
-// tells the app when a friend's personal proxy was the one withdrawn. The
-// caller must hold r.selectionMu.
+// tells the app which selection was withdrawn and where it went. A withdrawn
+// Lantern server falls back to a server in the same location first, so the
+// user's exit country survives (see sameLocationServer). The caller must hold
+// r.selectionMu.
 func (r *LocalBackend) fallBackLocked(tag string) {
-	fallback := r.fallbackFor(tag)
-	// Persist before notifying the VPN client so the choice survives even if
-	// the tunnel isn't running to accept the switch.
+	if friend, ok := vpn.ParsePersonalProxySelection(tag); ok {
+		fallback := r.fallbackFor(tag)
+		r.switchToFallbackLocked(fallback)
+		events.Emit(vpn.PersonalProxyFallbackEvent{Tag: friend, Fallback: fallback})
+		return
+	}
+	fallback := vpn.AutoSelectTag
+	var selected servers.Server
+	if err := settings.GetStruct(settings.SelectedServerKey, &selected); err == nil && selected.Tag == tag && selected.IsLantern {
+		if srv, ok := r.sameLocationServer(selected); ok {
+			r.persistServer(srv)
+			err := r.liveTunnel().SelectServer(srv.Tag)
+			if err == nil || errors.Is(err, vpn.ErrTunnelNotConnected) {
+				fallback = srv.Tag
+			} else {
+				slog.Warn("Failed to switch to a same-location server, falling back to auto", "server", srv.Tag, "error", err)
+			}
+		}
+	}
+	if fallback == vpn.AutoSelectTag {
+		r.switchToFallbackLocked(fallback)
+	}
+	slog.Info("Selected server was withdrawn, falling back", "tag", tag, "fallback", fallback)
+	events.Emit(vpn.SelectedServerFallbackEvent{Tag: tag, Fallback: fallback})
+}
+
+// switchToFallbackLocked persists and selects fallback. It persists first so
+// the choice survives even if the tunnel isn't running to accept the switch.
+func (r *LocalBackend) switchToFallbackLocked(fallback string) {
 	r.persistSelection(fallback)
 	if err := r.liveTunnel().SelectServer(fallback); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
 		slog.Warn("Failed to switch to the fallback after the selected server was removed", "fallback", fallback, "error", err)
 	}
-	if friend, ok := vpn.ParsePersonalProxySelection(tag); ok {
-		events.Emit(vpn.PersonalProxyFallbackEvent{Tag: friend, Fallback: fallback})
+}
+
+// sameLocationServer returns a Lantern server, other than gone, in gone's city,
+// else its country, skipping helpers and hard-demoted servers. Most recently
+// probed first, so the pick is deterministic.
+func (r *LocalBackend) sameLocationServer(gone servers.Server) (*servers.Server, bool) {
+	country := gone.Location.CountryCode
+	if country == "" {
+		country = gone.Location.Country
 	}
+	if country == "" {
+		return nil, false
+	}
+	var sameCity, sameCountry []*servers.Server
+	for _, srv := range r.srvManager.AllServers() {
+		if !srv.IsLantern || srv.Tag == gone.Tag || lbA.IsHelperTag(srv.Tag) || isHardDemoted(srv) {
+			continue
+		}
+		c := srv.Location.CountryCode
+		if c == "" {
+			c = srv.Location.Country
+		}
+		if !strings.EqualFold(c, country) {
+			continue
+		}
+		if gone.Location.City != "" && strings.EqualFold(srv.Location.City, gone.Location.City) {
+			sameCity = append(sameCity, srv)
+		} else {
+			sameCountry = append(sameCountry, srv)
+		}
+	}
+	for _, candidates := range [][]*servers.Server{sameCity, sameCountry} {
+		if len(candidates) == 0 {
+			continue
+		}
+		slices.SortFunc(candidates, func(a, b *servers.Server) int {
+			if c := compareSelectionAge(b, a); c != 0 {
+				return c
+			}
+			return strings.Compare(a.Tag, b.Tag)
+		})
+		return candidates[0], true
+	}
+	return nil, false
 }
 
 // reconcilePersonalProxy brings the selection and the tunnel's groups in line

@@ -33,6 +33,17 @@ func (c *Client) PersonalProxyFallbackEvents(ctx context.Context, handler func(v
 	})
 }
 
+// SelectedServerFallbackEvents streams fallbacks of a withdrawn selected
+// Lantern server. Blocks until ctx is cancelled.
+func (c *Client) SelectedServerFallbackEvents(ctx context.Context, handler func(vpn.SelectedServerFallbackEvent)) error {
+	return c.sseRetryLoop(ctx, serverFallbackEventsEndpoint, func(data []byte) {
+		var evt vpn.SelectedServerFallbackEvent
+		if err := json.Unmarshal(data, &evt); err == nil {
+			handler(evt)
+		}
+	})
+}
+
 // SelectionSavedEvents calls handler each time the stream connects or
 // reconnects and after each save of the selection. Blocks until ctx is
 // cancelled.
