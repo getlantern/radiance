@@ -40,6 +40,10 @@ import (
 const (
 	maxRetryDelay       = 2 * time.Minute
 	defaultPollInterval = 10 * time.Minute
+	// pausedPollInterval is the shortest wait between scheduled fetches while
+	// the device is paused. Each config carries probes that the paused tunnel
+	// holds past their deadline, and the server scores expired probes as failures.
+	pausedPollInterval = time.Hour
 )
 
 var (
@@ -86,6 +90,10 @@ type ConfigHandler struct {
 	fetching bool
 	pending  bool
 
+	devicePaused atomic.Bool
+	// pauseChanged wakes fetchLoop to re-evaluate its wait after devicePaused flips.
+	pauseChanged chan struct{}
+
 	pollInterval time.Duration
 	configPath   string
 	wgKeyPath    string
@@ -108,6 +116,7 @@ func NewConfigHandler(ctx context.Context, options Options) *ConfigHandler {
 		ctx:          ctx,
 		cancel:       cancel,
 		pollInterval: pollInterval,
+		pauseChanged: make(chan struct{}, 1),
 		configPath:   filepath.Join(dir, internal.ConfigFileName),
 		wgKeyPath:    filepath.Join(dir, "wg.key"),
 		logger:       logger,
@@ -291,13 +300,26 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 	for {
 		if err := ch.fetchConfig(); err != nil {
 			ch.logger.Error("Failed to fetch config. Retrying", "error", err)
-			backoff.Wait(ch.ctx)
+			// A signal left by a pause and wake during the fetch would cut the backoff short.
+			select {
+			case <-ch.pauseChanged:
+			default:
+			}
+			if !ch.devicePaused.Load() {
+				backoff.WaitOn(ch.ctx, ch.pauseChanged)
+			}
+			// A failed fetch has no interval of its own, so a paused retry waits
+			// for the wake or pausedPollInterval.
+			if ch.devicePaused.Load() && !ch.waitUntilDue(time.Now(), 0) {
+				return
+			}
 			if ch.ctx.Err() != nil {
 				return
 			}
 			continue
 		}
 		backoff.Reset()
+		fetched := time.Now()
 
 		// Use server-recommended poll interval if available, clamped to a
 		// minimum of 10s to prevent excessive polling.
@@ -314,11 +336,50 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 			)
 		}
 
+		if !ch.waitUntilDue(fetched, interval) {
+			return
+		}
+	}
+}
+
+// waitUntilDue blocks until interval has passed since last, or at least
+// pausedPollInterval while the device is paused. A pause change re-measures
+// from last, so a wake returns at once if the fetch came due while paused. It
+// reports false once the handler is stopped.
+func (ch *ConfigHandler) waitUntilDue(last time.Time, interval time.Duration) bool {
+	for {
+		wait := interval
+		if ch.devicePaused.Load() {
+			wait = max(wait, pausedPollInterval)
+		}
+		remaining := time.Until(last.Add(wait))
+		if remaining <= 0 {
+			return ch.ctx.Err() == nil
+		}
+		timer := time.NewTimer(remaining)
 		select {
 		case <-ch.ctx.Done():
-			return
-		case <-time.After(interval):
+			timer.Stop()
+			return false
+		// Re-measured rather than returned, since a pause can land as the timer fires.
+		case <-timer.C:
+		case <-ch.pauseChanged:
+			timer.Stop()
 		}
+	}
+}
+
+// SetDevicePaused sets whether the device is paused for sleep. While it is,
+// scheduled fetches are slowed to a long minimum interval; on wake, a fetch
+// that came due runs at once. [ConfigHandler.Fetch] is unaffected.
+func (ch *ConfigHandler) SetDevicePaused(paused bool) {
+	if ch.devicePaused.Swap(paused) == paused {
+		return
+	}
+	ch.logger.Info("Device pause changed", "paused", paused)
+	select {
+	case ch.pauseChanged <- struct{}{}:
+	default:
 	}
 }
 
