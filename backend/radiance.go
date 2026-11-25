@@ -566,8 +566,9 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 // kill switch: off, no tunnel goes proxyless whatever the user's setting.
 const proxylessFeature = "proxyless"
 
-// proxylessPerSiteSites returns the server's per-site sites, sorted so a
-// reordered list doesn't rebuild the outbound, while the kill switch is on.
+// proxylessPerSiteSites returns the server's sanitized per-site sites, sorted
+// so a reordered list doesn't rebuild the outbound, or none while the
+// proxyless flag is off.
 func proxylessPerSiteSites(cfg *config.Config) []string {
 	if cfg == nil || !cfg.Features[proxylessFeature] {
 		return nil

@@ -76,9 +76,9 @@ func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites [
 
 // WithProxylessDefaults returns a copy of out, when it's the server's proxyless
 // outbound, with proxylessUDP as its UDP transport and, unless the server set
-// per_site, per-site searches on for perSiteSites only: lantern-box searches
-// every site when per_site is unset or its domains are empty. A
-// per_site_domains the server set is kept. Other outbounds are returned as is.
+// per_site, per-site searches for perSiteSites only, set as its
+// per_site_domains, and off when perSiteSites is empty. Other outbounds are
+// returned as is.
 func WithProxylessDefaults(out O.Outbound, perSiteSites []string) O.Outbound {
 	if out.Tag != ProxylessTag || out.Type != lbC.TypeOutline {
 		return out
@@ -93,11 +93,9 @@ func WithProxylessDefaults(out O.Outbound, perSiteSites []string) O.Outbound {
 		withDefaults.UDP = &udp
 	}
 	if withDefaults.PerSite == nil {
-		if len(withDefaults.PerSiteDomains) == 0 {
-			withDefaults.PerSiteDomains = slices.Clone(perSiteSites)
-		}
-		perSite := len(withDefaults.PerSiteDomains) > 0
+		perSite := len(perSiteSites) > 0
 		withDefaults.PerSite = &perSite
+		withDefaults.PerSiteDomains = slices.Clone(perSiteSites)
 	}
 	out.Options = &withDefaults
 	return out

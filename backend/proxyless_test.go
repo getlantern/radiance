@@ -135,6 +135,21 @@ func TestGetBoxOptionsProxylessPerSite(t *testing.T) {
 			})
 		}
 	}
+
+	// An unsorted, unsanitized list reaches the tunnel build as the same sites
+	// a config update sets, so the update doesn't rebuild the outbound.
+	cfg := cachedConfig()
+	cfg.Features = map[string]bool{proxylessFeature: true}
+	cfg.Options.Outbounds = append(cfg.Options.Outbounds, option.Outbound{
+		Type: lbC.TypeOutline, Tag: vpn.ProxylessTag, Options: &lbO.OutboundOutlineOptions{},
+	})
+	cfg.NonSelectableOutbounds = []string{vpn.ProxylessTag}
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{" YouTube.com ", "googlevideo.com", "youtube.com"}}
+	r := proxylessBackend(t, t.TempDir(), cfg)
+	built := r.getBoxOptions().ProxylessPerSiteSites
+	assert.Equal(t, []string{"googlevideo.com", "youtube.com"}, built)
+	updated := nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+	assert.Equal(t, built, updated.PerSiteDomains)
 }
 
 // proxylessBackend returns a backend whose config handler loaded cfg from
