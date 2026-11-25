@@ -596,6 +596,47 @@ func TestOnPauseUpdate(t *testing.T) {
 	}
 }
 
+func TestSeedPauseEventsPrecedesConcurrentWake(t *testing.T) {
+	got := make(chan PauseEventType, 4)
+	sub := events.Subscribe(func(evt PauseEvent) { got <- evt.EventType })
+	defer sub.Unsubscribe()
+
+	tun := &tunnel{pauseEventsLive: true}
+	tun.seedPauseEvents(wakeDuringSeedManager{tun: tun})
+
+	for _, want := range []PauseEventType{PauseEventDevicePaused, PauseEventDeviceWake} {
+		select {
+		case ev := <-got:
+			require.Equal(t, want, ev)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no PauseEvent %q", want)
+		}
+	}
+}
+
+// wakeDuringSeedManager reports the device paused, but a wake callback runs
+// between that read and the seed's emit.
+type wakeDuringSeedManager struct {
+	pause.Manager
+	tun *tunnel
+}
+
+func (wakeDuringSeedManager) IsNetworkPaused() bool { return false }
+
+func (m wakeDuringSeedManager) IsDevicePaused() bool {
+	woke := make(chan struct{})
+	go func() {
+		m.tun.onPauseUpdate(pause.EventDeviceWake)
+		close(woke)
+	}()
+	// The wake finishes here only if it can emit before the seed does.
+	select {
+	case <-woke:
+	case <-time.After(50 * time.Millisecond):
+	}
+	return true
+}
+
 func TestRemoveDuplicatesKeepsAutoSelectOptions(t *testing.T) {
 	opts := &lbO.MutableAutoSelectOutboundOptions{ProbeTimeoutsMs: lbO.ProbeTimeoutsMs{"hysteria2x": 3000}}
 	var curr lsync.TypedMap[string, []byte]

@@ -443,15 +443,7 @@ func (t *tunnel) connect(ctx context.Context) (err error) {
 		t.pauseEventsLive = true
 		t.pauseEventsMu.Unlock()
 		cb := pm.RegisterCallback(t.onPauseUpdate)
-		// A pause can already be in effect before this registration, so seed it
-		// once. Only the paused case is emitted: not emitting a wake keeps this
-		// off-lock read from racing a real pause into the wrong final state.
-		if pm.IsNetworkPaused() {
-			t.emitPauseEvent(PauseEventNetworkPaused)
-		}
-		if pm.IsDevicePaused() {
-			t.emitPauseEvent(PauseEventDevicePaused)
-		}
+		t.seedPauseEvents(pm)
 		t.closers = append(t.closers, closerFunc(func() error {
 			pm.UnregisterCallback(cb)
 			return nil
@@ -546,6 +538,23 @@ func (t *tunnel) emitPauseEvent(typ PauseEventType) {
 	defer t.pauseEventsMu.Unlock()
 	if t.pauseEventsLive {
 		events.Emit(PauseEvent{EventType: typ})
+	}
+}
+
+// seedPauseEvents reports a pause already in effect when the callback was
+// registered. The reads and emits hold pauseEventsMu, so a transition the reads
+// miss emits its event after the seed's.
+func (t *tunnel) seedPauseEvents(pm pause.Manager) {
+	t.pauseEventsMu.Lock()
+	defer t.pauseEventsMu.Unlock()
+	if !t.pauseEventsLive {
+		return
+	}
+	if pm.IsNetworkPaused() {
+		events.Emit(PauseEvent{EventType: PauseEventNetworkPaused})
+	}
+	if pm.IsDevicePaused() {
+		events.Emit(PauseEvent{EventType: PauseEventDevicePaused})
 	}
 }
 
