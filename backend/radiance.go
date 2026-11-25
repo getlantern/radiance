@@ -1021,6 +1021,20 @@ func (r *LocalBackend) Features() map[string]bool {
 	return cfg.Features
 }
 
+// saveSettings persists diff. Identity changes go through the account client so they can't
+// land in the middle of a login.
+func (r *LocalBackend) saveSettings(diff settings.Settings) error {
+	if r.accountClient != nil {
+		for key := range diff {
+			switch key {
+			case settings.UserIDKey, settings.TokenKey, settings.DeviceIDKey:
+				return r.accountClient.PatchSettings(diff)
+			}
+		}
+	}
+	return settings.Patch(diff)
+}
+
 func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	curr := settings.GetAllFor(slices.Collect(maps.Keys(updates))...)
 	diff := updates.Diff(curr)
@@ -1064,7 +1078,7 @@ func (r *LocalBackend) PatchSettings(updates settings.Settings) error {
 	// peer_serve_pool, rather than the previous ones.
 	var patchErr error
 	if len(diff) > 0 {
-		patchErr = settings.Patch(diff)
+		patchErr = r.saveSettings(diff)
 	}
 	// A failed save still applies the live value, so the country route, the
 	// proxyless hedge and log upload follow it before the error returns: a
@@ -2729,6 +2743,11 @@ func (r *LocalBackend) Login(ctx context.Context, email, password string) (*acco
 	return r.accountClient.Login(ctx, email, password)
 }
 
+// LoginForAccount rejects a login unless the active and authenticated accounts match expectedLegacyID.
+func (r *LocalBackend) LoginForAccount(ctx context.Context, email, password string, expectedLegacyID int64) (*account.UserData, error) {
+	return r.accountClient.LoginForAccount(ctx, email, password, expectedLegacyID)
+}
+
 func (r *LocalBackend) Logout(ctx context.Context, email string) (*account.UserData, error) {
 	return r.accountClient.Logout(ctx, email)
 }
@@ -2748,6 +2767,16 @@ func (r *LocalBackend) StartChangeEmail(ctx context.Context, newEmail, password 
 
 func (r *LocalBackend) CompleteChangeEmail(ctx context.Context, newEmail, password, code string) error {
 	return r.accountClient.CompleteChangeEmail(ctx, newEmail, password, code)
+}
+
+// StartBindLegacyEmail sends a verification code for a legacy account's new email.
+func (r *LocalBackend) StartBindLegacyEmail(ctx context.Context, email string) error {
+	return r.accountClient.StartBindLegacyEmail(ctx, email)
+}
+
+// CompleteBindLegacyEmail binds email and password to the current legacy account and signs in.
+func (r *LocalBackend) CompleteBindLegacyEmail(ctx context.Context, email, password, code string) error {
+	return r.accountClient.CompleteBindLegacyEmail(ctx, email, password, code)
 }
 
 func (r *LocalBackend) StartRecoveryByEmail(ctx context.Context, email string) error {
