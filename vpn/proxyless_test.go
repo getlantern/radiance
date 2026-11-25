@@ -133,14 +133,48 @@ func TestBuildOptions_NoProxylessHedge(t *testing.T) {
 	})
 }
 
-func TestWithProxylessUDP(t *testing.T) {
+func TestWithProxylessDefaults(t *testing.T) {
+	for _, perSite := range []bool{false, true} {
+		served := proxylessOutbound(nil)
+		got := WithProxylessDefaults(served, perSite).Options.(*lbO.OutboundOutlineOptions)
+		require.NotNil(t, got.UDP)
+		require.NotNil(t, got.PerSite, "radiance always decides, since lantern-box turns an unset per_site on")
+		assert.Equal(t, perSite, *got.PerSite)
+		in := served.Options.(*lbO.OutboundOutlineOptions)
+		assert.Nil(t, in.UDP, "the input is copied, not modified")
+		assert.Nil(t, in.PerSite, "the input is copied, not modified")
+	}
+
+	on := true
 	served := proxylessOutbound(nil)
-	got := WithProxylessUDP(served)
-	require.NotNil(t, got.Options.(*lbO.OutboundOutlineOptions).UDP)
-	assert.Nil(t, served.Options.(*lbO.OutboundOutlineOptions).UDP, "the input is copied, not modified")
+	served.Options.(*lbO.OutboundOutlineOptions).PerSite = &on
+	got := WithProxylessDefaults(served, false).Options.(*lbO.OutboundOutlineOptions)
+	assert.True(t, *got.PerSite, "a per_site the server set is kept")
+	assert.NotNil(t, got.UDP, "and the UDP default still applies")
 
 	other := O.Outbound{Type: lbC.TypeOutline, Tag: "not-proxyless", Options: &lbO.OutboundOutlineOptions{}}
-	assert.Nil(t, WithProxylessUDP(other).Options.(*lbO.OutboundOutlineOptions).UDP, "only the proxyless outbound")
+	otherOpts := WithProxylessDefaults(other, true).Options.(*lbO.OutboundOutlineOptions)
+	assert.Nil(t, otherOpts.UDP, "only the proxyless outbound")
+	assert.Nil(t, otherOpts.PerSite, "only the proxyless outbound")
+}
+
+// The tunnel's proxyless outbound gets per-site searches only when the
+// server's flag set ProxylessPerSite, whether or not the hedge is built.
+func TestBuildOptions_ProxylessPerSite(t *testing.T) {
+	for _, perSite := range []bool{false, true} {
+		for _, hedged := range []bool{false, true} {
+			bOptions := withProxyless(t, nil)
+			if hedged {
+				bOptions.Proxyless = &ProxylessOptions{Enabled: true}
+			}
+			bOptions.ProxylessPerSite = perSite
+			opts, _, err := buildOptions(bOptions)
+			require.NoError(t, err)
+			got := findOutbound(opts.Outbounds, ProxylessTag).Options.(*lbO.OutboundOutlineOptions).PerSite
+			require.NotNil(t, got)
+			assert.Equal(t, perSite, *got, "per_site=%v hedged=%v", perSite, hedged)
+		}
+	}
 }
 
 // switchStub is an outbound with the hedge's runtime switch.

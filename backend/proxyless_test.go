@@ -98,6 +98,27 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	require.Len(t, list.Servers, 1)
 	opts := list.Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
 	require.NotNil(t, opts.UDP, "a config update must not drop the UDP default the tunnel was built with")
+	require.NotNil(t, opts.PerSite)
+	assert.False(t, *opts.PerSite, "per-site searches are off without the server's flag")
+
+	cfg.Features = map[string]bool{proxylessPerSiteFeature: true}
+	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+	assert.True(t, *opts.PerSite, "the server's flag turns them on")
+}
+
+// The tunnel build and a config update read the per-site flag the same way,
+// whatever smart routing is set to, so they don't disagree and rebuild the
+// outbound.
+func TestGetBoxOptionsProxylessPerSite(t *testing.T) {
+	for _, flag := range []bool{false, true} {
+		for _, smart := range []bool{false, true} {
+			cfg := cachedConfig()
+			cfg.Features = map[string]bool{proxylessPerSiteFeature: flag}
+			r := proxylessBackend(t, t.TempDir(), cfg)
+			require.NoError(t, settings.Set(settings.SmartRoutingKey, smart))
+			assert.Equal(t, flag, r.getBoxOptions().ProxylessPerSite, "flag=%v smart=%v", flag, smart)
+		}
+	}
 }
 
 // proxylessBackend returns a backend whose config handler loaded cfg from
