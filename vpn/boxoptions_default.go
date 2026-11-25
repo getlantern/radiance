@@ -48,7 +48,8 @@ var (
 	tunPrefix6 = netip.MustParsePrefix("fdfe:dcba:9876::1/126")
 )
 
-// hasGlobalIPv6 decides whether the TUN gets a v6 address. Tests replace it.
+// hasGlobalIPv6 decides whether the TUN gets a v6 address. Tests replace it
+// (setHasGlobalIPv6), so they must not run in parallel.
 var hasGlobalIPv6 = common.HasGlobalIPv6
 
 // baseInbounds returns the tunnel-build inbounds: the TUN device (per-platform

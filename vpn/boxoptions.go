@@ -205,7 +205,7 @@ func baseRoutingRules() []O.Rule {
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject any other IPv6 (::/0) when the TUN has a v6 address: UDP, DNS over TCP,
+	// 7.    Reject any other IPv6 (::/0) when the TUN has a v6 address: UDP, TCP to port 53,
 	//       TCP from other inbounds, and v6 outside 2000::/3 (rejectIPv6Rule, added in
 	//       buildOptions).
 	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
