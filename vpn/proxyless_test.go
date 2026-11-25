@@ -15,10 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	box "github.com/getlantern/lantern-box"
 	lbC "github.com/getlantern/lantern-box/constant"
 	lbO "github.com/getlantern/lantern-box/option"
 
 	rlog "github.com/getlantern/radiance/log"
+	"github.com/getlantern/radiance/servers"
 )
 
 // proxylessOutbound mimics lantern-cloud's proxyless outbound, with udp set
@@ -160,6 +162,14 @@ func TestWithProxylessDefaults(t *testing.T) {
 	assert.Nil(t, got.PerSiteDomains, "with the server's own domains")
 	assert.NotNil(t, got.UDP, "and the UDP default still applies")
 
+	served = proxylessOutbound(nil)
+	served.Options.(*lbO.OutboundOutlineOptions).PerSiteDomains = []string{"instagram.com"}
+	got = WithProxylessDefaults(served, []string{"youtube.com"}).Options.(*lbO.OutboundOutlineOptions)
+	assert.Equal(t, []string{"instagram.com"}, got.PerSiteDomains, "per_site_domains the server set are kept")
+	assert.True(t, *got.PerSite, "and searched")
+	got = WithProxylessDefaults(served, nil).Options.(*lbO.OutboundOutlineOptions)
+	assert.True(t, *got.PerSite, "with or without the server's per-site sites")
+
 	other := O.Outbound{Type: lbC.TypeOutline, Tag: "not-proxyless", Options: &lbO.OutboundOutlineOptions{}}
 	otherOpts := WithProxylessDefaults(other, []string{"youtube.com"}).Options.(*lbO.OutboundOutlineOptions)
 	assert.Nil(t, otherOpts.UDP, "only the proxyless outbound")
@@ -185,6 +195,27 @@ func TestBuildOptions_ProxylessPerSite(t *testing.T) {
 			assert.Equal(t, sites, got.PerSiteDomains, "sites=%v hedged=%v", sites, hedged)
 		}
 	}
+}
+
+// A config update leaves the tunnel's proxyless outbound alone while its sites
+// are the same, and replaces it when they change.
+func TestProxylessPerSiteReconcile(t *testing.T) {
+	ctx := box.BaseContext()
+	bOptions := withProxyless(t, nil)
+	bOptions.ProxylessPerSiteSites = []string{"googlevideo.com", "youtube.com"}
+	opts, _, err := buildOptions(bOptions)
+	require.NoError(t, err)
+	curr := makeOutboundOptsMap(ctx, opts)
+
+	update := func(sites []string) servers.ServerList {
+		out := WithProxylessDefaults(proxylessOutbound(nil), sites)
+		return removeDuplicates(ctx, curr, servers.ServerList{Servers: []*servers.Server{
+			{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out},
+		}})
+	}
+	assert.Empty(t, update([]string{"googlevideo.com", "youtube.com"}).Servers, "the same sites")
+	assert.Len(t, update([]string{"youtube.com"}).Servers, 1, "other sites")
+	assert.Len(t, update(nil).Servers, 1, "no sites")
 }
 
 // switchStub is an outbound with the hedge's runtime switch.

@@ -566,15 +566,14 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 // kill switch: off, no tunnel goes proxyless whatever the user's setting.
 const proxylessFeature = "proxyless"
 
-// proxylessPerSiteSites returns the sites the proxyless outbound searches a
-// strategy for site by site: the server's per_site_sites for this client,
-// while the proxyless kill switch is on. With none, the outbound uses one
-// strategy for every site.
+// proxylessPerSiteSites returns the server's per-site sites, sorted so a
+// reordered list doesn't rebuild the outbound, while the kill switch is on.
 func proxylessPerSiteSites(cfg *config.Config) []string {
 	if cfg == nil || !cfg.Features[proxylessFeature] {
 		return nil
 	}
 	if s := cfg.Proxyless.Sanitize(); s != nil {
+		slices.Sort(s.PerSiteSites)
 		return s.PerSiteSites
 	}
 	return nil

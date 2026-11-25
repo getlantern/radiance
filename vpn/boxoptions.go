@@ -79,9 +79,8 @@ type BoxOptions struct {
 	// server's proxyless outbound before the auto group. Only smart routing
 	// sets it: full tunnel sends everything through the proxy.
 	Proxyless *ProxylessOptions `json:"proxyless,omitempty"`
-	// ProxylessPerSiteSites are the sites, by registered domain, the proxyless
-	// outbound searches a strategy for site by site, whether or not the hedge
-	// is built. Empty, it searches none.
+	// ProxylessPerSiteSites are the sites the proxyless outbound searches a
+	// strategy for one by one, whether or not the hedge is built.
 	ProxylessPerSiteSites []string `json:"proxyless_per_site_sites,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
 	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box

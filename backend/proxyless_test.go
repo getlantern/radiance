@@ -108,6 +108,11 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	assert.True(t, *opts.PerSite, "the server's sites turn them on")
 	assert.Equal(t, []string{"youtube.com"}, opts.PerSiteDomains, "for those sites only, sanitized")
 
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{"youtube.com", "googlevideo.com"}}
+	first := nonSelectableOutboundsFromConfig(cfg).Servers[0].Options
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{"googlevideo.com", "youtube.com"}}
+	assert.Equal(t, first, nonSelectableOutboundsFromConfig(cfg).Servers[0].Options, "a reordered list is the same outbound")
+
 	cfg.Features = map[string]bool{}
 	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
 	assert.False(t, *opts.PerSite, "the proxyless kill switch turns them off too")

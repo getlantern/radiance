@@ -74,16 +74,11 @@ func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites [
 	return exploreRate, sites
 }
 
-// WithProxylessDefaults returns out with radiance's defaults for what the
-// server left unset when out is the server's proxyless outbound: proxylessUDP
-// as its UDP transport, and per-site strategy searches for perSiteSites only.
-// lantern-box searches every site when per_site is unset and when
-// per_site_domains is empty, and the server can't set either without breaking
-// clients whose lantern-box predates the fields, so radiance decides unless
-// the server set per_site itself: on with perSiteSites as per_site_domains
-// when it's non-empty, off otherwise. Other outbounds are returned as is. The
-// options are copied, so neither the server's config nor perSiteSites is
-// shared.
+// WithProxylessDefaults returns a copy of out, when it's the server's proxyless
+// outbound, with proxylessUDP as its UDP transport and, unless the server set
+// per_site, per-site searches on for perSiteSites only: lantern-box searches
+// every site when per_site is unset or its domains are empty. A
+// per_site_domains the server set is kept. Other outbounds are returned as is.
 func WithProxylessDefaults(out O.Outbound, perSiteSites []string) O.Outbound {
 	if out.Tag != ProxylessTag || out.Type != lbC.TypeOutline {
 		return out
@@ -98,11 +93,11 @@ func WithProxylessDefaults(out O.Outbound, perSiteSites []string) O.Outbound {
 		withDefaults.UDP = &udp
 	}
 	if withDefaults.PerSite == nil {
-		perSite := len(perSiteSites) > 0
-		withDefaults.PerSite = &perSite
-		if perSite {
+		if len(withDefaults.PerSiteDomains) == 0 {
 			withDefaults.PerSiteDomains = slices.Clone(perSiteSites)
 		}
+		perSite := len(withDefaults.PerSiteDomains) > 0
+		withDefaults.PerSite = &perSite
 	}
 	out.Options = &withDefaults
 	return out
