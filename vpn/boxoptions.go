@@ -196,15 +196,18 @@ func baseRoutingRules() []O.Rule {
 	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
 	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
 	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
+	// 0b.   Reject public IPv6 (2000::/3) from the TUN, only when the TUN captured a v6
+	//       address. Inserted before sniffing (in buildOptions) so the connection is
+	//       refused before it is accepted, which is what makes clients fall back to IPv4.
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject IPv6 (::/0), only when the TUN captured a v6 address; placed here
-	//       so direct-routed v6 is preserved while proxied v6 fails over to IPv4. Added
-	//	      in buildOptions.
+	// 7.    Reject the remaining IPv6 (::/0), only when the TUN captured a v6 address: a
+	//       backstop for non-private v6 outside 2000::/3, such as NAT64. Private v6 has
+	//       already gone direct. Added in buildOptions.
 	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
 	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
@@ -440,6 +443,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	}
 
 	if tunHasIPv6(opts) {
+		opts.Route.Rules = withEarlyIPv6Reject(opts.Route.Rules)
 		opts.Route.Rules = append(opts.Route.Rules, rejectIPv6Rule())
 	}
 
@@ -715,6 +719,37 @@ func rejectIPv6Rule() O.Rule {
 	rule := rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
 	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
 	return rule
+}
+
+// earlyRejectIPv6Rule rejects public IPv6 (2000::/3) arriving on the TUN.
+// sing-box ends pre-match at a TCP sniff rule and accepts the connection there,
+// so a reject placed after sniffing reaches the client as a closed connection
+// mid-handshake, which clients don't retry over IPv4. Before sniffing, the reject
+// is applied in pre-match and the client sees the connection refused. This
+// matters when an app has a real IPv6 address despite AAAA suppression: on macOS,
+// another VPN's resolver can leave the system resolving around the tunnel's.
+// Private, link-local and ULA v6 aren't in 2000::/3 and still go direct.
+func earlyRejectIPv6Rule() O.Rule {
+	rule := rejectRule(O.RawDefaultRule{
+		Inbound: []string{inboundTag},
+		IPCIDR:  []string{"2000::/3"},
+	})
+	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
+	return rule
+}
+
+// withEarlyIPv6Reject inserts earlyRejectIPv6Rule just before the TUN's sniff
+// rule. Without one, it returns rules unchanged, leaving rejectIPv6Rule.
+func withEarlyIPv6Reject(rules []O.Rule) []O.Rule {
+	i := slices.IndexFunc(rules, func(r O.Rule) bool {
+		o := r.DefaultOptions
+		return r.Type == C.RuleTypeDefault && o.RuleAction.Action == C.RuleActionTypeSniff &&
+			slices.Contains(o.RawDefaultRule.Inbound, inboundTag)
+	})
+	if i < 0 {
+		return rules
+	}
+	return slices.Insert(slices.Clone(rules), i, earlyRejectIPv6Rule())
 }
 
 func newDNSServerOptions(typ, tag, server, domainResolver string) O.DNSServerOptions {
