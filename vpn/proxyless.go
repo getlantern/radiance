@@ -79,8 +79,9 @@ func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites [
 // as its UDP transport, and perSite for its per-site strategy searches.
 // lantern-box turns those searches on when unset, and the server can't set
 // them without breaking clients whose lantern-box predates the field, so
-// radiance always decides. Other outbounds are returned as is. The options
-// are copied, so the server's config isn't changed.
+// radiance decides unless the server set per_site itself. Other outbounds are
+// returned as is. The options are copied, so the server's config isn't
+// changed.
 func WithProxylessDefaults(out O.Outbound, perSite bool) O.Outbound {
 	if out.Tag != ProxylessTag || out.Type != lbC.TypeOutline {
 		return out

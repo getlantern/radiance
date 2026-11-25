@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -101,9 +102,33 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	require.NotNil(t, opts.PerSite)
 	assert.False(t, *opts.PerSite, "per-site searches are off without the server's flag")
 
-	cfg.Features = map[string]bool{proxylessPerSiteFeature: true}
+	cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: true}
 	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
 	assert.True(t, *opts.PerSite, "the server's flag turns them on")
+
+	cfg.Features = map[string]bool{proxylessPerSiteFeature: true}
+	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+	assert.False(t, *opts.PerSite, "the proxyless kill switch turns them off too")
+}
+
+// A proxyless outbound the server didn't mark non-selectable gets the same
+// per_site, or lantern-box would read it unset as on.
+func TestSelectableProxylessGetsPerSite(t *testing.T) {
+	cfg := cachedConfig()
+	cfg.Options.Outbounds = append(cfg.Options.Outbounds, option.Outbound{
+		Type: lbC.TypeOutline, Tag: vpn.ProxylessTag, Options: &lbO.OutboundOutlineOptions{Domains: []string{"cdn.jsdelivr.net"}},
+	})
+	for _, flag := range []bool{false, true} {
+		cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: flag}
+		var got *bool
+		for _, s := range serverListFromConfig(cfg).Servers {
+			if s.Tag == vpn.ProxylessTag {
+				got = s.Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions).PerSite
+			}
+		}
+		require.NotNil(t, got, "flag=%v", flag)
+		assert.Equal(t, flag, *got)
+	}
 }
 
 // The tunnel build and a config update read the per-site flag the same way,
@@ -112,11 +137,13 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 func TestGetBoxOptionsProxylessPerSite(t *testing.T) {
 	for _, flag := range []bool{false, true} {
 		for _, smart := range []bool{false, true} {
-			cfg := cachedConfig()
-			cfg.Features = map[string]bool{proxylessPerSiteFeature: flag}
-			r := proxylessBackend(t, t.TempDir(), cfg)
-			require.NoError(t, settings.Set(settings.SmartRoutingKey, smart))
-			assert.Equal(t, flag, r.getBoxOptions().ProxylessPerSite, "flag=%v smart=%v", flag, smart)
+			t.Run(fmt.Sprintf("flag=%v/smart=%v", flag, smart), func(t *testing.T) {
+				cfg := cachedConfig()
+				cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: flag}
+				r := proxylessBackend(t, t.TempDir(), cfg)
+				require.NoError(t, settings.Set(settings.SmartRoutingKey, smart))
+				assert.Equal(t, flag, r.getBoxOptions().ProxylessPerSite)
+			})
 		}
 	}
 }
