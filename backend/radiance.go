@@ -568,14 +568,15 @@ const proxylessFeature = "proxyless"
 
 // proxylessPerSiteFeature is the server-side flag for the proxyless outbound's
 // per-site strategy searches, which lantern-box would otherwise run for every
-// client. Off, the outbound uses one strategy for every site, as before,
-// unless the server set per_site on the outbound itself.
+// client. Off, the outbound uses one strategy for every site, as before.
 const proxylessPerSiteFeature = "proxyless_per_site"
 
-// proxylessPerSite reports whether the server turned per-site strategy
-// searches on. They follow the proxyless kill switch too, since the proxyless
-// outbound also carries traffic, such as rule-set downloads, while the hedge
-// is off.
+// proxylessPerSite reports whether radiance turns per-site strategy searches
+// on for the proxyless outbound: the server's flag is on, and so is the
+// proxyless kill switch, since the outbound also carries traffic, such as
+// rule-set downloads, while the hedge is off. The server always marks that
+// outbound non-selectable, so only the tunnel build and
+// nonSelectableOutboundsFromConfig apply it.
 func proxylessPerSite(cfg *config.Config) bool {
 	return cfg != nil && cfg.Features[proxylessFeature] && cfg.Features[proxylessPerSiteFeature]
 }
@@ -715,9 +716,6 @@ func serverListFromConfig(cfg *config.Config) servers.ServerList {
 		srvs = append(srvs, s)
 	}
 	for _, out := range cfg.Options.Outbounds {
-		// A proxyless outbound the server didn't mark non-selectable still
-		// gets radiance's defaults, or per_site, unset, would mean on.
-		out = vpn.WithProxylessDefaults(out, proxylessPerSite(cfg))
 		addSvr(out.Tag, out.Type, out, cfg.OutboundLocations[out.Tag])
 	}
 	for _, ep := range cfg.Options.Endpoints {

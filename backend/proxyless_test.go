@@ -111,26 +111,6 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	assert.False(t, *opts.PerSite, "the proxyless kill switch turns them off too")
 }
 
-// A proxyless outbound the server didn't mark non-selectable gets the same
-// per_site, or lantern-box would read it unset as on.
-func TestSelectableProxylessGetsPerSite(t *testing.T) {
-	cfg := cachedConfig()
-	cfg.Options.Outbounds = append(cfg.Options.Outbounds, option.Outbound{
-		Type: lbC.TypeOutline, Tag: vpn.ProxylessTag, Options: &lbO.OutboundOutlineOptions{Domains: []string{"cdn.jsdelivr.net"}},
-	})
-	for _, flag := range []bool{false, true} {
-		cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: flag}
-		var got *bool
-		for _, s := range serverListFromConfig(cfg).Servers {
-			if s.Tag == vpn.ProxylessTag {
-				got = s.Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions).PerSite
-			}
-		}
-		require.NotNil(t, got, "flag=%v", flag)
-		assert.Equal(t, flag, *got)
-	}
-}
-
 // The tunnel build and a config update read the per-site flag the same way,
 // whatever smart routing is set to, so they don't disagree and rebuild the
 // outbound.
