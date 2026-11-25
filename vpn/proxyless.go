@@ -74,22 +74,31 @@ func (p *ProxylessOptions) hedgeTelemetryOptions() (exploreRate float64, sites [
 	return exploreRate, sites
 }
 
-// WithProxylessUDP returns out with proxylessUDP as its UDP transport when out
-// is the server's proxyless outbound and the server set none. Other
-// outbounds, and one the server gave a UDP transport, are returned as is. The
-// options are copied, so the server's config isn't changed.
-func WithProxylessUDP(out O.Outbound) O.Outbound {
+// WithProxylessDefaults returns out with radiance's defaults for what the
+// server left unset when out is the server's proxyless outbound: proxylessUDP
+// as its UDP transport, and perSite for its per-site strategy searches.
+// lantern-box turns those searches on when unset, and the server can't set
+// them without breaking clients whose lantern-box predates the field, so
+// radiance decides unless the server set per_site itself. Other outbounds are
+// returned as is. The options are copied, so the server's config isn't
+// changed.
+func WithProxylessDefaults(out O.Outbound, perSite bool) O.Outbound {
 	if out.Tag != ProxylessTag || out.Type != lbC.TypeOutline {
 		return out
 	}
 	opts, ok := out.Options.(*lbO.OutboundOutlineOptions)
-	if !ok || opts == nil || opts.UDP != nil {
+	if !ok || opts == nil || (opts.UDP != nil && opts.PerSite != nil) {
 		return out
 	}
-	withUDP := *opts
-	udp := proxylessUDP
-	withUDP.UDP = &udp
-	out.Options = &withUDP
+	withDefaults := *opts
+	if withDefaults.UDP == nil {
+		udp := proxylessUDP
+		withDefaults.UDP = &udp
+	}
+	if withDefaults.PerSite == nil {
+		withDefaults.PerSite = &perSite
+	}
+	out.Options = &withDefaults
 	return out
 }
 
