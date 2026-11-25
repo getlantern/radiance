@@ -167,6 +167,10 @@ func TestWithProxylessDefaults(t *testing.T) {
 	got = WithProxylessDefaults(served, nil).Options.(*lbO.OutboundOutlineOptions)
 	assert.False(t, *got.PerSite, "radiance's sites decide, so the proxyless flag turning them off wins")
 	assert.Empty(t, got.PerSiteDomains)
+	got = WithProxylessDefaults(served, []string{"youtube.com"}).Options.(*lbO.OutboundOutlineOptions)
+	assert.True(t, *got.PerSite)
+	assert.Equal(t, []string{"youtube.com"}, got.PerSiteDomains, "radiance's sites replace the server's")
+	assert.Equal(t, []string{"instagram.com"}, served.Options.(*lbO.OutboundOutlineOptions).PerSiteDomains, "the input is copied, not modified")
 
 	other := O.Outbound{Type: lbC.TypeOutline, Tag: "not-proxyless", Options: &lbO.OutboundOutlineOptions{}}
 	otherOpts := WithProxylessDefaults(other, []string{"youtube.com"}).Options.(*lbO.OutboundOutlineOptions)

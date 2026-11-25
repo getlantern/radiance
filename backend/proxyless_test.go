@@ -148,7 +148,13 @@ func TestGetBoxOptionsProxylessPerSite(t *testing.T) {
 	r := proxylessBackend(t, t.TempDir(), cfg)
 	built := r.getBoxOptions().ProxylessPerSiteSites
 	assert.Equal(t, []string{"googlevideo.com", "youtube.com"}, built)
-	updated := nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+	var updated *lbO.OutboundOutlineOptions
+	for _, srv := range nonSelectableOutboundsFromConfig(cfg).Servers {
+		if srv.Tag == vpn.ProxylessTag {
+			updated = srv.Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+		}
+	}
+	require.NotNil(t, updated)
 	assert.Equal(t, built, updated.PerSiteDomains)
 }
 
