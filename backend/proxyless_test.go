@@ -100,32 +100,62 @@ func TestNonSelectableProxylessGetsUDP(t *testing.T) {
 	opts := list.Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
 	require.NotNil(t, opts.UDP, "a config update must not drop the UDP default the tunnel was built with")
 	require.NotNil(t, opts.PerSite)
-	assert.False(t, *opts.PerSite, "per-site searches are off without the server's flag")
+	assert.False(t, *opts.PerSite, "per-site searches are off without the server's sites")
 
-	cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: true}
+	cfg.Features = map[string]bool{proxylessFeature: true}
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{" YouTube.com "}}
 	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
-	assert.True(t, *opts.PerSite, "the server's flag turns them on")
+	assert.True(t, *opts.PerSite, "the server's sites turn them on")
+	assert.Equal(t, []string{"youtube.com"}, opts.PerSiteDomains, "for those sites only, sanitized")
 
-	cfg.Features = map[string]bool{proxylessPerSiteFeature: true}
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{"youtube.com", "googlevideo.com"}}
+	first := nonSelectableOutboundsFromConfig(cfg).Servers[0].Options
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{"googlevideo.com", "youtube.com"}}
+	assert.Equal(t, first, nonSelectableOutboundsFromConfig(cfg).Servers[0].Options, "a reordered list is the same outbound")
+
+	cfg.Features = map[string]bool{}
 	opts = nonSelectableOutboundsFromConfig(cfg).Servers[0].Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
 	assert.False(t, *opts.PerSite, "the proxyless kill switch turns them off too")
+	assert.Empty(t, opts.PerSiteDomains)
 }
 
-// The tunnel build and a config update read the per-site flag the same way,
-// whatever smart routing is set to, so they don't disagree and rebuild the
-// outbound.
+// The tunnel build and a config update read the server's per-site sites the
+// same way, whatever smart routing is set to, so they don't disagree and
+// rebuild the outbound.
 func TestGetBoxOptionsProxylessPerSite(t *testing.T) {
-	for _, flag := range []bool{false, true} {
+	for _, sites := range [][]string{nil, {"youtube.com"}} {
 		for _, smart := range []bool{false, true} {
-			t.Run(fmt.Sprintf("flag=%v/smart=%v", flag, smart), func(t *testing.T) {
+			t.Run(fmt.Sprintf("sites=%v/smart=%v", sites, smart), func(t *testing.T) {
 				cfg := cachedConfig()
-				cfg.Features = map[string]bool{proxylessFeature: true, proxylessPerSiteFeature: flag}
+				cfg.Features = map[string]bool{proxylessFeature: true}
+				cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: sites}
 				r := proxylessBackend(t, t.TempDir(), cfg)
 				require.NoError(t, settings.Set(settings.SmartRoutingKey, smart))
-				assert.Equal(t, flag, r.getBoxOptions().ProxylessPerSite)
+				assert.Equal(t, sites, r.getBoxOptions().ProxylessPerSiteSites)
 			})
 		}
 	}
+
+	// An unsorted, unsanitized list reaches the tunnel build as the same sites
+	// a config update sets, so the update doesn't rebuild the outbound.
+	cfg := cachedConfig()
+	cfg.Features = map[string]bool{proxylessFeature: true}
+	cfg.Options.Outbounds = append(cfg.Options.Outbounds, option.Outbound{
+		Type: lbC.TypeOutline, Tag: vpn.ProxylessTag, Options: &lbO.OutboundOutlineOptions{},
+	})
+	cfg.NonSelectableOutbounds = []string{vpn.ProxylessTag}
+	cfg.Proxyless = &common.ProxylessConfig{PerSiteSites: []string{" YouTube.com ", "googlevideo.com", "youtube.com"}}
+	r := proxylessBackend(t, t.TempDir(), cfg)
+	built := r.getBoxOptions().ProxylessPerSiteSites
+	assert.Equal(t, []string{"googlevideo.com", "youtube.com"}, built)
+	var updated *lbO.OutboundOutlineOptions
+	for _, srv := range nonSelectableOutboundsFromConfig(cfg).Servers {
+		if srv.Tag == vpn.ProxylessTag {
+			updated = srv.Options.(option.Outbound).Options.(*lbO.OutboundOutlineOptions)
+		}
+	}
+	require.NotNil(t, updated)
+	assert.Equal(t, built, updated.PerSiteDomains)
 }
 
 // proxylessBackend returns a backend whose config handler loaded cfg from

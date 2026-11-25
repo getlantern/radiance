@@ -79,9 +79,10 @@ type BoxOptions struct {
 	// server's proxyless outbound before the auto group. Only smart routing
 	// sets it: full tunnel sends everything through the proxy.
 	Proxyless *ProxylessOptions `json:"proxyless,omitempty"`
-	// ProxylessPerSite turns on the proxyless outbound's per-site strategy
-	// searches, whether or not the hedge is built.
-	ProxylessPerSite bool `json:"proxyless_per_site,omitempty"`
+	// ProxylessPerSiteSites are the sites the proxyless outbound searches a
+	// strategy for one by one, whether or not the hedge is built. Empty, it
+	// searches none. A per_site the server set on the outbound overrides it.
+	ProxylessPerSiteSites []string `json:"proxyless_per_site_sites,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
 	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box
 	// config so references resolve, but excluded from the selectable proxy groups.
@@ -387,7 +388,7 @@ func buildOptions(bOptions BoxOptions) (O.Options, string, error) {
 	// built, matching how a config update replaces it, so a full-tunnel
 	// update doesn't rebuild it for nothing.
 	for i := range opts.Outbounds {
-		opts.Outbounds[i] = WithProxylessDefaults(opts.Outbounds[i], bOptions.ProxylessPerSite)
+		opts.Outbounds[i] = WithProxylessDefaults(opts.Outbounds[i], bOptions.ProxylessPerSiteSites)
 	}
 	// After the merge, so the hedge is never among the selectable tags.
 	hedged := bOptions.Proxyless != nil && addProxylessHedge(&opts, bOptions.Proxyless)

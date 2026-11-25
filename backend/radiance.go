@@ -566,15 +566,18 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 // kill switch: off, no tunnel goes proxyless whatever the user's setting.
 const proxylessFeature = "proxyless"
 
-// proxylessPerSiteFeature is the server-side flag for the proxyless outbound's
-// per-site strategy searches. Off, the outbound uses one strategy for every
-// site.
-const proxylessPerSiteFeature = "proxyless_per_site"
-
-// proxylessPerSite reports whether the proxyless outbound runs per-site
-// strategy searches: both its own flag and the proxyless kill switch are on.
-func proxylessPerSite(cfg *config.Config) bool {
-	return cfg != nil && cfg.Features[proxylessFeature] && cfg.Features[proxylessPerSiteFeature]
+// proxylessPerSiteSites returns the server's sanitized per-site sites, sorted
+// so a reordered list doesn't rebuild the outbound, or none while the
+// proxyless flag is off.
+func proxylessPerSiteSites(cfg *config.Config) []string {
+	if cfg == nil || !cfg.Features[proxylessFeature] {
+		return nil
+	}
+	if s := cfg.Proxyless.Sanitize(); s != nil {
+		slices.Sort(s.PerSiteSites)
+		return s.PerSiteSites
+	}
+	return nil
 }
 
 // proxylessOn reports whether the proxyless hedge should take new
@@ -746,7 +749,7 @@ func nonSelectableOutboundsFromConfig(cfg *config.Config) servers.ServerList {
 		// The proxyless outbound keeps the defaults the tunnel was built
 		// with, or replacing it would turn off proxyless QUIC, or change
 		// its per-site searches.
-		out = vpn.WithProxylessDefaults(out, proxylessPerSite(cfg))
+		out = vpn.WithProxylessDefaults(out, proxylessPerSiteSites(cfg))
 		srvs = append(srvs, &servers.Server{Tag: out.Tag, Type: out.Type, IsLantern: true, Options: out})
 	}
 	return servers.ServerList{Servers: srvs}
@@ -2125,7 +2128,7 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
 		// Set whether or not smart routing builds the hedge, as a config
 		// update does, so the two agree and don't rebuild the outbound.
-		bOptions.ProxylessPerSite = proxylessPerSite(cfg)
+		bOptions.ProxylessPerSiteSites = proxylessPerSiteSites(cfg)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
 			if settings.GetBool(settings.SmartRoutingSkipDirectKey) {
