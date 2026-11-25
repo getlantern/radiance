@@ -79,9 +79,7 @@ type BoxOptions struct {
 	// sets it: full tunnel sends everything through the proxy.
 	Proxyless *ProxylessOptions `json:"proxyless,omitempty"`
 	// ProxylessPerSite turns on the proxyless outbound's per-site strategy
-	// searches. It's set from the server's flag whether or not the hedge is
-	// built, as a config update sets it, so the two don't disagree and
-	// rebuild the outbound.
+	// searches, whether or not the hedge is built.
 	ProxylessPerSite bool `json:"proxyless_per_site,omitempty"`
 	// NonSelectableOutbounds lists server-declared tags (outbound or endpoint) that
 	// are infrastructure (e.g. the proxyless rule-set detour): merged into the box

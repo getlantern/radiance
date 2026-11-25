@@ -567,16 +567,12 @@ func (r *LocalBackend) applyConfig(cfg *config.Config, evict bool) {
 const proxylessFeature = "proxyless"
 
 // proxylessPerSiteFeature is the server-side flag for the proxyless outbound's
-// per-site strategy searches, which lantern-box would otherwise run for every
-// client. Off, the outbound uses one strategy for every site, as before.
+// per-site strategy searches. Off, the outbound uses one strategy for every
+// site.
 const proxylessPerSiteFeature = "proxyless_per_site"
 
-// proxylessPerSite reports whether radiance turns per-site strategy searches
-// on for the proxyless outbound: the server's flag is on, and so is the
-// proxyless kill switch, since the outbound also carries traffic, such as
-// rule-set downloads, while the hedge is off. The server always marks that
-// outbound non-selectable, so only the tunnel build and
-// nonSelectableOutboundsFromConfig apply it.
+// proxylessPerSite reports whether the proxyless outbound runs per-site
+// strategy searches: both its own flag and the proxyless kill switch are on.
 func proxylessPerSite(cfg *config.Config) bool {
 	return cfg != nil && cfg.Features[proxylessFeature] && cfg.Features[proxylessPerSiteFeature]
 }
@@ -2129,6 +2125,8 @@ func (r *LocalBackend) getBoxOptions() vpn.BoxOptions {
 		bOptions.NonSelectableOutbounds = cfg.NonSelectableOutbounds
 		bOptions.BanditURLOverrides = cfg.BanditURLOverrides
 		bOptions.AutoSelectOptions = vpn.DecodeAutoSelectOptions(cfg.AutoSelectOptions)
+		// Set whether or not smart routing builds the hedge, as a config
+		// update does, so the two agree and don't rebuild the outbound.
 		bOptions.ProxylessPerSite = proxylessPerSite(cfg)
 		if settings.GetBool(settings.SmartRoutingKey) {
 			bOptions.SmartRouting = cfg.SmartRouting
