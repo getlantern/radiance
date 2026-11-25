@@ -23,6 +23,7 @@ import (
 	O "github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badoption"
+	N "github.com/sagernet/sing/common/network"
 
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/atomicfile"
@@ -196,18 +197,19 @@ func baseRoutingRules() []O.Rule {
 	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
 	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
 	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
-	// 0b.   Reject public IPv6 (2000::/3) from the TUN, only when the TUN captured a v6
-	//       address. Inserted before sniffing (in buildOptions) so the connection is
-	//       refused before it is accepted, which is what makes clients fall back to IPv4.
+	// 0b.   Reject TCP to public IPv6 (2000::/3) from the TUN, except DNS and split-tunnel
+	//       IP and process matches, only when the TUN captured a v6 address. Inserted
+	//       before sniffing (in buildOptions) so the connection is refused before it is
+	//       accepted, which is what makes clients fall back to IPv4.
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject the remaining IPv6 (::/0), only when the TUN captured a v6 address: a
-	//       backstop for non-private v6 outside 2000::/3, such as NAT64. Private v6 has
-	//       already gone direct. Added in buildOptions.
+	// 7.    Reject the remaining IPv6 (::/0), only when the TUN captured a v6 address:
+	//       UDP, TCP the early reject left to the direct rules, and v6 outside 2000::/3
+	//       such as NAT64. Private v6 has already gone direct. Added in buildOptions.
 	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
 	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
@@ -721,21 +723,41 @@ func rejectIPv6Rule() O.Rule {
 	return rule
 }
 
-// earlyRejectIPv6Rule rejects public IPv6 (2000::/3) arriving on the TUN.
-// sing-box ends pre-match at a TCP sniff rule and accepts the connection there,
-// so a reject placed after sniffing reaches the client as a closed connection
-// mid-handshake, which clients don't retry over IPv4. Before sniffing, the reject
-// is applied in pre-match and the client sees the connection refused. This
-// matters when an app has a real IPv6 address despite AAAA suppression: on macOS,
-// another VPN's resolver can leave the system resolving around the tunnel's.
-// Private, link-local and ULA v6 aren't in 2000::/3 and still go direct.
+// earlyRejectIPv6Rule refuses TCP from the TUN to public IPv6 before sniffing,
+// so the client sees the connection refused and retries over IPv4. Rules after
+// a TCP sniff run once the connection is accepted. DNS and split-tunnel IP and
+// process matches are left to the later rules; UDP already rejects in pre-match.
 func earlyRejectIPv6Rule() O.Rule {
-	rule := rejectRule(O.RawDefaultRule{
-		Inbound: []string{inboundTag},
-		IPCIDR:  []string{"2000::/3"},
-	})
-	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
-	return rule
+	return O.Rule{
+		Type: C.RuleTypeLogical,
+		LogicalOptions: O.LogicalRule{
+			RawLogicalRule: O.RawLogicalRule{
+				Mode: C.LogicalTypeAnd,
+				Rules: []O.Rule{
+					{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultRule{RawDefaultRule: O.RawDefaultRule{
+						Inbound: []string{inboundTag},
+						Network: []string{N.NetworkTCP},
+						IPCIDR:  []string{"2000::/3"},
+					}}},
+					{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultRule{RawDefaultRule: O.RawDefaultRule{
+						Port:   []uint16{53},
+						Invert: true,
+					}}},
+					{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultRule{RawDefaultRule: O.RawDefaultRule{
+						RuleSet: []string{splitTunnelTag},
+						Invert:  true,
+					}}},
+				},
+			},
+			RuleAction: O.RuleAction{
+				Action: C.RuleActionTypeReject,
+				RejectOptions: O.RejectActionOptions{
+					Method: C.RuleActionRejectMethodDefault,
+					NoDrop: true,
+				},
+			},
+		},
+	}
 }
 
 // withEarlyIPv6Reject inserts earlyRejectIPv6Rule just before the TUN's sniff

@@ -324,10 +324,7 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
 	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so proxied v6 is rejected")
 
-	earlyIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
-		o := r.DefaultOptions
-		return o.RuleAction.Action == C.RuleActionTypeReject && slices.Contains(o.RawDefaultRule.IPCIDR, "2000::/3")
-	})
+	earlyIdx := slices.IndexFunc(opts.Route.Rules, isEarlyIPv6Reject)
 	sniffIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
 		return r.DefaultOptions.RuleAction.Action == C.RuleActionTypeSniff
 	})
@@ -345,34 +342,49 @@ func TestRejectIPv6Rule(t *testing.T) {
 		"NoDrop must be set so the reject returns unreachable instead of dropping")
 }
 
-// The early IPv6 reject must come before the TUN's sniff rule: sing-box accepts
-// a TCP connection at that rule, and only a reject before it is applied while
-// the connection can still be refused, so clients fall back to IPv4.
 func TestWithEarlyIPv6RejectPrecedesSniff(t *testing.T) {
 	rules := withEarlyIPv6Reject(baseRoutingRules())
-	isEarly := func(r O.Rule) bool {
-		o := r.DefaultOptions
-		return o.RuleAction.Action == C.RuleActionTypeReject && slices.Contains(o.RawDefaultRule.IPCIDR, "2000::/3")
-	}
-	isSniff := func(r O.Rule) bool {
+	earlyIdx := slices.IndexFunc(rules, isEarlyIPv6Reject)
+	sniffIdx := slices.IndexFunc(rules, func(r O.Rule) bool {
 		return r.DefaultOptions.RuleAction.Action == C.RuleActionTypeSniff
-	}
-	earlyIdx := slices.IndexFunc(rules, isEarly)
-	sniffIdx := slices.IndexFunc(rules, isSniff)
+	})
 	require.NotEqual(t, -1, earlyIdx, "expected the early IPv6 reject")
 	require.NotEqual(t, -1, sniffIdx, "expected the sniff rule")
 	assert.Equal(t, sniffIdx-1, earlyIdx, "the early IPv6 reject must sit just before sniffing")
+	assert.Len(t, rules, len(baseRoutingRules())+1)
 
-	r := rules[earlyIdx].DefaultOptions
-	assert.Equal(t, []string{inboundTag}, []string(r.RawDefaultRule.Inbound), "only the TUN's traffic is rejected early")
-	assert.False(t, r.RawDefaultRule.IPIsPrivate)
+	r := rules[earlyIdx].LogicalOptions
+	assert.Equal(t, C.LogicalTypeAnd, r.Mode)
+	assert.Equal(t, C.RuleActionTypeReject, r.RuleAction.Action)
 	assert.True(t, r.RuleAction.RejectOptions.NoDrop, "NoDrop keeps the reject from turning into a drop")
 	assert.NotEqual(t, C.RuleActionRejectMethodDrop, r.RuleAction.RejectOptions.Method)
-	assert.Len(t, rules, len(baseRoutingRules())+1)
+	match := r.Rules[0].DefaultOptions.RawDefaultRule
+	assert.Equal(t, []string{inboundTag}, []string(match.Inbound), "only the TUN's traffic is rejected early")
+	assert.Equal(t, []string{"tcp"}, []string(match.Network), "UDP already rejects in pre-match, after its direct rules")
+	assert.Equal(t, []string{"2000::/3"}, []string(match.IPCIDR))
 }
 
-// Without a sniff rule there's nothing to place the early reject before, and
-// the late ::/0 reject still covers IPv6.
+// DNS and split-tunnel matches over public IPv6 keep their later rules: the
+// early reject excludes them.
+func TestEarlyIPv6RejectSparesDNSAndSplitTunnel(t *testing.T) {
+	r := earlyRejectIPv6Rule().LogicalOptions
+	excluded := func(f func(O.RawDefaultRule) bool) bool {
+		return slices.ContainsFunc(r.Rules[1:], func(sub O.Rule) bool {
+			d := sub.DefaultOptions.RawDefaultRule
+			return d.Invert && f(d)
+		})
+	}
+	assert.True(t, excluded(func(d O.RawDefaultRule) bool { return slices.Equal(d.Port, []uint16{53}) }),
+		"DNS to a public v6 resolver must still reach hijack-dns")
+	assert.True(t, excluded(func(d O.RawDefaultRule) bool { return slices.Contains(d.RuleSet, splitTunnelTag) }),
+		"split-tunnel IP and process matches must still go direct")
+}
+
+func isEarlyIPv6Reject(r O.Rule) bool {
+	return r.Type == C.RuleTypeLogical && len(r.LogicalOptions.Rules) > 0 &&
+		slices.Contains(r.LogicalOptions.Rules[0].DefaultOptions.RawDefaultRule.IPCIDR, "2000::/3")
+}
+
 func TestWithEarlyIPv6RejectNeedsTheSniffRule(t *testing.T) {
 	rules := []O.Rule{rejectIPv6Rule()}
 	assert.Equal(t, rules, withEarlyIPv6Reject(rules))

@@ -198,6 +198,7 @@ func TestBuildOptions_StartsWithSystemDNS(t *testing.T) {
 	options, _ := testBoxOptions(t)
 	opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
 	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(opts.Route.Rules, isEarlyIPv6Reject), "start the box with the early IPv6 reject")
 	opts.Inbounds = nil
 	opts.Log = &O.LogOptions{Disabled: true}
 	opts.Experimental = nil
