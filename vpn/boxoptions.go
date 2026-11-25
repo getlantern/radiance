@@ -197,21 +197,17 @@ func baseRoutingRules() []O.Rule {
 	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
 	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
 	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
-	// 0b.   Reject TCP to public IPv6 (2000::/3) from the TUN, except port 53, only when
-	//       the TUN captured a v6 address. Inserted before sniffing (in buildOptions) so
-	//       the connection is refused before it is accepted, which is what makes clients
-	//       fall back to IPv4. It runs before every direct rule, so public-v6 TCP that a
-	//       direct rule would take is refused too and retried over IPv4.
+	// 0b.   Reject TCP from the TUN to public IPv6, before sniffing, when the TUN has a
+	//       v6 address (earlyRejectIPv6Rule, added in buildOptions).
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
 	// 4.    Route private IPs to direct outbound
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
-	// 7.    Reject the remaining IPv6 (::/0), only when the TUN captured a v6 address:
-	//       UDP, which pre-match rejects after the direct rules, TCP to port 53, and v6
-	//       outside 2000::/3 such as NAT64. Private v6 has already gone direct. Added in
-	//       buildOptions.
+	// 7.    Reject any other IPv6 (::/0) when the TUN has a v6 address: UDP, DNS over TCP,
+	//       TCP from other inbounds, and v6 outside 2000::/3 (rejectIPv6Rule, added in
+	//       buildOptions).
 	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
 	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
@@ -714,20 +710,18 @@ func highMemoryRejectRule() O.Rule {
 	return rejectRule(O.RawDefaultRule{ClashMode: rejectMode})
 }
 
-// rejectIPv6Rule rejects the IPv6 that earlyRejectIPv6Rule leaves: UDP, which
-// pre-match rejects here, after the direct rules keep their v6, so clients fall
-// back to IPv4 at once; TCP to port 53; and v6 outside 2000::/3. The default
-// method answers with unreachable or a reset; "drop" would blackhole and stall.
+// rejectIPv6Rule rejects all IPv6 with unreachable or a reset, never a silent
+// drop, after the direct rules.
 func rejectIPv6Rule() O.Rule {
 	rule := rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
 	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
 	return rule
 }
 
-// earlyRejectIPv6Rule refuses TCP from the TUN to public IPv6 before sniffing,
-// so the client sees the connection refused and retries over IPv4: rules after a
-// TCP sniff run once the connection is accepted. It precedes the direct rules, so
-// a site reached only over public IPv6 can't go direct. DNS is left to hijacking.
+// earlyRejectIPv6Rule refuses TCP from the TUN to public IPv6 other than DNS.
+// Placed before sniffing, it applies before sing-box accepts the connection, so
+// clients retry over IPv4. It also precedes the direct rules: a site reachable
+// only over public IPv6 can't go direct.
 func earlyRejectIPv6Rule() O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeLogical,

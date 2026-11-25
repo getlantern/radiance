@@ -284,10 +284,6 @@ func testBoxOptions(t *testing.T) (O.Options, []string) {
 	return cfg.Options, tags
 }
 
-// TestBuildOptions_RejectsQUICAfterDirectRules pins the placement of the QUIC
-// reject: it must follow the split-tunnel and smart-routing rules (so a
-// direct-routed domain keeps its QUIC) and precede the selector rules (so
-// QUIC bound for the proxy is rejected).
 func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	cfg := testConfig(t)
 	opts, _, err := buildOptions(BoxOptions{
@@ -306,6 +302,7 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 
 	if !tunHasIPv6(opts) {
 		require.Equal(t, -1, rejectIdx, "no ::/0 reject expected when the TUN has no IPv6 address")
+		require.Equal(t, -1, slices.IndexFunc(opts.Route.Rules, isEarlyIPv6Reject), "no early reject without a v6 TUN")
 		return
 	}
 
@@ -321,7 +318,7 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 
 	require.NotEqual(t, -1, splitIdx, "expected split-tunnel rule in built options")
 	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
-	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
+	assert.Greater(t, rejectIdx, splitIdx, "the ::/0 reject must follow split-tunnel so direct-routed v6 UDP keeps flowing")
 	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so proxied v6 is rejected")
 
 	earlyIdx := slices.IndexFunc(opts.Route.Rules, isEarlyIPv6Reject)

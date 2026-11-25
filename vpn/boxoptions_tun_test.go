@@ -4,6 +4,7 @@ package vpn
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net"
 	"net/netip"
@@ -416,4 +417,29 @@ func (r *recordingSystemDNS) queriedNames() []string {
 	r.access.Lock()
 	defer r.access.Unlock()
 	return slices.Clone(r.queried)
+}
+
+// buildOptions adds the early IPv6 reject exactly when the TUN gets a v6 address.
+func TestBuildOptions_EarlyIPv6RejectFollowsTheTUN(t *testing.T) {
+	for _, v6 := range []bool{true, false} {
+		t.Run(fmt.Sprintf("v6=%v", v6), func(t *testing.T) {
+			orig := hasGlobalIPv6
+			hasGlobalIPv6 = func() bool { return v6 }
+			t.Cleanup(func() { hasGlobalIPv6 = orig })
+			options, _ := testBoxOptions(t)
+			opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
+			require.NoError(t, err)
+			require.Equal(t, v6, tunHasIPv6(opts))
+			early := slices.IndexFunc(opts.Route.Rules, isEarlyIPv6Reject)
+			if !v6 {
+				assert.Equal(t, -1, early)
+				return
+			}
+			sniff := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
+				return r.DefaultOptions.RuleAction.Action == C.RuleActionTypeSniff
+			})
+			require.NotEqual(t, -1, early, "expected the early IPv6 reject with a v6 TUN")
+			assert.Equal(t, sniff-1, early, "the early IPv6 reject must sit just before sniffing")
+		})
+	}
 }
