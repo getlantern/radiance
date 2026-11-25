@@ -364,20 +364,12 @@ func TestWithEarlyIPv6RejectPrecedesSniff(t *testing.T) {
 	assert.Equal(t, []string{"2000::/3"}, []string(match.IPCIDR))
 }
 
-// DNS and split-tunnel matches over public IPv6 keep their later rules: the
-// early reject excludes them.
-func TestEarlyIPv6RejectSparesDNSAndSplitTunnel(t *testing.T) {
+func TestEarlyIPv6RejectSparesDNS(t *testing.T) {
 	r := earlyRejectIPv6Rule().LogicalOptions
-	excluded := func(f func(O.RawDefaultRule) bool) bool {
-		return slices.ContainsFunc(r.Rules[1:], func(sub O.Rule) bool {
-			d := sub.DefaultOptions.RawDefaultRule
-			return d.Invert && f(d)
-		})
-	}
-	assert.True(t, excluded(func(d O.RawDefaultRule) bool { return slices.Equal(d.Port, []uint16{53}) }),
-		"DNS to a public v6 resolver must still reach hijack-dns")
-	assert.True(t, excluded(func(d O.RawDefaultRule) bool { return slices.Contains(d.RuleSet, splitTunnelTag) }),
-		"split-tunnel IP and process matches must still go direct")
+	require.Len(t, r.Rules, 2)
+	spared := r.Rules[1].DefaultOptions.RawDefaultRule
+	assert.True(t, spared.Invert)
+	assert.Equal(t, []uint16{53}, []uint16(spared.Port), "DNS to a public v6 resolver must still reach hijack-dns")
 }
 
 func isEarlyIPv6Reject(r O.Rule) bool {

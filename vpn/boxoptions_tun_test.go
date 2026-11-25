@@ -198,6 +198,11 @@ func TestBuildOptions_StartsWithSystemDNS(t *testing.T) {
 	options, _ := testBoxOptions(t)
 	opts, _, err := buildOptions(BoxOptions{BasePath: t.TempDir(), Options: options})
 	require.NoError(t, err)
+	// Without global IPv6 here, as on CI, the TUN gets no v6 address and no early
+	// reject; add it anyway so sing-box validates the rule when the box starts.
+	if !tunHasIPv6(opts) {
+		opts.Route.Rules = withEarlyIPv6Reject(opts.Route.Rules)
+	}
 	require.True(t, slices.ContainsFunc(opts.Route.Rules, isEarlyIPv6Reject), "start the box with the early IPv6 reject")
 	opts.Inbounds = nil
 	opts.Log = &O.LogOptions{Disabled: true}

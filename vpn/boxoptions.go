@@ -197,10 +197,11 @@ func baseRoutingRules() []O.Rule {
 	// 0. 	(iOS-only) admission gate for rejecting new connections during high memory usage.
 	// 		Only enabled long enough to allow memory to be returned to the OS. Prepended as the
 	// 		first rule to minimize any additional memory allocation while it's being reclaimed.
-	// 0b.   Reject TCP to public IPv6 (2000::/3) from the TUN, except DNS and split-tunnel
-	//       IP and process matches, only when the TUN captured a v6 address. Inserted
-	//       before sniffing (in buildOptions) so the connection is refused before it is
-	//       accepted, which is what makes clients fall back to IPv4.
+	// 0b.   Reject TCP to public IPv6 (2000::/3) from the TUN, except port 53, only when
+	//       the TUN captured a v6 address. Inserted before sniffing (in buildOptions) so
+	//       the connection is refused before it is accepted, which is what makes clients
+	//       fall back to IPv4. It runs before every direct rule, so public-v6 TCP that a
+	//       direct rule would take is refused too and retried over IPv4.
 	// 1.    Enable traffic sniffing
 	// 2.    Hijack DNS to allow sing-box to handle DNS requests
 	// 3.    Route bypass proxy traffic directly (for kindling connections)
@@ -208,8 +209,9 @@ func baseRoutingRules() []O.Rule {
 	// 5.    Split tunnel rule (user-configurable)
 	// 6.    Smart-routing, ad-block, and config-file rules (added in buildOptions).
 	// 7.    Reject the remaining IPv6 (::/0), only when the TUN captured a v6 address:
-	//       UDP, TCP the early reject left to the direct rules, and v6 outside 2000::/3
-	//       such as NAT64. Private v6 has already gone direct. Added in buildOptions.
+	//       UDP, which pre-match rejects after the direct rules, TCP to port 53, and v6
+	//       outside 2000::/3 such as NAT64. Private v6 has already gone direct. Added in
+	//       buildOptions.
 	// 8,9.  Group rules for auto and manual selector modes (added in buildOptions).
 	// 10.   Catch-all blocking rule (added in buildOptions). This ensures that any traffic not covered
 	//       by previous rules does not automatically bypass the VPN.
@@ -712,11 +714,10 @@ func highMemoryRejectRule() O.Rule {
 	return rejectRule(O.RawDefaultRule{ClashMode: rejectMode})
 }
 
-// rejectIPv6Rule rejects all IPv6 destinations so applications fall back to IPv4 —
-// a backstop for v6 that escapes AAAA suppression (literal addresses, HTTPS-record
-// hints, apps using their own DNS). The default reject method (ICMP unreachable /
-// RST) makes Happy Eyeballs fail over at once; "drop" would blackhole and stall.
-// Must be appended after the direct-routing rules so intentionally-direct v6 is kept.
+// rejectIPv6Rule rejects the IPv6 that earlyRejectIPv6Rule leaves: UDP, which
+// pre-match rejects here, after the direct rules keep their v6, so clients fall
+// back to IPv4 at once; TCP to port 53; and v6 outside 2000::/3. The default
+// method answers with unreachable or a reset; "drop" would blackhole and stall.
 func rejectIPv6Rule() O.Rule {
 	rule := rejectRule(O.RawDefaultRule{IPCIDR: []string{"::/0"}})
 	rule.DefaultOptions.RuleAction.RejectOptions.NoDrop = true
@@ -724,9 +725,9 @@ func rejectIPv6Rule() O.Rule {
 }
 
 // earlyRejectIPv6Rule refuses TCP from the TUN to public IPv6 before sniffing,
-// so the client sees the connection refused and retries over IPv4. Rules after
-// a TCP sniff run once the connection is accepted. DNS and split-tunnel IP and
-// process matches are left to the later rules; UDP already rejects in pre-match.
+// so the client sees the connection refused and retries over IPv4: rules after a
+// TCP sniff run once the connection is accepted. It precedes the direct rules, so
+// a site reached only over public IPv6 can't go direct. DNS is left to hijacking.
 func earlyRejectIPv6Rule() O.Rule {
 	return O.Rule{
 		Type: C.RuleTypeLogical,
@@ -742,10 +743,6 @@ func earlyRejectIPv6Rule() O.Rule {
 					{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultRule{RawDefaultRule: O.RawDefaultRule{
 						Port:   []uint16{53},
 						Invert: true,
-					}}},
-					{Type: C.RuleTypeDefault, DefaultOptions: O.DefaultRule{RawDefaultRule: O.RawDefaultRule{
-						RuleSet: []string{splitTunnelTag},
-						Invert:  true,
 					}}},
 				},
 			},
