@@ -323,6 +323,16 @@ func TestBuildOptions_RejectsIPv6WhenCaptured(t *testing.T) {
 	require.NotEqual(t, -1, selectorIdx, "expected at least one selector mode rule in built options")
 	assert.Greater(t, rejectIdx, splitIdx, "IPv6 reject must come after split-tunnel so split-direct v6 keeps flowing")
 	assert.Less(t, rejectIdx, selectorIdx, "IPv6 reject must come before selector rules so proxied v6 is rejected")
+
+	earlyIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
+		o := r.DefaultOptions
+		return o.RuleAction.Action == C.RuleActionTypeReject && slices.Contains(o.RawDefaultRule.IPCIDR, "2000::/3")
+	})
+	sniffIdx := slices.IndexFunc(opts.Route.Rules, func(r O.Rule) bool {
+		return r.DefaultOptions.RuleAction.Action == C.RuleActionTypeSniff
+	})
+	require.NotEqual(t, -1, earlyIdx, "expected the early public-IPv6 reject when the TUN has IPv6")
+	assert.Equal(t, sniffIdx-1, earlyIdx, "the early IPv6 reject must sit just before sniffing")
 }
 
 func TestRejectIPv6Rule(t *testing.T) {
