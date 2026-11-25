@@ -143,6 +143,10 @@ type LocalBackend struct {
 	// selection it has not persisted yet. Until it has, the saved selection
 	// is not restored over the requested one. Guarded by selectionMu.
 	connectPending bool
+	// pendingPin is a same-location fallback pin the tunnel had no outbound
+	// for yet; updateServers applies it once the outbounds are updated.
+	// Guarded by selectionMu.
+	pendingPin string
 
 	deviceID string
 
@@ -1567,14 +1571,16 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 		URLOverrides:      list.URLOverrides,
 		AutoSelectOptions: list.AutoSelectOptions,
 	}
-	// An evicted selection falls back to auto-select before the update removes
-	// it from the tunnel: the manual selector would otherwise pick an
-	// arbitrary member meanwhile.
+	// An evicted selection moves the tunnel to auto-select before the update
+	// removes it from the tunnel: the manual selector would otherwise pick an
+	// arbitrary member meanwhile. A same-location pin among the new servers is
+	// applied after the update adds it.
 	r.clearSelectedIfMissingLocked()
 	outboundErr := r.liveTunnel().UpdateOutbounds(allList)
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
 	}
+	r.applyPendingPinLocked()
 	return nil
 }
 

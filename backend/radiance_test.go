@@ -1989,6 +1989,9 @@ type fakeHelperTunnel struct {
 	// rebuild makes a restart hold only the outbounds in its options, and a
 	// selection of a friend require the friend's outbound.
 	rebuild bool
+	// ignoreUnknown makes a selection of a server with no outbound a no-op,
+	// as the real manual selector does.
+	ignoreUnknown bool
 }
 
 // startOn applies initial as a tunnel built with it would. The caller must
@@ -2122,6 +2125,9 @@ func (f *fakeHelperTunnel) SelectServer(tag string) error {
 	}
 	if _, held := f.live[friend]; isFriend && f.rebuild && !held {
 		return vpn.ErrPersonalProxyUnavailable
+	}
+	if _, held := f.live[tag]; f.ignoreUnknown && !held && !isFriend && tag != vpn.AutoSelectTag && tag != vpn.PersonalProxiesTag {
+		return nil
 	}
 	f.selected, f.friend = tag, friend
 	return nil
@@ -2604,5 +2610,81 @@ func TestWithdrawnPinFallsBackToSameLocation(t *testing.T) {
 				t.Fatal("no selected-server fallback event")
 			}
 		})
+	}
+}
+
+// A same-location pin the tunnel has no outbound for yet, as one the config
+// update in progress adds, leaves the tunnel on auto-select rather than the
+// withdrawn server, and is applied once the outbounds are updated, unless the
+// user chose another server meanwhile.
+func TestSameLocationPinWaitsForItsOutbound(t *testing.T) {
+	for _, userChoseOther := range []bool{false, true} {
+		t.Run(fmt.Sprintf("userChoseOther=%v", userChoseOther), func(t *testing.T) {
+			r := newPersonalProxiesBackend(t)
+			addLocatedServer(t, r, "la-1", "Los Angeles", "US")
+			addLocatedServer(t, r, "fra", "Frankfurt", "DE")
+			tunnel := &fakeHelperTunnel{live: map[string]string{"la-1": "", "fra": ""}, ignoreUnknown: true}
+			tunnel.attach(r)
+			r.persistSelection("la-1")
+			require.NoError(t, r.liveTunnel().SelectServer("la-1"))
+
+			// The update evicts la-1 and adds la-2, which the tunnel lacks so far.
+			addLocatedServer(t, r, "la-2", "Los Angeles", "US")
+			_, err := r.srvManager.RemoveServers([]string{"la-1"})
+			require.NoError(t, err)
+			r.clearSelectedIfMissing()
+			assert.Equal(t, vpn.AutoSelectTag, tunnel.selected, "off the withdrawn server at once")
+			assert.Equal(t, "la-2", selectedTag(t), "the pin is persisted")
+
+			if userChoseOther {
+				r.persistSelection("fra")
+			}
+			require.NoError(t, r.liveTunnel().UpdateOutbounds(servers.ServerList{Servers: r.srvManager.AllServers()}))
+			r.selectionMu.Lock()
+			r.applyPendingPinLocked()
+			r.selectionMu.Unlock()
+			if userChoseOther {
+				assert.Equal(t, vpn.AutoSelectTag, tunnel.selected, "a newer choice is not overridden")
+			} else {
+				assert.Equal(t, "la-2", tunnel.selected)
+			}
+		})
+	}
+}
+
+func locatedServers(specs ...[3]string) servers.ServerList {
+	var list servers.ServerList
+	for _, sp := range specs {
+		list.Servers = append(list.Servers, &servers.Server{
+			Tag: sp[0], Type: "direct", IsLantern: true,
+			Options:  option.Outbound{Tag: sp[0], Type: "direct", Options: &option.DirectOutboundOptions{}},
+			Location: C.ServerLocation{City: sp[1], CountryCode: sp[2]},
+		})
+	}
+	return list
+}
+
+// The engineering#3918 path end to end: a config update evicts the
+// hard-demoted pin and brings a replacement in the same city, which the
+// tunnel only gets from that update. The tunnel ends on the replacement.
+func TestConfigUpdateMovesHardDemotedPinToNewSameCityServer(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	evts := selectedServerFallbackEvents(t)
+	require.NoError(t, r.updateServers(locatedServers([3]string{"la-1", "Los Angeles", "US"}, [3]string{"fra", "Frankfurt", "DE"}), true))
+	tunnel := &fakeHelperTunnel{live: map[string]string{"la-1": "", "fra": ""}, ignoreUnknown: true}
+	tunnel.attach(r)
+	r.persistSelection("la-1")
+	require.NoError(t, r.liveTunnel().SelectServer("la-1"))
+	require.NoError(t, r.srvManager.UpdateSelectionHistory(map[string]servers.SelectionHistory{"la-1": {HardDemoted: true}}))
+
+	require.NoError(t, r.updateServers(locatedServers([3]string{"la-2", "Los Angeles", "US"}, [3]string{"fra", "Frankfurt", "DE"}), true))
+
+	assert.Equal(t, "la-2", selectedTag(t))
+	assert.Equal(t, "la-2", tunnel.selected, "the tunnel is on the replacement, not an arbitrary member")
+	select {
+	case got := <-evts:
+		assert.Equal(t, vpn.SelectedServerFallbackEvent{Tag: "la-1", Fallback: "la-2"}, vpn.SelectedServerFallbackEvent{Tag: got.Tag, Fallback: got.Fallback})
+	case <-time.After(2 * time.Second):
+		t.Fatal("no selected-server fallback event")
 	}
 }
