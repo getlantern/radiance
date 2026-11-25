@@ -28,12 +28,20 @@ replace github.com/refraction-networking/water => github.com/getlantern/water v0
 
 // replace github.com/sagernet/wireguard-go => ../wireguard-go
 
-// x/v0.3.0 plus two fixes: x/httpconnect builds against quic-go >= v0.53
-// (quic.EarlyConnection became *quic.Conn), and disorder finds the TCP socket
-// through NetConn, which lantern-box's outline stream wrapper provides. A
-// replace only applies in the main module, so radiance repeats lantern-box's.
-// Drop once an upstream x release has both.
-replace golang.getoutline.org/sdk/x => github.com/getlantern/outline-sdk/x v0.3.0-lantern.2
+// A replace only applies in the main module, so radiance repeats
+// lantern-box's two outline-sdk replaces. Drop each once an upstream release
+// has its fixes.
+//
+// x/v0.3.0 plus Lantern's fixes: x builds against quic-go >= v0.53
+// (quic.EarlyConnection became *quic.Conn), disorder finds the TCP socket
+// through NetConn, which lantern-box's outline stream wrapper provides, and a
+// strategy probe's connection closes when its test times out.
+replace golang.getoutline.org/sdk/x => github.com/getlantern/outline-sdk/x v0.3.0-lantern.3
+
+// v0.1.0 plus DNS fixes: queries end when their context is cancelled, a failed
+// DNS-over-TLS handshake closes its socket, and idle DNS-over-HTTPS
+// connections close.
+replace golang.getoutline.org/sdk => github.com/getlantern/outline-sdk v0.1.0-lantern.1
 
 // sing-box/sing-tun/tailscale need gvisor's v0.0.0-20260727.0-sing-box-mod.1
 // API (WritePacketDirect, the new udp.NewForwarder signature). That tag's first
@@ -51,7 +59,7 @@ require (
 	github.com/getlantern/common v1.2.1-0.20261119180934-02036a2e32ad
 	github.com/getlantern/domainfront v0.0.0-20261026202828-9727b2f2a34a
 	github.com/getlantern/kindling v0.0.0-20261118170249-97dd2fc5eff5
-	github.com/getlantern/lantern-box v0.0.244
+	github.com/getlantern/lantern-box v0.0.247
 	github.com/getlantern/pluriconfig v0.0.0-20251126214241-8cc8bc561535
 	github.com/getlantern/publicip v0.0.0-20260328175246-2c460fe80c6b
 	github.com/getlantern/samizdat v0.0.3-0.20261117205503-f66a0285afd9
