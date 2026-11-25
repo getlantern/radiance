@@ -145,8 +145,11 @@ type LocalBackend struct {
 	connectPending bool
 	// pendingPin is a same-location fallback pin the tunnel had no outbound
 	// for yet; updateServers applies it once the outbounds are updated.
-	// Guarded by selectionMu.
-	pendingPin string
+	// lastPin is the latest same-location fallback, so a connect that
+	// finishes on the withdrawn server takes the pin, not auto. Guarded by
+	// selectionMu.
+	pendingPin pinFallback
+	lastPin    pinFallback
 
 	deviceID string
 
@@ -1577,10 +1580,11 @@ func (r *LocalBackend) updateServers(list servers.ServerList, evict bool) (err e
 	// applied after the update adds it.
 	r.clearSelectedIfMissingLocked()
 	outboundErr := r.liveTunnel().UpdateOutbounds(allList)
+	// Also after a partial failure: the update adds the outbounds that load.
+	r.applyPendingPinLocked()
 	if outboundErr != nil && !errors.Is(outboundErr, vpn.ErrTunnelNotConnected) {
 		return fmt.Errorf("failed to update VPN outbounds: %w", outboundErr)
 	}
-	r.applyPendingPinLocked()
 	return nil
 }
 
@@ -2020,6 +2024,9 @@ func (r *LocalBackend) persistConnectedSelection(tag string) {
 	r.connectPending = false
 	if tag != vpn.AutoSelectTag {
 		if _, found := r.serverByTag(tag); !found {
+			if r.connectedToPinnedAwayLocked(tag) {
+				return
+			}
 			slog.Info("Connected server was withdrawn during the connect, falling back", "tag", tag)
 			r.fallBackLocked(tag)
 			return

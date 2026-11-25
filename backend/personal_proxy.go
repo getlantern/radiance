@@ -218,7 +218,9 @@ func (r *LocalBackend) fallBackLocked(tag string) {
 	fallback := vpn.AutoSelectTag
 	if srv, ok := r.sameLocationServer(selected); ok {
 		r.persistServer(srv)
-		r.selectPinLocked(srv.Tag)
+		pin := pinFallback{from: tag, to: srv.Tag}
+		r.lastPin = pin
+		r.selectPinLocked(pin)
 		fallback = srv.Tag
 	}
 	slog.Info("Selected Lantern server was withdrawn, falling back", "tag", tag, "fallback", fallback)
@@ -234,44 +236,76 @@ func (r *LocalBackend) switchToFallbackLocked(fallback string) {
 	}
 }
 
-// selectPinLocked moves a running tunnel onto the persisted pin tag. The
-// manual selector ignores a tag it has no outbound for, as one the config
-// update in progress is adding, so the tunnel then stays on auto-select and
-// updateServers applies the pin (see applyPendingPinLocked).
-func (r *LocalBackend) selectPinLocked(tag string) {
-	r.pendingPin = ""
-	err := r.liveTunnel().SelectServer(tag)
-	if errors.Is(err, vpn.ErrTunnelNotConnected) {
+// pinFallback is a same-location pin, to, that replaced a withdrawn server,
+// from.
+type pinFallback struct{ from, to string }
+
+// selectPinLocked moves a running tunnel onto pin.to. The manual selector
+// ignores a tag it has no outbound for, as one the config update in progress
+// is adding, so the tunnel then stays on auto-select and updateServers
+// applies the pin (see applyPendingPinLocked).
+func (r *LocalBackend) selectPinLocked(pin pinFallback) {
+	r.pendingPin = pinFallback{}
+	if r.tunnelOnLocked(pin.to) {
 		return
 	}
-	if err == nil {
-		if sel, manual := r.liveTunnel().ManualSelection(); manual && sel == tag {
-			return
-		}
-	}
-	r.pendingPin = tag
+	r.pendingPin = pin
 	if err := r.liveTunnel().SelectServer(vpn.AutoSelectTag); err != nil && !errors.Is(err, vpn.ErrTunnelNotConnected) {
-		slog.Warn("Failed to return to auto-select until the pin's outbound is added", "pin", tag, "error", err)
+		slog.Warn("Failed to return to auto-select until the pin's outbound is added", "pin", pin.to, "error", err)
 	}
 }
 
+// tunnelOnLocked selects tag and reports whether the tunnel took it, or no
+// tunnel is running to take it.
+func (r *LocalBackend) tunnelOnLocked(tag string) bool {
+	err := r.liveTunnel().SelectServer(tag)
+	if errors.Is(err, vpn.ErrTunnelNotConnected) {
+		return true
+	}
+	sel, manual := r.liveTunnel().ManualSelection()
+	return err == nil && manual && sel == tag
+}
+
 // applyPendingPinLocked applies a pin selectPinLocked could not, unless the
-// persisted selection has changed since.
+// persisted selection has changed since. A pin the tunnel still cannot take
+// gives way to auto-select, persisted and announced, so the saved selection
+// and the tunnel agree.
 func (r *LocalBackend) applyPendingPinLocked() {
 	pin := r.pendingPin
-	if pin == "" {
+	if pin.to == "" {
 		return
 	}
-	r.pendingPin = ""
-	var selected servers.Server
-	if settings.GetBool(settings.AutoConnectKey) || settings.GetStruct(settings.SelectedServerKey, &selected) != nil || selected.Tag != pin {
+	r.pendingPin = pinFallback{}
+	if !r.persistedPinLocked(pin.to) || r.tunnelOnLocked(pin.to) {
 		return
+	}
+	slog.Warn("Tunnel has no outbound for the same-location pin, falling back to auto", "pin", pin.to)
+	r.lastPin = pinFallback{}
+	r.switchToFallbackLocked(vpn.AutoSelectTag)
+	events.Emit(vpn.SelectedServerFallbackEvent{Tag: pin.from, Fallback: vpn.AutoSelectTag})
+}
+
+// persistedPinLocked reports whether tag is the persisted manual selection.
+func (r *LocalBackend) persistedPinLocked(tag string) bool {
+	var selected servers.Server
+	return !settings.GetBool(settings.AutoConnectKey) &&
+		settings.GetStruct(settings.SelectedServerKey, &selected) == nil && selected.Tag == tag
+}
+
+// connectedToPinnedAwayLocked handles a connect that finished on tag after a
+// config update had already replaced tag with a same-location pin: it puts
+// the tunnel on the pin and reports true, rather than falling back to auto
+// over the pin the app was told of.
+func (r *LocalBackend) connectedToPinnedAwayLocked(tag string) bool {
+	pin := r.lastPin
+	if pin.from != tag || !r.persistedPinLocked(pin.to) {
+		return false
+	}
+	if _, found := r.serverByTag(pin.to); !found {
+		return false
 	}
 	r.selectPinLocked(pin)
-	if r.pendingPin != "" {
-		slog.Warn("Tunnel still has no outbound for the same-location pin", "pin", pin)
-		r.pendingPin = ""
-	}
+	return true
 }
 
 // sameLocationServer returns a Lantern server, other than gone, in gone's city,

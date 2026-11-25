@@ -1992,6 +1992,9 @@ type fakeHelperTunnel struct {
 	// ignoreUnknown makes a selection of a server with no outbound a no-op,
 	// as the real manual selector does.
 	ignoreUnknown bool
+	// failToLoad lists outbounds UpdateOutbounds fails to add, returning an
+	// error after adding the rest, as the real update does.
+	failToLoad map[string]bool
 }
 
 // startOn applies initial as a tunnel built with it would. The caller must
@@ -2087,8 +2090,16 @@ func (f *fakeHelperTunnel) UpdateOutbounds(list servers.ServerList) error {
 	if f.live == nil {
 		return vpn.ErrTunnelNotConnected
 	}
+	var failed bool
 	for _, srv := range list.Servers {
+		if f.failToLoad[srv.Tag] {
+			failed = true
+			continue
+		}
 		f.live[srv.Tag] = fingerprint(srv)
+	}
+	if failed {
+		return errors.New("outbound failed to load")
 	}
 	return nil
 }
@@ -2687,4 +2698,52 @@ func TestConfigUpdateMovesHardDemotedPinToNewSameCityServer(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no selected-server fallback event")
 	}
+}
+
+// A pin whose outbound fails to load gives way to auto-select, persisted and
+// announced, so the saved selection matches the tunnel.
+func TestPinThatFailsToLoadFallsBackToAuto(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	evts := selectedServerFallbackEvents(t)
+	require.NoError(t, r.updateServers(locatedServers([3]string{"la-1", "Los Angeles", "US"}, [3]string{"fra", "Frankfurt", "DE"}), true))
+	tunnel := &fakeHelperTunnel{live: map[string]string{"la-1": "", "fra": ""}, ignoreUnknown: true, failToLoad: map[string]bool{"la-2": true}}
+	tunnel.attach(r)
+	r.persistSelection("la-1")
+	require.NoError(t, r.liveTunnel().SelectServer("la-1"))
+	require.NoError(t, r.srvManager.UpdateSelectionHistory(map[string]servers.SelectionHistory{"la-1": {HardDemoted: true}}))
+
+	assert.Error(t, r.updateServers(locatedServers([3]string{"la-2", "Los Angeles", "US"}, [3]string{"fra", "Frankfurt", "DE"}), true))
+
+	assert.Equal(t, vpn.AutoSelectTag, selectedTag(t))
+	assert.Equal(t, vpn.AutoSelectTag, tunnel.selected)
+	for _, want := range []string{"la-2", vpn.AutoSelectTag} {
+		select {
+		case got := <-evts:
+			assert.Equal(t, "la-1", got.Tag)
+			assert.Equal(t, want, got.Fallback)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no fallback event for %s", want)
+		}
+	}
+}
+
+// A connect that finishes on a server a config update already replaced with
+// a same-location pin ends on the pin, not auto.
+func TestConnectFinishingOnReplacedServerTakesThePin(t *testing.T) {
+	r := newPersonalProxiesBackend(t)
+	addLocatedServer(t, r, "la-1", "Los Angeles", "US")
+	addLocatedServer(t, r, "la-2", "Los Angeles", "US")
+	tunnel := &fakeHelperTunnel{live: map[string]string{"la-1": "", "la-2": ""}, ignoreUnknown: true}
+	tunnel.attach(r)
+	r.persistSelection("la-1")
+	require.NoError(t, r.liveTunnel().SelectServer("la-1"))
+	_, err := r.srvManager.RemoveServers([]string{"la-1"})
+	require.NoError(t, err)
+	r.clearSelectedIfMissing()
+	require.Equal(t, "la-2", selectedTag(t))
+
+	r.persistConnectedSelection("la-1")
+
+	assert.Equal(t, "la-2", selectedTag(t))
+	assert.Equal(t, "la-2", tunnel.selected)
 }
