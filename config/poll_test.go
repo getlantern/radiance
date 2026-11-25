@@ -22,10 +22,19 @@ const testPollInterval = 3 * time.Minute
 type countingFetcher struct {
 	calls atomic.Int32
 	err   error
+	// release, if set, holds each fetch until it receives a value.
+	release chan struct{}
 }
 
-func (f *countingFetcher) fetchConfig(context.Context, common.PreferredLocation, string) ([]byte, error) {
+func (f *countingFetcher) fetchConfig(ctx context.Context, _ common.PreferredLocation, _ string) ([]byte, error) {
 	f.calls.Add(1)
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return nil, f.err
 }
 
@@ -134,6 +143,21 @@ func TestFetchLoopFailedFetchWaitsForWakeWhilePaused(t *testing.T) {
 		ch.SetDevicePaused(false)
 		synctest.Wait()
 		assert.EqualValues(t, 2, f.calls.Load(), "a paused failure is retried on wake")
+	})
+}
+
+func TestFetchLoopBackoffIgnoresPauseAndWakeDuringFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &countingFetcher{err: errors.New("offline"), release: make(chan struct{})}
+		ch := startPollLoop(t, f, false)
+		ch.SetDevicePaused(true)
+		ch.SetDevicePaused(false)
+
+		f.release <- struct{}{}
+		synctest.Wait()
+		assert.EqualValues(t, 1, f.calls.Load(), "a pause and wake during the fetch must not skip the backoff")
+		advance(maxRetryDelay)
+		assert.EqualValues(t, 2, f.calls.Load())
 	})
 }
 

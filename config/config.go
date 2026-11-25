@@ -300,6 +300,11 @@ func (ch *ConfigHandler) fetchLoop(defaultPollInterval time.Duration) {
 	for {
 		if err := ch.fetchConfig(); err != nil {
 			ch.logger.Error("Failed to fetch config. Retrying", "error", err)
+			// A signal left by a pause and wake during the fetch would cut the backoff short.
+			select {
+			case <-ch.pauseChanged:
+			default:
+			}
 			if !ch.devicePaused.Load() {
 				backoff.WaitOn(ch.ctx, ch.pauseChanged)
 			}
