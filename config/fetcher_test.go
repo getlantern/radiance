@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	lbC "github.com/getlantern/lantern-box/constant"
+
 	"github.com/getlantern/radiance/common"
 	"github.com/getlantern/radiance/common/settings"
 )
@@ -174,4 +176,11 @@ func TestSupportedProtocolsOmitsDenied(t *testing.T) {
 		assert.NotContains(t, protocols, p)
 	}
 	assert.Contains(t, protocols, "shadowsocks")
+}
+
+// TestSupportedProtocolsAdvertiseDNSPool checks radiance tells lantern-cloud
+// it can build a dnspool DNS server: lantern-cloud sends dns_local as a pool
+// only to clients that list it, and any other client would reject the config.
+func TestSupportedProtocolsAdvertiseDNSPool(t *testing.T) {
+	assert.Contains(t, supportedProtocols(), lbC.TypeDNSPool)
 }
