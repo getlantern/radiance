@@ -4,12 +4,14 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	singjson "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/json/badoption"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -110,8 +112,13 @@ func TestLocalResolvers(t *testing.T) {
 		t.Run(tt.locale, func(t *testing.T) {
 			t.Cleanup(settings.Reset)
 			settings.Set(settings.LocaleKey, tt.locale)
-			got := localResolvers()
+			got, stagger := localResolvers()
 			assert.Equal(t, tt.want, names(got))
+			if got[0].name == "alidns" || got[0].name == "yandex" {
+				assert.Equal(t, time.Second, stagger, "a domestic resolver gets a full second")
+			} else {
+				assert.Zero(t, stagger, "the pool's default stagger")
+			}
 			for _, r := range got {
 				assert.NotEqual(t, "9.9.9.9", r.ip, "Quad9 is not a local resolver: some networks block its DoH")
 			}
@@ -120,11 +127,12 @@ func TestLocalResolvers(t *testing.T) {
 }
 
 func TestLocalDNSServersArePooled(t *testing.T) {
-	servers := localDNSServers(slices.Concat([]dohResolver{cloudflareDoH}, cloudflareEdgeDoH))
+	servers := localDNSServers(slices.Concat([]dohResolver{cloudflareDoH}, cloudflareEdgeDoH), time.Second)
 	require.NotEmpty(t, servers)
 	assert.Equal(t, "dns_local", servers[0].Tag)
 	assert.Equal(t, lbC.TypeDNSPool, servers[0].Type)
 	pool := servers[0].Options.(*lbO.DNSPoolServerOptions)
+	assert.Equal(t, badoption.Duration(time.Second), pool.Stagger)
 	require.Len(t, pool.Servers, len(servers)-1)
 	for i, tag := range pool.Servers {
 		server := servers[i+1]

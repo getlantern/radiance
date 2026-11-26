@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/constant"
@@ -94,21 +95,26 @@ var aliDNSLocales = map[string]struct{}{
 }
 
 // localResolvers returns the resolvers dns_local tries, in order, for the
-// configured locale. The pool moves on from one that is blocked within a
-// stagger, so each list leads with what usually works there. Censored
+// configured locale, and how long each gets before the next is also tried.
+// The pool moves on from one that is blocked, so each list leads with what
+// usually works there. A leading domestic resolver gets a full second, so
+// one slow reply doesn't hand direct domestic traffic to a foreign one. Censored
 // locales fall back to the Cloudflare edges, not to 1.1.1.1 or 8.8.8.8,
 // which censors block by address. Google forwards EDNS Client-Subnet, unlike
 // Quad9, which this replaced because some networks block its DoH; dns_local
 // resolves only what goes direct, so that is the trade made.
-func localResolvers() []dohResolver {
+func localResolvers() ([]dohResolver, time.Duration) {
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
-	var resolvers []dohResolver
+	var (
+		resolvers []dohResolver
+		stagger   time.Duration
+	)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
-		resolvers = slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH)
+		resolvers, stagger = slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH), time.Second
 	} else if normalizedLocale == "RU" || normalizedLocale == "RURU" {
 		// Russian ISPs filter AliDNS; Yandex is reachable from all of them.
-		resolvers = slices.Concat([]dohResolver{yandexDoH}, cloudflareEdgeDoH)
+		resolvers, stagger = slices.Concat([]dohResolver{yandexDoH}, cloudflareEdgeDoH), time.Second
 	} else {
 		resolvers = slices.Concat([]dohResolver{cloudflareDoH, googleDoH}, cloudflareEdgeDoH)
 	}
@@ -117,14 +123,15 @@ func localResolvers() []dohResolver {
 		names[i] = r.name
 	}
 	slog.Info("Local DNS resolvers for locale", "locale", locale, "resolvers", names)
-	return resolvers
+	return resolvers, stagger
 }
 
-// localDNSServers returns dns_local, a pool over resolvers, followed by a
-// DoH server for each resolver. None has a detour: each dials directly
-// through the system network, with no dependency on any outbound.
-func localDNSServers(resolvers []dohResolver) []option.DNSServerOptions {
-	pool := &lbO.DNSPoolServerOptions{}
+// localDNSServers returns dns_local, a pool over resolvers with the given
+// stagger (zero is the pool's default), followed by a DoH server for each
+// resolver. None has a detour: each dials directly through the system
+// network, with no dependency on any outbound.
+func localDNSServers(resolvers []dohResolver, stagger time.Duration) []option.DNSServerOptions {
+	pool := &lbO.DNSPoolServerOptions{Stagger: badoption.Duration(stagger)}
 	servers := []option.DNSServerOptions{{Tag: "dns_local", Type: lbC.TypeDNSPool, Options: pool}}
 	for _, r := range resolvers {
 		tag := "dns_local_" + r.name
