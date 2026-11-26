@@ -1,8 +1,8 @@
 package vpn
 
 import (
-	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -10,29 +10,18 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
+
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// buildDNSServers returns a list of three DNSServerOptions, a local DNS server
-// used for local requests; a remote DNS server (like quad9) for remote websites
-// without sharing user private IP; and fake IP dns server, which effectively resolves
-// DNS locally while allowing us to route traffic based on domains.
+// buildDNSServers returns the DNS servers: dns_remote, which resolves
+// through the proxy for queries no rule sends elsewhere; dns_local, a pool
+// that resolves directly for the bypass path and the direct outbound, with
+// the servers it tries; and dns_fakeip, which answers A queries locally so
+// routing can go by domain.
 func buildDNSServers() []option.DNSServerOptions {
-	local := option.DNSServerOptions{
-		Tag:  "dns_local",
-		Type: constant.DNSTypeHTTPS,
-		Options: &option.RemoteHTTPSDNSServerOptions{
-			Path: "/dns-query",
-			RemoteTLSDNSServerOptions: option.RemoteTLSDNSServerOptions{
-				RemoteDNSServerOptions: option.RemoteDNSServerOptions{
-					DNSServerAddressOptions: option.DNSServerAddressOptions{
-						Server:     localDNSIP(),
-						ServerPort: 443,
-					},
-				},
-			},
-		},
-	}
 	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
 	fakeIP := option.DNSServerOptions{
 		Tag:  "dns_fakeip",
@@ -64,24 +53,40 @@ func buildDNSServers() []option.DNSServerOptions {
 			},
 		},
 	}
-	return []option.DNSServerOptions{
-		remote,
-		local,
-		fakeIP,
-	}
+	servers := []option.DNSServerOptions{remote}
+	servers = append(servers, localDNSServers(localResolvers())...)
+	return append(servers, fakeIP)
 }
 
-const (
-	aliDNS    = "223.5.5.5"
-	yandexDNS = "77.88.8.8"
-	quad9DNS  = "9.9.9.9"
+// dohResolver is a DNS-over-HTTPS resolver dialed at ip. serverName, when
+// set, is the TLS SNI and Host sent to it; otherwise the certificate must
+// cover the IP.
+type dohResolver struct {
+	name       string
+	ip         string
+	serverName string
+}
+
+var (
+	cloudflareDoH = dohResolver{name: "cloudflare", ip: "1.1.1.1"}
+	googleDoH     = dohResolver{name: "google", ip: "8.8.8.8"}
+	aliDoH        = dohResolver{name: "alidns", ip: "223.5.5.5"}
+	yandexDoH     = dohResolver{name: "yandex", ip: "77.88.8.8"}
+	// Cloudflare anycast edges answer cloudflare-dns.com DoH on the same IPs
+	// that serve millions of sites, so blocking them costs a censor that
+	// collateral. One per announced range, from lantern-cloud's
+	// cloudflareDoHEdges, which mirrors flint's pool.
+	cloudflareEdgeDoH = []dohResolver{
+		{name: "cf_edge_104_16", ip: "104.16.249.249", serverName: "cloudflare-dns.com"},
+		{name: "cf_edge_172_64", ip: "172.67.68.111", serverName: "cloudflare-dns.com"},
+		{name: "cf_edge_162_158", ip: "162.159.136.232", serverName: "cloudflare-dns.com"},
+	}
 )
 
-// Locales where AliDNS is used as local DNS server. Note that AliDNS is
-// primarily attractive because it is accessible but is understood to return
-// results that are DNS poisoned for many sites. This is fine because our
-// DNS and routing rules will send that traffic through Lantern proxies,
-// and the final DNS resolution will happen on the proxy side.
+// Locales where AliDNS is tried first. AliDNS is attractive because it is
+// reachable there, though it returns poisoned answers for many sites. That is
+// acceptable: dns_local resolves only what goes direct, and routing sends the
+// rest through Lantern proxies, which resolve it on the proxy side.
 var aliDNSLocales = map[string]struct{}{
 	"FAIR": {},
 	"ZHCN": {},
@@ -89,20 +94,49 @@ var aliDNSLocales = map[string]struct{}{
 	"IR":   {},
 }
 
-func localDNSIP() string {
+// localResolvers returns the resolvers dns_local tries, in order, for the
+// configured locale. The pool moves on from one that is blocked within a
+// stagger, so each list leads with what usually works there and keeps the
+// others behind it.
+func localResolvers() []dohResolver {
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
-		slog.Info("Using AliDNS for locale", "locale", locale)
-		return aliDNS
+		return slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH, []dohResolver{cloudflareDoH, googleDoH})
 	}
 	if normalizedLocale == "RU" || normalizedLocale == "RURU" {
-		slog.Info("Using Yandex DNS for locale", "locale", locale)
-		return yandexDNS
+		// Russian ISPs filter AliDNS; Yandex is reachable from all of them.
+		return slices.Concat([]dohResolver{yandexDoH}, cloudflareEdgeDoH, []dohResolver{cloudflareDoH, googleDoH})
 	}
-	// default to Quad9
-	slog.Info("Using Quad9 for locale", "locale", locale)
-	return quad9DNS
+	return slices.Concat([]dohResolver{cloudflareDoH, googleDoH}, cloudflareEdgeDoH)
+}
+
+// localDNSServers returns dns_local, a pool over resolvers, followed by a
+// DoH server for each resolver. None has a detour: each dials directly
+// through the system network, with no dependency on any outbound.
+func localDNSServers(resolvers []dohResolver) []option.DNSServerOptions {
+	pool := &lbO.DNSPoolServerOptions{}
+	servers := []option.DNSServerOptions{{Tag: "dns_local", Type: lbC.TypeDNSPool, Options: pool}}
+	for _, r := range resolvers {
+		tag := "dns_local_" + r.name
+		pool.Servers = append(pool.Servers, tag)
+		options := &option.RemoteHTTPSDNSServerOptions{
+			Path: "/dns-query",
+			RemoteTLSDNSServerOptions: option.RemoteTLSDNSServerOptions{
+				RemoteDNSServerOptions: option.RemoteDNSServerOptions{
+					DNSServerAddressOptions: option.DNSServerAddressOptions{
+						Server:     r.ip,
+						ServerPort: 443,
+					},
+				},
+			},
+		}
+		if r.serverName != "" {
+			options.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: r.serverName}
+		}
+		servers = append(servers, option.DNSServerOptions{Tag: tag, Type: constant.DNSTypeHTTPS, Options: options})
+	}
+	return servers
 }
 
 // normalizeLocale normalizes the locale string by converting it to upper case

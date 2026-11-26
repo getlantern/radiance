@@ -1,16 +1,23 @@
 package vpn
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/miekg/dns"
+	sbox "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	singjson "github.com/sagernet/sing/common/json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	lbC "github.com/getlantern/lantern-box/constant"
+	lbO "github.com/getlantern/lantern-box/option"
+
 	"github.com/getlantern/radiance/common/settings"
+	"github.com/getlantern/radiance/internal/hostaccess"
 )
 
 func TestNormalizeLocale(t *testing.T) {
@@ -73,77 +80,90 @@ func TestNormalizeLocale(t *testing.T) {
 		})
 	}
 }
-func TestLocalDNSIP(t *testing.T) {
-	tests := []struct {
-		name     string
-		locale   string
-		expected string
-	}{
-		{
-			name:     "FAIR locale returns AliDNS",
-			locale:   "FAIR",
-			expected: aliDNS,
-		},
-		{
-			name:     "fair lowercase returns AliDNS",
-			locale:   "fair",
-			expected: aliDNS,
-		},
-		{
-			name:     "ZHCN locale returns AliDNS",
-			locale:   "ZHCN",
-			expected: aliDNS,
-		},
-		{
-			name:     "zh-cn with hyphen returns AliDNS",
-			locale:   "zh-cn",
-			expected: aliDNS,
-		},
-		{
-			name:     "zh_cn with underscore returns AliDNS",
-			locale:   "zh_cn",
-			expected: aliDNS,
-		},
-		{
-			name:     "RURU locale returns AliDNS",
-			locale:   "RURU",
-			expected: yandexDNS,
-		},
-		{
-			name:     "ru-ru with hyphen returns AliDNS",
-			locale:   "ru-ru",
-			expected: yandexDNS,
-		},
-		{
-			name:     "en-US returns Quad9",
-			locale:   "en-US",
-			expected: quad9DNS,
-		},
-		{
-			name:     "enus returns Quad9",
-			locale:   "enus",
-			expected: quad9DNS,
-		},
-		{
-			name:     "empty locale returns Quad9",
-			locale:   "",
-			expected: quad9DNS,
-		},
-		{
-			name:     "unknown locale returns Quad9",
-			locale:   "fr-FR",
-			expected: quad9DNS,
-		},
+func TestLocalResolvers(t *testing.T) {
+	names := func(resolvers []dohResolver) []string {
+		var out []string
+		for _, r := range resolvers {
+			out = append(out, r.name)
+		}
+		return out
 	}
-
+	edges := names(cloudflareEdgeDoH)
+	tests := []struct {
+		locale string
+		want   []string
+	}{
+		{"FAIR", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
+		{"zh-cn", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
+		{"zh_cn", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
+		{"ru-ru", slices.Concat([]string{"yandex"}, edges, []string{"cloudflare", "google"})},
+		{"RU", slices.Concat([]string{"yandex"}, edges, []string{"cloudflare", "google"})},
+		{"en-US", slices.Concat([]string{"cloudflare", "google"}, edges)},
+		{"fr-FR", slices.Concat([]string{"cloudflare", "google"}, edges)},
+		{"", slices.Concat([]string{"cloudflare", "google"}, edges)},
+	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Setup: Set the locale in settings
+		t.Run(tt.locale, func(t *testing.T) {
 			t.Cleanup(settings.Reset)
 			settings.Set(settings.LocaleKey, tt.locale)
+			got := localResolvers()
+			assert.Equal(t, tt.want, names(got))
+			for _, r := range got {
+				assert.NotEqual(t, "9.9.9.9", r.ip, "Quad9 is not a local resolver: some networks block its DoH")
+			}
+		})
+	}
+}
 
-			result := localDNSIP()
-			assert.Equalf(t, tt.expected, result, "localDNSIP() with locale %q should return %q", tt.locale, tt.expected)
+func TestLocalDNSServersArePooled(t *testing.T) {
+	servers := localDNSServers(slices.Concat([]dohResolver{cloudflareDoH}, cloudflareEdgeDoH))
+	require.NotEmpty(t, servers)
+	assert.Equal(t, "dns_local", servers[0].Tag)
+	assert.Equal(t, lbC.TypeDNSPool, servers[0].Type)
+	pool := servers[0].Options.(*lbO.DNSPoolServerOptions)
+	require.Len(t, pool.Servers, len(servers)-1)
+	for i, tag := range pool.Servers {
+		server := servers[i+1]
+		assert.Equal(t, tag, server.Tag)
+		assert.Equal(t, constant.DNSTypeHTTPS, server.Type)
+		options := server.Options.(*option.RemoteHTTPSDNSServerOptions)
+		assert.Empty(t, options.Detour, "dns_local's servers dial directly")
+	}
+	edge := servers[2].Options.(*option.RemoteHTTPSDNSServerOptions)
+	assert.Equal(t, "104.16.249.249", edge.Server)
+	require.NotNil(t, edge.TLS)
+	assert.Equal(t, "cloudflare-dns.com", edge.TLS.ServerName, "an edge IP is reached with cloudflare-dns.com's name")
+	plain := servers[1].Options.(*option.RemoteHTTPSDNSServerOptions)
+	assert.Nil(t, plain.TLS, "1.1.1.1's certificate covers its IP")
+}
+
+// TestDNSServersBuildABox checks the DNS servers survive a JSON round trip
+// and start in a box built the way radiance builds one.
+func TestDNSServersBuildABox(t *testing.T) {
+	for _, locale := range []string{"en-US", "zh-cn", "ru-ru"} {
+		t.Run(locale, func(t *testing.T) {
+			t.Cleanup(settings.Reset)
+			settings.Set(settings.LocaleKey, locale)
+			options := option.Options{
+				Log: &option.LogOptions{Disabled: true},
+				DNS: &option.DNSOptions{RawDNSOptions: option.RawDNSOptions{
+					Servers: buildDNSServers(),
+					Rules:   buildDNSRules(),
+					Final:   "dns_local",
+				}},
+				// dns_remote dials through "auto"; any outbound will do here.
+				Outbounds: []option.Outbound{{Type: constant.TypeBlock, Tag: "auto", Options: &option.StubOptions{}}},
+			}
+			require.NoError(t, hostaccess.CheckOptions(options))
+			ctx := hostaccess.Context(context.Background())
+			raw, err := singjson.Marshal(options)
+			require.NoError(t, err)
+			parsed, err := singjson.UnmarshalExtendedContext[option.Options](ctx, raw)
+			require.NoError(t, err)
+			instance, err := sbox.New(sbox.Options{Context: ctx, Options: parsed})
+			require.NoError(t, err)
+			require.NoError(t, instance.Start())
+			require.NoError(t, instance.Close())
 		})
 	}
 }
