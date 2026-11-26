@@ -93,11 +93,15 @@ func TestLocalResolvers(t *testing.T) {
 		locale string
 		want   []string
 	}{
-		{"FAIR", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
-		{"zh-cn", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
-		{"zh_cn", slices.Concat([]string{"alidns"}, edges, []string{"cloudflare", "google"})},
-		{"ru-ru", slices.Concat([]string{"yandex"}, edges, []string{"cloudflare", "google"})},
-		{"RU", slices.Concat([]string{"yandex"}, edges, []string{"cloudflare", "google"})},
+		{"FAIR", slices.Concat([]string{"alidns"}, edges)},
+		{"fair", slices.Concat([]string{"alidns"}, edges)},
+		{"ZHCN", slices.Concat([]string{"alidns"}, edges)},
+		{"zh-cn", slices.Concat([]string{"alidns"}, edges)},
+		{"zh_cn", slices.Concat([]string{"alidns"}, edges)},
+		{"RURU", slices.Concat([]string{"yandex"}, edges)},
+		{"ru-ru", slices.Concat([]string{"yandex"}, edges)},
+		{"RU", slices.Concat([]string{"yandex"}, edges)},
+		{"enus", slices.Concat([]string{"cloudflare", "google"}, edges)},
 		{"en-US", slices.Concat([]string{"cloudflare", "google"}, edges)},
 		{"fr-FR", slices.Concat([]string{"cloudflare", "google"}, edges)},
 		{"", slices.Concat([]string{"cloudflare", "google"}, edges)},
@@ -151,6 +155,8 @@ func TestDNSServersBuildABox(t *testing.T) {
 					Rules:   buildDNSRules(),
 					Final:   "dns_local",
 				}},
+				// As radiance resolves for the direct and bypass paths.
+				Route: &option.RouteOptions{DefaultDomainResolver: &option.DomainResolveOptions{Server: "dns_local"}},
 				// dns_remote dials through "auto"; any outbound will do here.
 				Outbounds: []option.Outbound{{Type: constant.TypeBlock, Tag: "auto", Options: &option.StubOptions{}}},
 			}

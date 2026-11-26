@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
@@ -16,11 +17,9 @@ import (
 	"github.com/getlantern/radiance/common/settings"
 )
 
-// buildDNSServers returns the DNS servers: dns_remote, which resolves
-// through the proxy for queries no rule sends elsewhere; dns_local, a pool
-// that resolves directly for the bypass path and the direct outbound, with
-// the servers it tries; and dns_fakeip, which answers A queries locally so
-// routing can go by domain.
+// buildDNSServers returns dns_remote, dns_local with the servers its pool
+// tries, and dns_fakeip. dns_local and its servers have no detour: they dial
+// directly, with no dependency on any outbound.
 func buildDNSServers() []option.DNSServerOptions {
 	ipv4Prefix := badoption.Prefix(netip.MustParsePrefix("198.18.0.0/15"))
 	fakeIP := option.DNSServerOptions{
@@ -74,7 +73,7 @@ var (
 	yandexDoH     = dohResolver{name: "yandex", ip: "77.88.8.8"}
 	// Cloudflare anycast edges answer cloudflare-dns.com DoH on the same IPs
 	// that serve millions of sites, so blocking them costs a censor that
-	// collateral. One per announced range, from lantern-cloud's
+	// collateral. One from each of three of the ranges in lantern-cloud's
 	// cloudflareDoHEdges, which mirrors flint's pool.
 	cloudflareEdgeDoH = []dohResolver{
 		{name: "cf_edge_104_16", ip: "104.16.249.249", serverName: "cloudflare-dns.com"},
@@ -96,19 +95,29 @@ var aliDNSLocales = map[string]struct{}{
 
 // localResolvers returns the resolvers dns_local tries, in order, for the
 // configured locale. The pool moves on from one that is blocked within a
-// stagger, so each list leads with what usually works there and keeps the
-// others behind it.
+// stagger, so each list leads with what usually works there. Censored
+// locales fall back to the Cloudflare edges, not to 1.1.1.1 or 8.8.8.8,
+// which censors block by address. Google forwards EDNS Client-Subnet, unlike
+// Quad9, which this replaced because some networks block its DoH; dns_local
+// resolves only what goes direct, so that is the trade made.
 func localResolvers() []dohResolver {
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
+	var resolvers []dohResolver
 	if _, ok := aliDNSLocales[normalizedLocale]; ok {
-		return slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH, []dohResolver{cloudflareDoH, googleDoH})
-	}
-	if normalizedLocale == "RU" || normalizedLocale == "RURU" {
+		resolvers = slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH)
+	} else if normalizedLocale == "RU" || normalizedLocale == "RURU" {
 		// Russian ISPs filter AliDNS; Yandex is reachable from all of them.
-		return slices.Concat([]dohResolver{yandexDoH}, cloudflareEdgeDoH, []dohResolver{cloudflareDoH, googleDoH})
+		resolvers = slices.Concat([]dohResolver{yandexDoH}, cloudflareEdgeDoH)
+	} else {
+		resolvers = slices.Concat([]dohResolver{cloudflareDoH, googleDoH}, cloudflareEdgeDoH)
 	}
-	return slices.Concat([]dohResolver{cloudflareDoH, googleDoH}, cloudflareEdgeDoH)
+	names := make([]string, len(resolvers))
+	for i, r := range resolvers {
+		names[i] = r.name
+	}
+	slog.Info("Local DNS resolvers for locale", "locale", locale, "resolvers", names)
+	return resolvers
 }
 
 // localDNSServers returns dns_local, a pool over resolvers, followed by a
