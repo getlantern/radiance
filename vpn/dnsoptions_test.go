@@ -95,6 +95,8 @@ func TestLocalResolvers(t *testing.T) {
 		locale string
 		want   []string
 	}{
+		{"CN", slices.Concat([]string{"alidns"}, edges)},
+		{"IR", slices.Concat([]string{"alidns"}, edges)},
 		{"FAIR", slices.Concat([]string{"alidns"}, edges)},
 		{"fair", slices.Concat([]string{"alidns"}, edges)},
 		{"ZHCN", slices.Concat([]string{"alidns"}, edges)},
