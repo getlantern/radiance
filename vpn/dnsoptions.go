@@ -85,8 +85,9 @@ var (
 
 // Locales where AliDNS is tried first. AliDNS is attractive because it is
 // reachable there, though it returns poisoned answers for many sites. That is
-// acceptable: dns_local resolves only what goes direct, and routing sends the
-// rest through Lantern proxies, which resolve it on the proxy side.
+// acceptable: A queries are answered by fakeip and routed by domain, so a
+// connection to a poisoned name still goes through Lantern proxies, which
+// resolve it on the proxy side.
 var aliDNSLocales = map[string]struct{}{
 	"FAIR": {},
 	"ZHCN": {},
@@ -101,8 +102,10 @@ var aliDNSLocales = map[string]struct{}{
 // one slow reply doesn't hand direct domestic traffic to a foreign one. Censored
 // locales fall back to the Cloudflare edges, not to 1.1.1.1 or 8.8.8.8,
 // which censors block by address. Google forwards EDNS Client-Subnet, unlike
-// Quad9, which this replaced because some networks block its DoH; dns_local
-// resolves only what goes direct, so that is the trade made.
+// Quad9, which this replaced because some networks block its DoH. dns_local
+// resolves names for direct and bypass connections and, in the base config,
+// the query types no DNS rule sends elsewhere (HTTPS, SVCB, TXT), so Google
+// may see those; that is the trade made.
 func localResolvers() ([]dohResolver, time.Duration) {
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)

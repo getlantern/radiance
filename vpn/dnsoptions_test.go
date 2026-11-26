@@ -168,6 +168,14 @@ func TestDNSServersBuildABox(t *testing.T) {
 				// dns_remote dials through "auto"; any outbound will do here.
 				Outbounds: []option.Outbound{{Type: constant.TypeBlock, Tag: "auto", Options: &option.StubOptions{}}},
 			}
+			var local *option.DNSServerOptions
+			for i, s := range options.DNS.Servers {
+				if s.Tag == "dns_local" {
+					local = &options.DNS.Servers[i]
+				}
+			}
+			require.NotNil(t, local)
+			assert.Equal(t, lbC.TypeDNSPool, local.Type, "dns_local must be a pool, so one blocked resolver can't take it down")
 			require.NoError(t, hostaccess.CheckOptions(options))
 			ctx := hostaccess.Context(context.Background())
 			raw, err := singjson.Marshal(options)
