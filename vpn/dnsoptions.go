@@ -98,8 +98,11 @@ var aliDNSLocales = map[string]struct{}{
 // localResolvers returns the resolvers dns_local tries, in order, for the
 // configured locale, and how long each gets before the next is also tried.
 // The pool moves on from one that is blocked, so each list leads with what
-// usually works there. A leading domestic resolver gets a full second, so
-// one slow reply doesn't hand direct domestic traffic to a foreign one. Censored
+// usually works there. A leading domestic resolver gets a full second before
+// the next is tried, which makes it less likely that one slow reply hands
+// direct domestic traffic to a foreign resolver. The pool still tries its
+// last winner first, so once a foreign one answers it stays first until a
+// network change or a failure. Censored
 // locales fall back to the Cloudflare edges, not to 1.1.1.1 or 8.8.8.8,
 // which censors block by address. Google forwards EDNS Client-Subnet, unlike
 // Quad9, which this replaced because some networks block its DoH. dns_local
