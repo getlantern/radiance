@@ -96,9 +96,9 @@ func TestLocalResolvers(t *testing.T) {
 		want   []string
 	}{
 		{"CN", slices.Concat([]string{"alidns"}, edges)},
-		{"IR", slices.Concat([]string{"alidns"}, edges)},
-		{"FAIR", slices.Concat([]string{"alidns"}, edges)},
-		{"fair", slices.Concat([]string{"alidns"}, edges)},
+		{"IR", slices.Concat([]string{"cloudflare", "alidns"}, edges)},
+		{"FAIR", slices.Concat([]string{"cloudflare", "alidns"}, edges)},
+		{"fair", slices.Concat([]string{"cloudflare", "alidns"}, edges)},
 		{"ZHCN", slices.Concat([]string{"alidns"}, edges)},
 		{"zh-cn", slices.Concat([]string{"alidns"}, edges)},
 		{"zh_cn", slices.Concat([]string{"alidns"}, edges)},
@@ -116,8 +116,8 @@ func TestLocalResolvers(t *testing.T) {
 			settings.Set(settings.LocaleKey, tt.locale)
 			got, stagger := localResolvers()
 			assert.Equal(t, tt.want, names(got))
-			if got[0].name == "alidns" || got[0].name == "yandex" {
-				assert.Equal(t, time.Second, stagger, "a domestic resolver gets a full second")
+			if _, censored := map[string]bool{"IR": true, "FAIR": true, "ZHCN": true, "CN": true, "RU": true, "RURU": true}[normalizeLocale(tt.locale)]; censored {
+				assert.Equal(t, time.Second, stagger, "a censored locale's first resolver gets a full second")
 			} else {
 				assert.Zero(t, stagger, "the pool's default stagger")
 			}

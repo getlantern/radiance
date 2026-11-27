@@ -89,27 +89,36 @@ var (
 // connection to a poisoned name still goes through Lantern proxies, which
 // resolve it on the proxy side.
 var aliDNSLocales = map[string]struct{}{
-	"FAIR": {},
 	"ZHCN": {},
 	"CN":   {},
+}
+
+// iranLocales lead with 1.1.1.1. Iran blocks DoH by SNI: from Iranian
+// residential vantage points (TCI, 2026-11), the Cloudflare edges failed
+// with SNI cloudflare-dns.com while 1.1.1.1, dialed by IP with no SNI,
+// answered.
+var iranLocales = map[string]struct{}{
+	"FAIR": {},
 	"IR":   {},
 }
 
 // localResolvers returns the resolvers dns_local tries, in order, for the
 // configured locale, and how long each gets before the next is also tried.
 // The pool moves on from one that is blocked, so each list leads with what
-// usually works there. A leading domestic resolver gets a full second before
-// the next is tried, which makes it less likely that one slow reply hands
-// direct domestic traffic to a foreign resolver. The pool tries first the
-// last server that answered with records, so a foreign one that does goes
-// first from then on, until another server answers with records first or a
-// network change resets the order. Censored
-// locales fall back to the Cloudflare edges, not to 1.1.1.1 or 8.8.8.8,
-// which censors block by address. Google forwards EDNS Client-Subnet, unlike
-// Quad9, which this replaced because some networks block its DoH. dns_local
-// resolves names for direct and bypass connections and, in the base config,
-// the query types no DNS rule sends elsewhere (HTTPS, SVCB, TXT), so Google
-// may see those; that is the trade made.
+// usually works there. In censored locales the first resolver gets a full
+// second, which makes it less likely that one slow reply moves dns_local to
+// a resolver that answers worse there, such as a foreign one for direct
+// domestic traffic. The pool tries first the last server that answered with
+// records, so one that does goes first from then on, until another server
+// answers with records first or a network change resets the order.
+//
+// China and Russia fall back to the Cloudflare edges, not to 1.1.1.1 or
+// 8.8.8.8, which censors there block by address; Iran leads with 1.1.1.1
+// (see iranLocales). Google forwards EDNS Client-Subnet, unlike Quad9, which
+// this replaced because some networks block its DoH. dns_local resolves
+// names for direct and bypass connections and, in the base config, the
+// query types no DNS rule sends elsewhere (HTTPS, SVCB, TXT), so Google may
+// see those; that is the trade made.
 func localResolvers() ([]dohResolver, time.Duration) {
 	locale := settings.GetString(settings.LocaleKey)
 	normalizedLocale := normalizeLocale(locale)
@@ -117,7 +126,9 @@ func localResolvers() ([]dohResolver, time.Duration) {
 		resolvers []dohResolver
 		stagger   time.Duration
 	)
-	if _, ok := aliDNSLocales[normalizedLocale]; ok {
+	if _, ok := iranLocales[normalizedLocale]; ok {
+		resolvers, stagger = slices.Concat([]dohResolver{cloudflareDoH, aliDoH}, cloudflareEdgeDoH), time.Second
+	} else if _, ok := aliDNSLocales[normalizedLocale]; ok {
 		resolvers, stagger = slices.Concat([]dohResolver{aliDoH}, cloudflareEdgeDoH), time.Second
 	} else if normalizedLocale == "RU" || normalizedLocale == "RURU" {
 		// Russian ISPs filter AliDNS; Yandex is reachable from all of them.
